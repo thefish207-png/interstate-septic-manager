@@ -1,0 +1,23 @@
+node_modules/
+pwa/
+
+# Temp debug/seed scripts (not part of the app)
+debug_auth.js
+debug_read.js
+fix_data.js
+check-data.js
+seed_services.js
+seed_tanktrack.js
+seed_data_customers.json
+seed_data_geocode_cache.json
+seed_data_invoices.json
+seed_data_jobs.json
+seed_data_properties.json
+seed_data_reminders.json
+seed_data_service_categories.json
+seed_data_service_due_notices.json
+seed_data_service_products.json
+seed_data_tanks.json
+seed_data_users.json
+seed_data_vehicles.json
+seed_data_waste_sites.json

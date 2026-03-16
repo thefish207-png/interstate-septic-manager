@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interstate Septic Manager</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="loginScreen" class="auth-screen" style="display:none;">
+    <div class="auth-card">
+      <h2>Interstate Septic</h2>
+      <div class="subtitle">Manager</div>
+      <div id="loginError" class="auth-error" style="display:none;"></div>
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="loginUsername" placeholder="Enter username" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="Enter password">
+      </div>
+      <button class="btn btn-primary btn-lg" style="width:100%;margin-top:8px;" onclick="doLogin()">Sign In</button>
+    </div>
+  </div>
+
+  <!-- SETUP SCREEN (first time) -->
+  <div id="setupScreen" class="setup-screen" style="display:none;">
+    <div class="setup-card">
+      <h2>Welcome to ISM</h2>
+      <p>Create your admin account to get started.</p>
+      <div id="setupError" class="auth-error" style="display:none;"></div>
+      <div class="form-group">
+        <label>Your Name *</label>
+        <input type="text" id="setupName" placeholder="Tyler">
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="text" id="setupPhone" placeholder="(207) 555-1234">
+      </div>
+      <div class="form-group">
+        <label>Username *</label>
+        <input type="text" id="setupUsername" placeholder="Choose a username" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Password *</label>
+        <input type="password" id="setupPassword" placeholder="Choose a password">
+      </div>
+      <div class="form-group">
+        <label>Confirm Password *</label>
+        <input type="password" id="setupPasswordConfirm" placeholder="Confirm password">
+      </div>
+      <button class="btn btn-primary btn-lg" style="width:100%;margin-top:8px;" onclick="doSetup()">Create Account</button>
+    </div>
+  </div>
+
+  <!-- APP SHELL (hidden until login) -->
+  <div id="appShell" style="display:none;">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <h2>ISM</h2>
+      <div class="subtitle">Interstate Septic Manager</div>
+    </div>
+    <div class="sidebar-nav">
+      <button class="nav-item" data-page="dashboard">
+        <span class="nav-icon">&#9632;</span> Dashboard
+      </button>
+      <button class="nav-item active" data-page="schedule">
+        <span class="nav-icon">&#128197;</span> Schedule
+      </button>
+      <button class="nav-item" data-page="customers">
+        <span class="nav-icon">&#128101;</span> Customers
+      </button>
+      <button class="nav-item" data-page="invoices">
+        <span class="nav-icon">&#128196;</span> Invoices
+      </button>
+      <button class="nav-item" data-page="disposal">
+        <span class="nav-icon">&#128666;</span> Disposal
+      </button>
+      <button class="nav-item" data-page="sdn">
+        <span class="nav-icon">&#128197;</span> Service Due
+      </button>
+      <button class="nav-item" data-page="reports">
+        <span class="nav-icon">&#128200;</span> Reports
+      </button>
+      <div class="nav-divider"></div>
+      <button class="nav-item" data-page="dep">
+        <span class="nav-icon">&#128203;</span> DEP Reports
+      </button>
+      <button class="nav-item" data-page="vehicles">
+        <span class="nav-icon">&#128666;</span> Vehicles
+      </button>
+      <button class="nav-item" data-page="reminders">
+        <span class="nav-icon">&#128276;</span> Reminders
+      </button>
+      <button class="nav-item" data-page="settings">
+        <span class="nav-icon">&#9881;</span> Settings
+      </button>
+    </div>
+    <div class="sidebar-user" id="sidebarUser" style="display:none;">
+      <div class="sidebar-user-info">
+        <span class="sidebar-user-name" id="sidebarUserName"></span>
+        <span class="sidebar-user-role" id="sidebarUserRole"></span>
+      </div>
+      <button class="btn-logout" onclick="doLogout()">Logout</button>
+    </div>
+    <div class="sidebar-footer">
+      v0.1.0
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <div class="top-bar">
+      <h1 id="pageTitle">Schedule</h1>
+      <div class="top-bar-actions" id="pageActions"></div>
+    </div>
+
+    <div class="page-content">
+
+      <!-- DASHBOARD -->
+      <div id="page-dashboard" class="page">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="statJobsToday">0</div>
+            <div class="stat-label">Jobs Today</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="statUnpaid">0</div>
+            <div class="stat-label">Unpaid Invoices</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="statReminders">0</div>
+            <div class="stat-label">Pending Reminders</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="statDisposal">0</div>
+            <div class="stat-label">Gallons This Month</div>
+          </div>
+          <div class="stat-card" style="border-left:3px solid #e65100;">
+            <div class="stat-value" id="statLooseEnds" style="color:#e65100;">0</div>
+            <div class="stat-label">Loose Ends</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h3>Today's Jobs</h3>
+          </div>
+          <div id="dashboardJobs">
+            <div class="empty-state">
+              <div class="empty-icon">&#128197;</div>
+              <p>No jobs scheduled for today</p>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h3>Upcoming Reminders</h3>
+          </div>
+          <div id="dashboardReminders">
+            <div class="empty-state">
+              <div class="empty-icon">&#128276;</div>
+              <p>No upcoming reminders</p>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h3>&#9888; Loose Ends</h3>
+          </div>
+          <div id="dashboardLooseEnds">
+            <div class="empty-state">
+              <div class="empty-icon">&#9888;</div>
+              <p>No loose ends — all clear!</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CUSTOMERS -->
+      <div id="page-customers" class="page"></div>
+
+      <!-- SCHEDULE -->
+      <div id="page-schedule" class="page active"></div>
+
+      <!-- INVOICES -->
+      <div id="page-invoices" class="page"></div>
+
+      <!-- VEHICLES -->
+      <div id="page-vehicles" class="page"></div>
+
+      <!-- WASTE SITES -->
+      <div id="page-wastesites" class="page"></div>
+
+      <!-- DISPOSAL -->
+      <div id="page-disposal" class="page"></div>
+
+      <!-- DEP REPORTS -->
+      <div id="page-dep" class="page"></div>
+
+      <!-- REMINDERS -->
+      <div id="page-reminders" class="page"></div>
+
+      <!-- SERVICE DUE NOTICES -->
+      <div id="page-sdn" class="page"></div>
+
+      <!-- REPORTS -->
+      <div id="page-reports" class="page"></div>
+
+      <!-- SETTINGS -->
+      <div id="page-settings" class="page"></div>
+
+    </div>
+  </div>
+
+  </div><!-- end appShell -->
+
+  <!-- MODAL -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">Modal</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer" id="modalFooter"></div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toastContainer"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
