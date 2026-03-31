@@ -100,6 +100,11 @@ contextBridge.exposeInMainWorld('api', {
   getSavedCreds: () => ipcRenderer.invoke('get-saved-creds'),
   clearSavedCreds: () => ipcRenderer.invoke('clear-saved-creds'),
 
+  // Tank Types
+  getTankTypes: () => ipcRenderer.invoke('get-tank-types'),
+  saveTankType: (data) => ipcRenderer.invoke('save-tank-type', data),
+  deleteTankType: (id) => ipcRenderer.invoke('delete-tank-type', id),
+
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (data) => ipcRenderer.invoke('save-settings', data),

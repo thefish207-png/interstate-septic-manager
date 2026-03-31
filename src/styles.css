@@ -836,6 +836,66 @@ body {
   overflow: hidden;
 }
 
+.week-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.week-summary-cell {
+  padding: 16px 12px;
+  text-align: center;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.week-summary-cell:last-child {
+  border-right: none;
+}
+
+.week-summary-cell:hover {
+  background: #fafafa;
+}
+
+.week-summary-cell.today {
+  background: #f1f8e9;
+}
+
+.week-summary-dayname {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-light);
+  text-transform: uppercase;
+}
+
+.week-summary-date {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.week-summary-jobs {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.week-summary-gal {
+  font-size: 12px;
+  color: var(--text-light);
+  font-weight: 600;
+}
+
+.week-summary-empty {
+  font-size: 20px;
+  color: #ddd;
+  margin-top: 8px;
+}
+
 .week-header-row {
   display: grid;
   grid-template-columns: 160px repeat(7, 1fr);
@@ -977,10 +1037,16 @@ body {
 }
 
 .month-cell-count {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--primary);
-  font-weight: 600;
+  font-weight: 700;
   margin-bottom: 2px;
+}
+
+.month-cell-gal {
+  font-size: 10px;
+  color: var(--text-light);
+  font-weight: 600;
 }
 
 .month-job-chip {

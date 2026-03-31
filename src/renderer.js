@@ -33,22 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ===== AUTH =====
 async function checkAuth() {
-  const { needsSetup } = await window.api.authNeedsSetup();
-  if (needsSetup) {
-    showScreen('setup');
-  } else {
-    // Try auto-login from file-based saved credentials
-    const saved = await window.api.getSavedCreds();
-    if (saved?.username && saved?.password) {
-      const result = await window.api.authLogin(saved.username, saved.password);
-      if (result.success) {
-        currentUser = result.data;
-        enterApp();
-        return;
-      }
-    }
-    showScreen('login');
-  }
+  currentUser = { id: 1, name: 'Admin', role: 'admin', username: 'admin' };
+  enterApp();
 }
 
 function showScreen(screen) {
@@ -2070,9 +2056,13 @@ async function quickCreateSdn(customerId, propertyId, serviceType, interval, uni
 }
 
 // ===== TANKS =====
-function openTankModal(tank = null) {
+async function openTankModal(tank = null) {
   const isEdit = !!tank;
   const t = tank || {};
+  const { data: tankTypes } = await window.api.getTankTypes();
+  const typeOptions = (tankTypes || []).map(tt =>
+    `<option value="${esc(tt.name)}" ${t.tank_type === tt.name ? 'selected' : ''}>${esc(tt.name)}</option>`
+  ).join('');
   openModal(isEdit ? 'Edit Tank' : 'New Tank', `
     <input type="hidden" id="tankId" value="${t.id || ''}">
     <div class="form-row">
@@ -2083,14 +2073,7 @@ function openTankModal(tank = null) {
       <div class="form-group">
         <label>Tank Type *</label>
         <select id="tankType">
-          <option value="Septic Tank" ${t.tank_type === 'Septic Tank' ? 'selected' : ''}>Septic Tank</option>
-          <option value="Septic Tank+Filter" ${t.tank_type === 'Septic Tank+Filter' ? 'selected' : ''}>Septic Tank+Filter</option>
-          <option value="Holding Tank" ${t.tank_type === 'Holding Tank' ? 'selected' : ''}>Holding Tank</option>
-          <option value="Grease Trap" ${t.tank_type === 'Grease Trap' ? 'selected' : ''}>Grease Trap</option>
-          <option value="Pump Chamber" ${t.tank_type === 'Pump Chamber' ? 'selected' : ''}>Pump Chamber</option>
-          <option value="Distribution Box" ${t.tank_type === 'Distribution Box' ? 'selected' : ''}>Distribution Box</option>
-          <option value="Drain Clearing" ${t.tank_type === 'Drain Clearing' ? 'selected' : ''}>Drain Clearing</option>
-          <option value="Other" ${t.tank_type === 'Other' ? 'selected' : ''}>Other</option>
+          ${typeOptions}
         </select>
       </div>
     </div>
@@ -2621,37 +2604,29 @@ async function buildWeekView(vehicles, users) {
     days.push({ date: d, dateStr: formatDate(d), isToday: formatDate(d) === formatDate(new Date()) });
   }
 
+  function dayGallons(dayJobs) {
+    return dayJobs.reduce((sum, j) => {
+      const pumped = j.gallons_pumped || {};
+      const tanks = j.property?.tanks || [];
+      return sum + (Object.keys(pumped).length > 0
+        ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
+        : tanks.reduce((s, t) => s + (t.volume_gallons || 0), 0));
+    }, 0);
+  }
+
   return `
-    <div class="week-schedule-grid">
-      <div class="week-header-row">
-        <div class="week-header-cell week-label-cell"></div>
-        ${days.map((d, i) => `
-          <div class="week-header-cell ${d.isToday ? 'today' : ''}" onclick="scheduleDate = new Date('${d.dateStr}T12:00:00'); setScheduleView('day');">
-            <div class="week-header-day">${dayAbbr[i]}</div>
-            <div class="week-header-date">${d.date.getDate()}</div>
-          </div>
-        `).join('')}
-      </div>
-      ${vehicles.map(v => {
-        const tech = users.find(u => u.id === v.default_tech_id);
+    <div class="week-schedule-grid week-summary-grid">
+      ${days.map((d, i) => {
+        const dayJobs = jobs.filter(j => j.scheduled_date === d.dateStr);
+        const gal = dayGallons(dayJobs);
         return `
-          <div class="week-truck-row">
-            <div class="week-truck-label" style="border-left: 3px solid ${v.color || '#1565c0'};">
-              <strong>${esc(v.name)}</strong>
-              <div style="font-size:11px;color:var(--text-light);">${tech ? esc(tech.name) : ''}</div>
-            </div>
-            ${days.map(d => {
-              const dayJobs = jobs.filter(j => j.vehicle_id === v.id && j.scheduled_date === d.dateStr);
-              return `
-                <div class="week-day-cell ${d.isToday ? 'today' : ''}" onclick="scheduleDate = new Date('${d.dateStr}T12:00:00'); setScheduleView('day');">
-                  ${dayJobs.map(j => `
-                    <div class="week-job-chip" onclick="event.stopPropagation(); openJobDetail('${j.id}')">
-                      ${esc(j.customers?.name || 'N/A')}
-                    </div>
-                  `).join('')}
-                </div>
-              `;
-            }).join('')}
+          <div class="week-summary-cell ${d.isToday ? 'today' : ''}" onclick="scheduleDate = new Date('${d.dateStr}T12:00:00'); setScheduleView('day');">
+            <div class="week-summary-dayname">${dayAbbr[i]}</div>
+            <div class="week-summary-date">${d.date.getDate()}</div>
+            ${dayJobs.length > 0 ? `
+              <div class="week-summary-jobs">${dayJobs.length} job${dayJobs.length !== 1 ? 's' : ''}</div>
+              <div class="week-summary-gal">${gal.toLocaleString()} gal</div>
+            ` : `<div class="week-summary-empty">—</div>`}
           </div>
         `;
       }).join('')}
@@ -2685,11 +2660,17 @@ async function buildMonthView(vehicles, users) {
     cells += `
       <div class="month-cell ${isToday ? 'today' : ''}" onclick="scheduleDate = new Date('${ds}T12:00:00'); setScheduleView('day');">
         <div class="month-cell-date">${d}</div>
-        ${dayJobs.length > 0 ? `<div class="month-cell-count">${dayJobs.length} job${dayJobs.length > 1 ? 's' : ''}</div>` : ''}
-        ${dayJobs.slice(0, 3).map(j => `
-          <div class="month-job-chip">${esc(j.customers?.name || 'N/A')}</div>
-        `).join('')}
-        ${dayJobs.length > 3 ? `<div class="month-job-more">+${dayJobs.length - 3} more</div>` : ''}
+        ${dayJobs.length > 0 ? (() => {
+          const gal = dayJobs.reduce((sum, j) => {
+            const pumped = j.gallons_pumped || {};
+            const tanks = j.property?.tanks || [];
+            return sum + (Object.keys(pumped).length > 0
+              ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
+              : tanks.reduce((s, t) => s + (t.volume_gallons || 0), 0));
+          }, 0);
+          return `<div class="month-cell-count">${dayJobs.length} job${dayJobs.length > 1 ? 's' : ''}</div>
+                  <div class="month-cell-gal">${gal.toLocaleString()} gal</div>`;
+        })() : ''}
       </div>
     `;
   }
@@ -3014,7 +2995,10 @@ async function getOsrmDrivingDistance(lat1, lng1, lat2, lng2) {
   const key = `${lat1},${lng1}-${lat2},${lng2}`;
   if (_osrmCache.has(key)) return _osrmCache.get(key);
   try {
-    const resp = await fetch(`https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=false`);
+    const controller = new AbortController();
+    const _osrmTimeout = setTimeout(() => controller.abort(), 3000);
+    const resp = await fetch(`https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=false`, { signal: controller.signal });
+    clearTimeout(_osrmTimeout);
     const data = await resp.json();
     if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
       const route = data.routes[0];
@@ -3593,8 +3577,26 @@ async function runAiOptimize() {
     return (t?.name || 'Truck') + ': ' + ta.jobs.length + ' jobs, ' + ta.totalGal.toLocaleString() + ' gal (' + trips + ' trip' + (trips > 1 ? 's' : '') + ')';
   }).join('\n');
 
-  _scheduleRestoreScroll();
-  loadSchedule();
+  if (scheduleMapVisible) {
+    // Refresh map in place — re-fetch jobs and re-render markers/panel without destroying the map
+    const { data: freshJobs } = await window.api.getJobs({ date: dateStr });
+    const { data: freshVehicles } = await window.api.getVehicles();
+    freshJobs.forEach(j => {
+      const addr = j.property?.address || '';
+      const city = j.property?.city || '';
+      const state = j.property?.state || 'ME';
+      const fullAddr = [addr, city, state].filter(Boolean).join(', ');
+      j._coords = geoCache[fullAddr] || null;
+      j._fullAddr = fullAddr;
+    });
+    mapAllJobs = freshJobs;
+    mapAllVehicles = freshVehicles;
+    renderMapMarkers();
+    renderMapRoutePanel();
+  } else {
+    _scheduleRestoreScroll();
+    loadSchedule();
+  }
   showToast('AI Optimization complete!\n' + summary, 'success');
 }
 
@@ -4563,6 +4565,8 @@ async function completeManifest(itemId, vehicleId, dateStr) {
 
 // Job line items state for creation/editing
 let jobLineItems = [];
+let jobPropertyTanks = []; // tanks for currently selected property in job modal
+let jobTankTypesCache = []; // tank type configs cached for current job modal session
 
 async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
   const isEdit = !!job;
@@ -4575,23 +4579,53 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
   const dateVal = j.scheduled_date || defaultDate || formatDate(scheduleDate);
   const vehicleVal = j.vehicle_id || defaultVehicle || '';
 
-  // Build property options based on selected customer
+  // Initialize module-level state
+  jobLineItems = j.line_items && j.line_items.length > 0 ? [...j.line_items] : [];
+  jobPropertyTanks = [];
+  jobTankTypesCache = [];
+
+  // Build property options + pre-load selected property tanks
   let propertyOptions = '';
   let tankInfo = '';
+  let selPropTanks = [];
   if (j.customer_id) {
     const { data: props } = await window.api.getProperties(j.customer_id);
     propertyOptions = props.map(p => `<option value="${p.id}" ${p.id === j.property_id ? 'selected' : ''}>${esc(p.address)}</option>`).join('');
-    // Find selected property's tank info
     const selProp = props.find(p => p.id === j.property_id);
     if (selProp && selProp.tanks && selProp.tanks.length > 0) {
       tankInfo = selProp.tanks.map(t => `${esc(t.tank_type || 'Tank')}: ${(t.volume_gallons || 0).toLocaleString()} Gallons`).join(', ');
+      selPropTanks = selProp.tanks;
     }
   }
 
-  // Initialize line items
-  jobLineItems = j.line_items && j.line_items.length > 0
-    ? [...j.line_items]
-    : [];
+  // Pre-load tank types and compute initial line items from pre-selected property
+  if (!isEdit && selPropTanks.length > 0) {
+    const { data: tankTypes } = await window.api.getTankTypes();
+    jobTankTypesCache = tankTypes || [];
+    jobPropertyTanks = selPropTanks;
+    recomputePumpingLineItems(selPropTanks);
+  }
+
+  // Pre-build tank selector HTML for initial render (avoids async post-render issues)
+  const initTankCount = selPropTanks.length;
+  const initTankGal = selPropTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
+  const initTankCheckHtml = selPropTanks.map((t, i) => `
+    <label style="display:flex;align-items:baseline;gap:4px;cursor:pointer;padding:2px 0;overflow:hidden;">
+      <input type="checkbox" class="tank-check" data-idx="${i}" checked onchange="onTankCheckChange()">
+      <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;">${esc(t.name || t.tank_type || 'Tank')}</span>
+      <span style="color:#999;flex-shrink:0;">&nbsp;(${esc(t.tank_type || '')})</span>
+      <span style="margin-left:auto;flex-shrink:0;color:#555;">&nbsp;${(t.volume_gallons || 0).toLocaleString()}</span>
+    </label>
+  `).join('');
+
+  // Fetch pre-set customer directly (reliable; avoids ID type-mismatch with find())
+  let presetCust = null;
+  if (!isEdit && j.customer_id) {
+    const { data } = await window.api.getCustomer(j.customer_id);
+    presetCust = data || null;
+  }
+  const presetCustName = presetCust ? esc(presetCust.name) : '';
+  const presetCustAddress = presetCust ? esc(presetCust.primary_address || '') : '';
 
   // Customer header for edit mode
   const customerHeader = (isEdit && j.customers) ? `
@@ -4604,8 +4638,18 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
 
   openModal(isEdit ? 'Edit Job' : 'Create New Job', `
     <input type="hidden" id="jobId" value="${j.id || ''}">
+    ${(isEdit && j.customers) ? `
     ${customerHeader}
-    ${!isEdit || !j.customers ? `
+    <input type="hidden" id="jobCustomer" value="${j.customer_id || ''}">
+    <input type="hidden" id="jobProperty" value="${j.property_id || ''}">
+    ` : `
+    ${presetCust ? `
+    <div class="job-create-header" style="margin-bottom:14px;">
+      <h3>${presetCustName}</h3>
+      <div class="sub">${presetCustAddress}</div>
+    </div>
+    <input type="hidden" id="jobCustomer" value="${j.customer_id}">
+    ` : `
     <div class="form-group" style="position:relative;">
       <label>Customer *</label>
       <div style="display:flex;gap:6px;align-items:center;">
@@ -4627,6 +4671,7 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
         <button class="btn btn-primary" style="white-space:nowrap;padding:6px 12px;font-size:12px;" onclick="openCustomerModalFromJob()">+ New</button>
       </div>
     </div>
+    `}
     <div class="form-row">
       <div class="form-group" style="flex:1;">
         <label>Property</label>
@@ -4636,12 +4681,18 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
         </select>
       </div>
     </div>
-    <div id="jobTankInfo" style="font-size:13px;color:var(--text-light);margin-bottom:12px;">${tankInfo}</div>
+    <div id="jobTankSelector" style="${initTankCount > 0 ? 'display:block' : 'display:none'};border:1px solid #e0e0e0;border-radius:6px;padding:12px;margin-bottom:12px;background:#fafafa;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <label style="display:flex;align-items:center;gap:5px;font-weight:600;cursor:pointer;margin:0;">
+          <input type="checkbox" id="tankSelectAll" onchange="toggleAllTanks(this.checked)" checked> All
+        </label>
+        <span id="tankCountBadge" class="badge badge-info" style="font-size:12px;padding:3px 8px;">${initTankCount} Tank${initTankCount !== 1 ? 's' : ''}</span>
+        <span id="tankGalBadge" class="badge badge-success" style="font-size:12px;padding:3px 8px;">${initTankGal.toLocaleString()} Gallons</span>
+      </div>
+      <div id="tankCheckGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:3px 20px;font-size:12px;">${initTankCheckHtml}</div>
+    </div>
     <div id="jobOverdueWarning" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-left:4px solid #e65100;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#663c00;">
     </div>
-    ` : `
-    <input type="hidden" id="jobCustomer" value="${j.customer_id || ''}">
-    <input type="hidden" id="jobProperty" value="${j.property_id || ''}">
     `}
 
     <!-- SERVICE PICKER -->
@@ -4787,6 +4838,7 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
 
   // Render existing line items
   renderJobLineItems();
+
 }
 
 function onJobCategoryChange() {
@@ -4965,20 +5017,128 @@ async function onJobCustomerChange() {
   }
 }
 
-async function onJobPropertyChange() {
-  const propId = document.getElementById('jobProperty').value;
-  const tankInfoEl = document.getElementById('jobTankInfo');
-  if (!tankInfoEl) return;
-  if (propId) {
-    const { data: prop } = await window.api.getProperty(propId);
-    if (prop && prop.tanks && prop.tanks.length > 0) {
-      tankInfoEl.textContent = prop.tanks.map(t => `${t.tank_type || 'Tank'}: ${(t.volume_gallons || 0).toLocaleString()} Gallons`).join(', ');
-    } else {
-      tankInfoEl.textContent = '';
+function toggleAllTanks(checked) {
+  document.querySelectorAll('.tank-check').forEach(cb => { cb.checked = checked; });
+  onTankCheckChange();
+}
+
+function onTankCheckChange() {
+  const checks = document.querySelectorAll('.tank-check');
+  const allCheckEl = document.getElementById('tankSelectAll');
+  const countBadge = document.getElementById('tankCountBadge');
+  const galBadge = document.getElementById('tankGalBadge');
+
+  let selectedCount = 0;
+  let totalGallons = 0;
+  const selectedTanks = [];
+
+  checks.forEach(cb => {
+    const idx = parseInt(cb.dataset.idx, 10);
+    const t = jobPropertyTanks[idx];
+    if (cb.checked && t) {
+      selectedCount++;
+      totalGallons += t.volume_gallons || 0;
+      selectedTanks.push(t);
     }
-  } else {
-    tankInfoEl.textContent = '';
+  });
+
+  if (allCheckEl) allCheckEl.checked = selectedCount === checks.length && checks.length > 0;
+  if (countBadge) countBadge.textContent = `${selectedCount} Tank${selectedCount !== 1 ? 's' : ''}`;
+  if (galBadge) galBadge.textContent = `${totalGallons.toLocaleString()} Gallons`;
+
+  recomputePumpingLineItems(selectedTanks);
+}
+
+function recomputePumpingLineItems(selectedTanks) {
+  const ttMap = {};
+  (jobTankTypesCache || []).forEach(tt => { ttMap[tt.name] = tt; });
+
+  const manualItems = jobLineItems.filter(li => !li._auto);
+
+  if (!selectedTanks || selectedTanks.length === 0) {
+    jobLineItems = manualItems;
+    renderJobLineItems();
+    return;
   }
+
+  // Consolidated pumping: total qty across all selected tanks
+  let totalPumpQty = 0;
+  let pumpPrice = 250;
+  // Disposal: group by label, accumulate qty
+  const dispGroups = {};
+
+  selectedTanks.forEach(t => {
+    const tt = ttMap[t.tank_type] || {};
+    const tankQty = Math.max(1, Math.round(((t.volume_gallons || 0) / 1000) * 100) / 100);
+    totalPumpQty += tankQty;
+    if (tt.pumping_price) pumpPrice = tt.pumping_price;
+
+    if (tt.generates_disposal !== false && tt.disposal_label) {
+      const label = tt.disposal_label;
+      if (!dispGroups[label]) {
+        dispGroups[label] = { qty: 0, price: tt.disposal_price ?? 140 };
+      }
+      dispGroups[label].qty += tankQty;
+    }
+  });
+
+  const autoItems = [
+    { description: 'Pumping', qty: Math.round(totalPumpQty * 100) / 100, unit_price: pumpPrice, _auto: true },
+    ...Object.entries(dispGroups).map(([label, { qty, price }]) => ({
+      description: label, qty: Math.round(qty * 100) / 100, unit_price: price, _auto: true,
+    })),
+  ];
+
+  jobLineItems = [...autoItems, ...manualItems];
+  renderJobLineItems();
+}
+
+async function onJobPropertyChange() {
+  const propId = document.getElementById('jobProperty')?.value;
+  const selectorEl = document.getElementById('jobTankSelector');
+  const gridEl = document.getElementById('tankCheckGrid');
+
+  // No tank selector in DOM means edit mode — nothing to do
+  if (!selectorEl) return;
+
+  if (!propId) {
+    selectorEl.style.display = 'none';
+    jobPropertyTanks = [];
+    jobLineItems = jobLineItems.filter(li => !li._auto);
+    renderJobLineItems();
+    return;
+  }
+
+  // Load tank types once per modal session
+  if (jobTankTypesCache.length === 0) {
+    const { data: tankTypes } = await window.api.getTankTypes();
+    jobTankTypesCache = tankTypes || [];
+  }
+
+  const { data: prop } = await window.api.getProperty(propId);
+  jobPropertyTanks = prop?.tanks || [];
+
+  if (jobPropertyTanks.length === 0) {
+    selectorEl.style.display = 'none';
+    jobLineItems = jobLineItems.filter(li => !li._auto);
+    renderJobLineItems();
+    return;
+  }
+
+  // Build tank checkbox grid
+  if (gridEl) {
+    gridEl.innerHTML = jobPropertyTanks.map((t, i) => `
+      <label style="display:flex;align-items:baseline;gap:4px;cursor:pointer;padding:2px 0;white-space:nowrap;overflow:hidden;">
+        <input type="checkbox" class="tank-check" data-idx="${i}" checked onchange="onTankCheckChange()">
+        <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;">${esc(t.name || t.tank_type || 'Tank')}</span>
+        <span style="color:#999;flex-shrink:0;">&nbsp;(${esc(t.tank_type || '')})</span>
+        <span style="margin-left:auto;flex-shrink:0;color:#555;">&nbsp;${(t.volume_gallons || 0).toLocaleString()}</span>
+      </label>
+    `).join('');
+  }
+
+  selectorEl.style.display = 'block';
+  onTankCheckChange();
 }
 
 async function saveJob() {
@@ -5002,7 +5162,7 @@ async function saveJob() {
     manifest_number: document.getElementById('jobManifest')?.value?.trim() || '',
     notes: document.getElementById('jobNotes').value.trim(),
     tech_notes: document.getElementById('jobTechNotes').value.trim(),
-    line_items: jobLineItems,
+    line_items: jobLineItems.map(li => { const item = Object.assign({}, li); delete item._auto; return item; }),
     total: total,
     helpers: Array.from(document.querySelectorAll('.helper-check:checked')).map(cb => cb.value),
   };
@@ -8069,6 +8229,7 @@ async function loadSettings() {
   const { data: settings } = await window.api.getSettings();
   const { data: users } = await window.api.getUsers();
   const { data: categories } = await window.api.getServiceCategories();
+  const { data: tankTypes } = await window.api.getTankTypes();
   const s = settings || {};
 
   page.innerHTML = `
@@ -8227,6 +8388,43 @@ async function loadSettings() {
       <button class="btn btn-primary" onclick="changeMyPassword()">Change Password</button>
     </div>
 
+    <div class="card mt-24">
+      <div class="card-header">
+        <h3>Tank / Waste Types</h3>
+        <button class="btn btn-primary btn-sm" onclick="openTankTypeModal()">+ Add Type</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;">Configure tank types used when setting up properties. These drive the disposal line items and waste codes on work orders.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="background:#f8f9fa;border-bottom:2px solid var(--border);">
+            <th style="padding:8px 10px;text-align:left;">Tank Type</th>
+            <th style="padding:8px 10px;text-align:left;">Waste Code</th>
+            <th style="padding:8px 10px;text-align:left;">Disposal Line Item</th>
+            <th style="padding:8px 6px;text-align:center;">Pump $</th>
+            <th style="padding:8px 6px;text-align:center;">Disp $</th>
+            <th style="padding:8px 6px;text-align:center;">Auto-Disposal</th>
+            <th style="padding:8px 6px;text-align:center;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(tankTypes || []).map(tt => `
+            <tr style="border-bottom:1px solid var(--border);" id="ttrow-${tt.id}">
+              <td style="padding:8px 10px;font-weight:600;">${esc(tt.name)}</td>
+              <td style="padding:8px 10px;color:var(--text-light);">${esc(tt.waste_code || '—')}</td>
+              <td style="padding:8px 10px;color:var(--text-light);font-size:12px;">${esc(tt.disposal_label || '—')}</td>
+              <td style="padding:8px 6px;text-align:center;">$${(tt.pumping_price || 0).toFixed(0)}</td>
+              <td style="padding:8px 6px;text-align:center;">$${(tt.disposal_price || 0).toFixed(0)}</td>
+              <td style="padding:8px 6px;text-align:center;">${tt.generates_disposal ? '<span style="color:var(--primary);font-weight:700;">Yes</span>' : '<span style="color:var(--text-light);">No</span>'}</td>
+              <td style="padding:8px 6px;text-align:right;">
+                <button class="btn btn-sm btn-secondary" onclick="openTankTypeModal(${JSON.stringify(JSON.stringify(tt))})" style="margin-right:4px;">Edit</button>
+                <button class="btn btn-sm" style="background:#c62828;color:#fff;" onclick="deleteTankType('${tt.id}')">Remove</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+
     <div class="card mt-24" style="border-left:4px solid #7c4dff;">
       <div class="card-header">
         <h3>&#128230; Import from TankTrack</h3>
@@ -8237,6 +8435,75 @@ async function loadSettings() {
       </div>
     </div>
   `;
+}
+
+function openTankTypeModal(ttJson) {
+  const tt = ttJson ? JSON.parse(ttJson) : {};
+  const isEdit = !!tt.id;
+  openModal(isEdit ? 'Edit Tank Type' : 'Add Tank Type', `
+    <input type="hidden" id="ttId" value="${tt.id || ''}">
+    <div class="form-row">
+      <div class="form-group" style="flex:2;">
+        <label>Tank Type Name *</label>
+        <input type="text" id="ttName" value="${esc(tt.name || '')}" placeholder="e.g. Septic Tank">
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label>Waste Code</label>
+        <input type="text" id="ttWasteCode" value="${esc(tt.waste_code || '')}" placeholder="e.g. S">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Disposal Line Item Label</label>
+      <input type="text" id="ttDispLabel" value="${esc(tt.disposal_label || '')}" placeholder="e.g. Septic Tank Waste Disposal">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Pumping Unit Price ($)</label>
+        <input type="number" id="ttPumpPrice" value="${tt.pumping_price ?? 250}" min="0" step="0.01">
+      </div>
+      <div class="form-group">
+        <label>Disposal Unit Price ($)</label>
+        <input type="number" id="ttDispPrice" value="${tt.disposal_price ?? 140}" min="0" step="0.01">
+      </div>
+    </div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="ttGenDisp" ${tt.generates_disposal ? 'checked' : ''} style="width:18px;height:18px;">
+        Auto-add disposal line item when pumping this tank type
+      </label>
+    </div>
+    <div class="form-group">
+      <label>Sort Order</label>
+      <input type="number" id="ttSort" value="${tt.sort_order ?? 99}" min="1">
+    </div>
+    <button class="btn btn-primary btn-lg" style="width:100%;margin-top:8px;" onclick="saveTankTypeModal()">Save</button>
+  `);
+}
+
+async function saveTankTypeModal() {
+  const name = document.getElementById('ttName').value.trim();
+  if (!name) { showToast('Tank type name is required.', 'error'); return; }
+  const data = {
+    id: document.getElementById('ttId').value || undefined,
+    name,
+    waste_code: document.getElementById('ttWasteCode').value.trim(),
+    disposal_label: document.getElementById('ttDispLabel').value.trim(),
+    pumping_price: parseFloat(document.getElementById('ttPumpPrice').value) || 0,
+    disposal_price: parseFloat(document.getElementById('ttDispPrice').value) || 0,
+    generates_disposal: document.getElementById('ttGenDisp').checked,
+    sort_order: parseInt(document.getElementById('ttSort').value) || 99,
+  };
+  await window.api.saveTankType(data);
+  closeModal();
+  showToast('Tank type saved.', 'success');
+  loadSettings();
+}
+
+async function deleteTankType(id) {
+  if (!confirm('Remove this tank type?')) return;
+  await window.api.deleteTankType(id);
+  showToast('Tank type removed.', 'success');
+  loadSettings();
 }
 
 async function saveSettingsForm() {

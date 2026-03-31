@@ -1029,6 +1029,41 @@ ipcMain.handle('save-settings', async (e, data) => {
   return { success: true, data };
 });
 
+// ===== TANK TYPES =====
+const DEFAULT_TANK_TYPES = [
+  { name: 'Septic Tank',          waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 1  },
+  { name: 'Septic Tank+Filter',   waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 2  },
+  { name: 'Holding Tank',         waste_code: 'H',  disposal_label: 'Holding Tank Waste Disposal',      pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 3  },
+  { name: 'Grease Trap',          waste_code: 'G',  disposal_label: 'Grease Trap Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 4  },
+  { name: 'Interior Grease Trap', waste_code: 'Ig', disposal_label: 'Grease Trap Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 5  },
+  { name: 'Cesspool',             waste_code: 'C',  disposal_label: 'Cesspool Waste Disposal',          pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 6  },
+  { name: 'Aerobic System',       waste_code: 'As', disposal_label: 'Aerobic System Waste Disposal',    pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 7  },
+  { name: 'Pump Chamber',         waste_code: 'P',  disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 8  },
+  { name: 'Distribution Box',     waste_code: 'Db', disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 9  },
+  { name: 'Drain Clearing',       waste_code: 'Dc', disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 10 },
+  { name: 'Wet Well',             waste_code: 'Ls', disposal_label: 'Wet Well Waste Disposal',          pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 11 },
+  { name: 'Other',                waste_code: '',   disposal_label: 'Waste Disposal',                   pumping_price: 250, disposal_price: 140, generates_disposal: false, sort_order: 99 },
+];
+
+ipcMain.handle('get-tank-types', async () => {
+  let types = readCollection('tank_types');
+  if (!types || types.length === 0) {
+    types = DEFAULT_TANK_TYPES.map((t, i) => ({ id: uuidv4(), ...t }));
+    writeCollection('tank_types', types);
+  }
+  return { data: types.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)) };
+});
+
+ipcMain.handle('save-tank-type', async (e, data) => {
+  const saved = upsert('tank_types', data);
+  return { success: true, data: saved };
+});
+
+ipcMain.handle('delete-tank-type', async (e, id) => {
+  deleteItem('tank_types', id);
+  return { success: true };
+});
+
 // ===== SERVICE CATEGORIES & PRODUCTS =====
 ipcMain.handle('get-service-categories', async () => {
   const cats = readCollection('service_categories');
@@ -1422,7 +1457,7 @@ ipcMain.handle('seed-test-data', async () => {
   ];
   const phones = () => `(207) ${Math.floor(Math.random()*900+100)}-${Math.floor(Math.random()*9000+1000)}`;
   const tankTypes = ['Septic', 'Septic', 'Septic', 'Grease Trap', 'Holding Tank', 'Cesspool'];
-  const tankVolumes = [1000, 1000, 1000, 1500, 1500, 2000, 750, 1250];
+  const tankVolumes = [1000, 1000, 1000, 1000, 1000, 1000, 750, 750, 1500, 1500, 1500, 750];
   const confirmStatuses = ['confirmed', 'confirmed', 'confirmed', 'no_reply', 'auto_confirmed', 'unconfirmed', 'left_message'];
   const times = ['07:00', '07:30', '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00'];
 
@@ -1477,8 +1512,26 @@ ipcMain.handle('seed-test-data', async () => {
       }
 
       // Create job with pricing based on tank volume
-      const tankVol = seededTanks[seededTanks.length - 1]?.volume_gallons || 1000;
-      const pumpPrice = tankVol <= 750 ? 275 : tankVol <= 1000 ? 325 : tankVol <= 1500 ? 425 : 525;
+      // Qty = volume / 1000 so a 1500 gal tank = qty 1.5 at $250/unit pumping, $140/unit disposal
+      const jobTanks = seededTanks.filter(t => t.property_id === prop.id);
+      const tankVol = jobTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0) || 1000;
+      const pumpUnitPrice = 250;
+      const dispUnitPrice = 140;
+      const ttConfig = readCollection('tank_types');
+      const ttMap = {};
+      ttConfig.forEach(tt => { ttMap[tt.name] = tt; });
+      const allItems = jobTanks.flatMap(t => {
+        const tQty = Math.max(1, Math.round(((t.volume_gallons || 0) / 1000) * 100) / 100);
+        const tt = ttMap[t.tank_type] || {};
+        const pumpP = tt.pumping_price ?? pumpUnitPrice;
+        const dispP = tt.disposal_price ?? dispUnitPrice;
+        const lines = [{ description: 'Pumping', qty: tQty, unit_price: pumpP }];
+        if (tt.generates_disposal !== false && (tt.disposal_label || tt.generates_disposal)) {
+          lines.push({ description: tt.disposal_label || 'Waste Disposal', qty: tQty, unit_price: dispP });
+        }
+        return lines;
+      });
+      const total = Math.round(allItems.reduce((s, li) => s + li.qty * li.unit_price, 0) * 100) / 100;
       const job = upsert('jobs', {
         customer_id: cust.id,
         property_id: prop.id,
@@ -1491,8 +1544,8 @@ ipcMain.handle('seed-test-data', async () => {
         confirmation_status: confirmStatuses[Math.floor(Math.random() * confirmStatuses.length)],
         sort_order: i * 10,
         gallons: tankVol,
-        line_items: [{ description: 'Septic Pumping - ' + tankVol + ' gal', qty: 1, unit_price: pumpPrice }],
-        total: pumpPrice,
+        line_items: allItems,
+        total,
         _test_data: true,
       });
       seededJobs.push(job);
