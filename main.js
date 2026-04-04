@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
@@ -66,17 +67,16 @@ function dbPath(collection) {
     console.log('[STORE] Loaded ' + name + ': ' + _store[name].length + ' items from embedded seed');
   });
 
-  // Now try to load any user-modified data from disk that might be BIGGER than seed
-  // (e.g., user added new customers). Only override seed if disk has MORE data.
+  // Load any user-modified data from disk — disk always wins over seed data
   collections.forEach(name => {
     const p = path.join(userDataPath, 'data', name + '.json');
     try {
       if (fs.existsSync(p)) {
         const raw = fs.readFileSync(p, 'utf8');
         const diskData = JSON.parse(raw);
-        if (Array.isArray(diskData) && diskData.length > _store[name].length) {
+        if (Array.isArray(diskData)) {
           _store[name] = diskData;
-          console.log('[STORE] ' + name + ': upgraded to disk version (' + diskData.length + ' items)');
+          console.log('[STORE] ' + name + ': loaded from disk (' + diskData.length + ' items)');
         }
       }
     } catch {}
@@ -134,6 +134,156 @@ function remove(collection, id) {
   writeCollection(collection, items);
 }
 
+// ===== CONFIRMATION HTTP SERVER =====
+let confirmServer = null;
+
+function getServerSettings() {
+  try {
+    const settings = readCollection('settings')[0] || {};
+    return {
+      port: parseInt(settings.confirm_server_port) || 3456,
+      publicUrl: (settings.confirm_public_url || '').replace(/\/$/, ''),
+    };
+  } catch { return { port: 3456, publicUrl: '' }; }
+}
+
+function startConfirmServer() {
+  if (confirmServer) return;
+  const { port } = getServerSettings();
+
+  confirmServer = http.createServer((req, res) => {
+    const url = new URL(req.url, `http://localhost`);
+
+    if (url.pathname === '/confirm') {
+      const token = url.searchParams.get('token');
+      const notices = readCollection('service_due_notices');
+      const idx = notices.findIndex(n => n.confirm_token === token);
+
+      if (idx === -1) {
+        res.writeHead(404, { 'Content-Type': 'text/html' });
+        res.end(confirmPage('Not Found', 'This confirmation link is invalid or has already been used.', '#e53935'));
+        return;
+      }
+
+      const notice = notices[idx];
+      const customers = readCollection('customers');
+      const cust = customers.find(c => c.id === notice.customer_id) || {};
+      const serviceType = notice.service_type || 'Septic Service';
+
+      if (notice.status === 'confirmed') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(confirmPage('Already Confirmed', `Your ${serviceType} service appointment has already been confirmed. We look forward to seeing you!`, '#43a047'));
+        return;
+      }
+
+      notices[idx] = { ...notice, status: 'confirmed', confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      writeCollection('service_due_notices', notices);
+
+      // Notify the renderer that a confirmation came in
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('sdn-confirmed', { id: notice.id, customerName: cust.name || '' });
+      }
+
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(confirmPage(
+        'Appointment Confirmed!',
+        `Thank you${cust.name ? ', ' + cust.name : ''}! We've received your confirmation for <strong>${serviceType}</strong> service. We'll be in touch to finalize your appointment time. You will no longer receive reminder emails for this notice.`,
+        '#2e7d32'
+      ));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(confirmPage('Interstate Septic', 'Customer confirmation portal.', '#2e7d32'));
+  });
+
+  confirmServer.listen(port, '0.0.0.0', () => {
+    console.log(`[CONFIRM SERVER] Listening on port ${port}`);
+  });
+
+  confirmServer.on('error', (err) => {
+    console.error('[CONFIRM SERVER] Error:', err.message);
+  });
+}
+
+function stopConfirmServer() {
+  if (confirmServer) { confirmServer.close(); confirmServer = null; }
+}
+
+function restartConfirmServer() {
+  stopConfirmServer();
+  startConfirmServer();
+}
+
+function confirmPage(title, message, color) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: white; border-radius: 12px; padding: 48px 40px; max-width: 480px; width: 90%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.10); }
+    .icon { font-size: 56px; margin-bottom: 20px; }
+    h1 { color: ${color}; font-size: 26px; margin-bottom: 14px; }
+    p { color: #555; font-size: 16px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">${color === '#e53935' ? '❌' : '✅'}</div>
+    <h1>${title}</h1>
+    <p>${message}</p>
+  </div>
+</body>
+</html>`;
+}
+
+// ===== SYSTEM TRAY =====
+let tray = null;
+
+function createTrayIcon() {
+  // Build a 16x16 green square as BGRA bitmap
+  const size = 16;
+  const data = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    data[i * 4]     = 50;  // B
+    data[i * 4 + 1] = 125; // G
+    data[i * 4 + 2] = 46;  // R (#2e7d32)
+    data[i * 4 + 3] = 255; // A
+  }
+  return nativeImage.createFromBitmap(data, { width: size, height: size });
+}
+
+function createTray() {
+  if (tray) return;
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip('Interstate Septic Manager');
+  updateTrayMenu();
+  tray.on('double-click', () => showMainWindow());
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const menu = Menu.buildFromTemplate([
+    { label: 'Open Interstate Septic Manager', click: () => showMainWindow() },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+  tray.setContextMenu(menu);
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
 // ===== WINDOW =====
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -149,20 +299,48 @@ function createWindow() {
     title: 'Interstate Septic Manager',
   });
   mainWindow.loadFile('src/index.html');
+
+  // Closing the window minimizes to tray instead of quitting
+  mainWindow.on('close', (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+      tray?.displayBalloon({
+        title: 'Interstate Septic Manager',
+        content: 'Running in the background. Double-click the tray icon to reopen.',
+        iconType: 'info',
+      });
+    }
+  });
 }
 
 app.whenReady().then(() => {
   createWindow();
+  createTray();
+  startConfirmServer();
+  // Auto-start on login setting (Windows only)
+  try {
+    const settings = readCollection('settings')[0] || {};
+    app.setLoginItemSettings({ openAtLogin: settings.auto_start === true });
+  } catch {}
   // Check for due service notices on startup (after 10s delay) and then every hour
   setTimeout(() => { checkDueNotices(); }, 10000);
   setInterval(() => { checkDueNotices(); }, 3600000);
+  // Check job reminders on startup (after 12s delay) and then every hour
+  setTimeout(() => { checkJobReminders(); }, 12000);
+  setInterval(() => { checkJobReminders(); }, 3600000);
   // Check reminder alerts every 60 seconds
   setTimeout(() => { checkReminderAlerts(); }, 5000);
   setInterval(() => { checkReminderAlerts(); }, 60000);
 });
 
+// Don't quit when all windows close — stay in tray
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // intentionally empty — tray keeps app alive
+});
+
+app.on('before-quit', () => {
+  app.isQuitting = true;
 });
 
 app.on('activate', () => {
@@ -292,6 +470,25 @@ ipcMain.handle('delete-vehicle', async (e, id) => {
   return { success: true };
 });
 
+// ===== TRUCK DAY ASSIGNMENTS =====
+ipcMain.handle('get-truck-day-assignments', async (e, date) => {
+  const all = readCollection('truck_day_assignments');
+  return { data: date ? all.filter(a => a.date === date) : all };
+});
+
+ipcMain.handle('save-truck-day-assignment', async (e, data) => {
+  // data: { vehicle_id, date, user_id }  — upsert by vehicle_id+date
+  const all = readCollection('truck_day_assignments');
+  const idx = all.findIndex(a => a.vehicle_id === data.vehicle_id && a.date === data.date);
+  if (idx >= 0) {
+    all[idx] = { ...all[idx], user_id: data.user_id, updated_at: new Date().toISOString() };
+  } else {
+    all.push({ id: require('crypto').randomUUID(), ...data, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+  }
+  writeCollection('truck_day_assignments', all);
+  return { success: true };
+});
+
 // ===== JOBS =====
 ipcMain.handle('get-jobs', async (e, filters) => {
   let jobs = readCollection('jobs');
@@ -395,6 +592,59 @@ ipcMain.handle('save-job', async (e, data) => {
       property_city: property?.city || '',
       notes: '',
     });
+
+    // Send job confirmation email if scheduled date is set
+    if (saved.scheduled_date && customer?.email) {
+      (async () => {
+        try {
+          const settingsPath = path.join(userDataPath, 'settings.json');
+          if (fs.existsSync(settingsPath)) {
+            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            if (settings.smtp_host) {
+              const transporter = nodemailer.createTransport({
+                host: settings.smtp_host,
+                port: parseInt(settings.smtp_port) || 587,
+                secure: parseInt(settings.smtp_port) === 465,
+                auth: { user: settings.smtp_user, pass: settings.smtp_pass },
+              });
+
+              const companyName = settings.company_name || 'Interstate Septic';
+              const companyPhone = settings.company_phone || '';
+              const propAddr = property ? `${property.address || ''}, ${property.city || ''} ${property.state || ''} ${property.zip || ''}`.trim() : 'your property';
+              const scheduledDate = new Date(saved.scheduled_date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+              const html = `
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+                  <h2 style="color:#1b5e20;">${companyName}</h2>
+                  <p>Dear ${customer.name || 'Valued Customer'},</p>
+                  <p>Your service appointment has been scheduled!</p>
+                  <div style="background:#f0f7ff;padding:16px;border-left:4px solid #2196F3;border-radius:4px;margin:20px 0;">
+                    <p style="margin:8px 0;"><strong>Service Date:</strong> ${scheduledDate}</p>
+                    <p style="margin:8px 0;"><strong>Service Type:</strong> ${saved.service_type || 'Service'}</p>
+                    <p style="margin:8px 0;"><strong>Property:</strong> ${propAddr}</p>
+                    ${saved.notes ? `<p style="margin:8px 0;"><strong>Notes:</strong> ${saved.notes}</p>` : ''}
+                  </div>
+                  <p>If you need to reschedule or have any questions, please contact us.</p>
+                  ${companyPhone ? `<p>Phone: <strong>${companyPhone}</strong></p>` : ''}
+                  <p>Thank you for choosing ${companyName}!</p>
+                  <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
+                  <p style="font-size:12px;color:#999;">This is an automated confirmation from ${companyName}.</p>
+                </div>`;
+
+              await transporter.sendMail({
+                from: settings.smtp_user,
+                to: customer.email,
+                subject: `Service Appointment Confirmation - ${companyName}`,
+                html,
+              });
+              console.log('[MAIL] Job confirmation sent to ' + customer.email);
+            }
+          }
+        } catch (err) {
+          console.error('[MAIL ERROR] Job confirmation:', err.message);
+        }
+      })();
+    }
   } else {
     // Sync existing draft invoice linked to this job
     const invoices = readCollection('invoices');
@@ -558,6 +808,17 @@ ipcMain.handle('save-invoice', async (e, data) => {
 });
 
 ipcMain.handle('delete-invoice', async (e, id) => {
+  const invoices = readCollection('invoices');
+  const inv = invoices.find(i => i.id === id);
+  // Stamp the linked job so backfill won't recreate the invoice
+  if (inv?.job_id) {
+    const jobs = readCollection('jobs');
+    const idx = jobs.findIndex(j => j.id === inv.job_id);
+    if (idx >= 0) {
+      jobs[idx] = { ...jobs[idx], invoice_suppressed: true, updated_at: new Date().toISOString() };
+      writeCollection('jobs', jobs);
+    }
+  }
   remove('invoices', id);
   return { success: true };
 });
@@ -607,6 +868,7 @@ ipcMain.handle('backfill-invoices', async () => {
 
   for (const job of jobs) {
     if (linkedJobIds.has(job.id)) continue; // already has invoice
+    if (job.invoice_suppressed) continue; // invoice was manually deleted
     const customer = customers.find(c => c.id === job.customer_id);
     const property = properties.find(p => p.id === job.property_id);
     const totalGal = Object.values(job.gallons_pumped || {}).reduce((s, g) => s + (parseInt(g) || 0), 0);
@@ -813,6 +1075,7 @@ ipcMain.handle('get-service-due-notices', async (e, filters) => {
   const jobs = readCollection('jobs');
   const today = new Date().toISOString().split('T')[0];
 
+  if (filters?.id) notices = notices.filter(n => n.id === filters.id);
   if (filters?.customerId) notices = notices.filter(n => n.customer_id === filters.customerId);
   if (filters?.propertyId) notices = notices.filter(n => n.property_id === filters.propertyId);
   if (filters?.status) {
@@ -864,6 +1127,74 @@ ipcMain.handle('delete-service-due-notice', async (e, id) => {
   return { success: true };
 });
 
+ipcMain.handle('send-service-due-notification', async (e, id, daysBeforeDue) => {
+  const settingsPath = path.join(userDataPath, 'settings.json');
+  if (!fs.existsSync(settingsPath)) return { success: false, error: 'SMTP not configured' };
+  
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  if (!settings.smtp_host) return { success: false, error: 'SMTP not configured' };
+
+  const notices = readCollection('service_due_notices');
+  const notice = notices.find(n => n.id === id);
+  if (!notice) return { success: false, error: 'Notice not found' };
+
+  const customers = readCollection('customers');
+  const properties = readCollection('properties');
+  const cust = customers.find(c => c.id === notice.customer_id);
+  const prop = properties.find(p => p.id === notice.property_id);
+
+  if (!cust?.email) return { success: false, error: 'Customer has no email' };
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: settings.smtp_host,
+      port: parseInt(settings.smtp_port) || 587,
+      secure: parseInt(settings.smtp_port) === 465,
+      auth: { user: settings.smtp_user, pass: settings.smtp_pass },
+    });
+
+    const companyName = settings.company_name || 'Interstate Septic';
+    const companyPhone = settings.company_phone || '';
+    const serviceType = notice.service_type || 'Septic Service';
+    const propAddr = prop ? `${prop.address || ''}, ${prop.city || ''} ${prop.state || ''} ${prop.zip || ''}`.trim() : 'your property';
+
+    const daysText = daysBeforeDue === 0 ? 'today' : `in ${daysBeforeDue} day${daysBeforeDue > 1 ? 's' : ''}`;
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+        <h2 style="color:#1b5e20;">${companyName}</h2>
+        <p>Dear ${cust.name || 'Valued Customer'},</p>
+        <p>This is a reminder that your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong> is due <strong>${daysText}</strong>.</p>
+        <p>Please contact us to schedule your appointment at your earliest convenience.</p>
+        ${companyPhone ? `<p>Phone: <strong>${companyPhone}</strong></p>` : ''}
+        <p>Thank you for your business!</p>
+        <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
+        <p style="font-size:12px;color:#999;">This is a reminder from ${companyName}.</p>
+      </div>`;
+
+    await transporter.sendMail({
+      from: settings.smtp_user,
+      to: cust.email,
+      subject: `${serviceType} Reminder (${daysText}) - ${companyName}`,
+      html,
+    });
+
+    return { success: true, message: `Notification sent to ${cust.email}` };
+  } catch (err) {
+    console.error('[MAIL ERROR]', err.message);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('schedule-service-due-notifications', async (e, id, schedule) => {
+  const notices = readCollection('service_due_notices');
+  const notice = notices.find(n => n.id === id);
+  if (!notice) return { success: false, error: 'Notice not found' };
+
+  notice.notification_schedule = schedule || [];
+  writeCollection('service_due_notices', notices);
+  return { success: true, data: notice };
+});
+
 // ===== DISPOSAL LOADS =====
 ipcMain.handle('get-disposal-loads', async (e, filters) => {
   let loads = readCollection('disposal_loads');
@@ -884,7 +1215,25 @@ ipcMain.handle('get-disposal-loads', async (e, filters) => {
   return { data: loads };
 });
 
+ipcMain.handle('get-next-disposal-number', async () => {
+  const loads = readCollection('disposal_loads');
+  const nums = loads
+    .map(l => parseInt((l.disposal_number || '').toString().replace(/\D/g, '')) || 0)
+    .filter(n => n > 0);
+  const highest = nums.length > 0 ? Math.max(...nums) : 999;
+  return { data: Math.max(highest + 1, 1000) };
+});
+
 ipcMain.handle('save-disposal-load', async (e, data) => {
+  // Auto-assign a disposal number if this is a new record without one
+  if (!data.id && !data.disposal_number) {
+    const loads = readCollection('disposal_loads');
+    const nums = loads
+      .map(l => parseInt((l.disposal_number || '').toString().replace(/\D/g, '')) || 0)
+      .filter(n => n > 0);
+    const highest = nums.length > 0 ? Math.max(...nums) : 999;
+    data.disposal_number = String(Math.max(highest + 1, 1000));
+  }
   const saved = upsert('disposal_loads', data);
   return { success: true, data: saved };
 });
@@ -969,6 +1318,23 @@ ipcMain.handle('get-default-waste-site', async () => {
   return { data: defaultSite || null };
 });
 
+// ===== OUTSIDE PUMPERS =====
+ipcMain.handle('get-outside-pumpers', async () => {
+  const pumpers = readCollection('outside_pumpers');
+  pumpers.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return { data: pumpers };
+});
+
+ipcMain.handle('save-outside-pumper', async (e, data) => {
+  const saved = upsert('outside_pumpers', data);
+  return { success: true, data: saved };
+});
+
+ipcMain.handle('delete-outside-pumper', async (e, id) => {
+  remove('outside_pumpers', id);
+  return { success: true };
+});
+
 // ===== SEED TEST DATA =====
 // ===== DEP REPORTS =====
 ipcMain.handle('get-dep-reports', async () => {
@@ -1038,7 +1404,7 @@ const DEFAULT_TANK_TYPES = [
   { name: 'Interior Grease Trap', waste_code: 'Ig', disposal_label: 'Grease Trap Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 5  },
   { name: 'Cesspool',             waste_code: 'C',  disposal_label: 'Cesspool Waste Disposal',          pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 6  },
   { name: 'Aerobic System',       waste_code: 'As', disposal_label: 'Aerobic System Waste Disposal',    pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 7  },
-  { name: 'Pump Chamber',         waste_code: 'P',  disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 8  },
+  { name: 'Pump Chamber',         waste_code: 'P',  disposal_label: 'Septic Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 8  },
   { name: 'Distribution Box',     waste_code: 'Db', disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 9  },
   { name: 'Drain Clearing',       waste_code: 'Dc', disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 10 },
   { name: 'Wet Well',             waste_code: 'Ls', disposal_label: 'Wet Well Waste Disposal',          pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 11 },
@@ -1051,6 +1417,16 @@ ipcMain.handle('get-tank-types', async () => {
     types = DEFAULT_TANK_TYPES.map((t, i) => ({ id: uuidv4(), ...t }));
     writeCollection('tank_types', types);
   }
+  // Patch: Pump Chamber should generate septic disposal (old data had it disabled)
+  let patched = false;
+  types = types.map(tt => {
+    if (tt.name === 'Pump Chamber' && !tt.generates_disposal) {
+      patched = true;
+      return { ...tt, generates_disposal: true, disposal_label: 'Septic Waste Disposal', disposal_price: 140 };
+    }
+    return tt;
+  });
+  if (patched) writeCollection('tank_types', types);
   return { data: types.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)) };
 });
 
@@ -1189,8 +1565,25 @@ ipcMain.handle('change-password', async (e, userId, newPassword) => {
 });
 
 // ===== PDF GENERATION =====
-ipcMain.handle('generate-pdf', async (e, html, filename) => {
+ipcMain.handle('generate-pdf', async (e, html, filename, options = {}) => {
   const isLandscape = html.includes('size: landscape') || html.includes('data-landscape');
+
+  // Determine save path — show Save As dialog unless skipDialog is set
+  let savePath;
+  if (options.skipDialog) {
+    savePath = options.forcePath || path.join(userDataPath, filename || 'export.pdf');
+  } else {
+    const settings = (() => { try { return readCollection('settings')[0] || {}; } catch { return {}; } })();
+    const defaultDir = settings.default_pdf_folder || app.getPath('documents');
+    const dialogResult = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save PDF',
+      defaultPath: path.join(defaultDir, filename || 'export.pdf'),
+      filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+    });
+    if (dialogResult.canceled || !dialogResult.filePath) return { success: false, canceled: true };
+    savePath = dialogResult.filePath;
+  }
+
   const pdfWindow = new BrowserWindow({ show: false, width: isLandscape ? 1056 : 816, height: isLandscape ? 816 : 1056 });
   pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 
@@ -1204,7 +1597,6 @@ ipcMain.handle('generate-pdf', async (e, html, filename) => {
             landscape: isLandscape,
             margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 },
           });
-          const savePath = filename || path.join(userDataPath, 'temp-report.pdf');
           fs.writeFileSync(savePath, pdfData);
           pdfWindow.close();
           resolve({ success: true, path: savePath });
@@ -1252,6 +1644,52 @@ ipcMain.handle('send-email', async (e, to, subject, body, attachmentPath) => {
 });
 
 // ===== SERVICE DUE NOTICE AUTO-EMAIL CHECK =====
+function buildReminderEmail(cust, prop, serviceType, label, dueDate, companyName, companyPhone, confirmToken) {
+  const propAddr = prop
+    ? `${prop.address || ''}, ${prop.city || ''} ${prop.state || ''} ${prop.zip || ''}`.trim()
+    : 'your property';
+
+  let timingText;
+  if (label === 'Day Of') {
+    timingText = `<strong>today</strong>`;
+  } else if (label && label.includes('After')) {
+    timingText = `<strong>overdue</strong> — it was due on ${dueDate}`;
+  } else {
+    timingText = `due on <strong>${dueDate}</strong> (${label ? label.toLowerCase() : 'soon'})`;
+  }
+
+  const { publicUrl, port } = getServerSettings();
+  const baseUrl = publicUrl || `http://localhost:${port}`;
+  const confirmUrl = confirmToken ? `${baseUrl}/confirm?token=${confirmToken}` : null;
+
+  const confirmBlock = confirmUrl ? `
+    <div style="margin:24px 0;text-align:center;">
+      <a href="${confirmUrl}" style="display:inline-block;background:#2e7d32;color:white;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:bold;">
+        ✓ Confirm / I'll Schedule My Appointment
+      </a>
+      <p style="margin-top:10px;font-size:12px;color:#999;">Clicking this button will stop further reminders for this notice.</p>
+    </div>` : '';
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+      <h2 style="color:#1b5e20;">${companyName}</h2>
+      <p>Dear ${cust.name || 'Valued Customer'},</p>
+      <p>This is a friendly reminder that your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong> is ${timingText}.</p>
+      <p>Please contact us at your earliest convenience to schedule your appointment.</p>
+      ${companyPhone ? `<p>Phone: <strong>${companyPhone}</strong></p>` : ''}
+      ${confirmBlock}
+      <p>Thank you for your business!</p>
+      <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
+      <p style="font-size:12px;color:#999;">This is an automated reminder from ${companyName}. If you have already scheduled your appointment, you may disregard this message.</p>
+    </div>`;
+
+  const subject = label === 'Day Of'
+    ? `${serviceType} Service Due Today - ${companyName}`
+    : `${serviceType} Reminder: ${label} - ${companyName}`;
+
+  return { html, subject };
+}
+
 async function checkDueNotices() {
   try {
     const settingsPath = path.join(userDataPath, 'settings.json');
@@ -1259,17 +1697,135 @@ async function checkDueNotices() {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     if (!settings.smtp_host) return;
 
-    const notices = readCollection('service_due_notices');
+    let notices = readCollection('service_due_notices');
     const customers = readCollection('customers');
     const properties = readCollection('properties');
     const today = new Date().toISOString().split('T')[0];
 
-    const dueNotices = notices.filter(n =>
-      n.status === 'pending' && n.due_date && n.due_date <= today &&
-      n.email_enabled !== false && n.method !== 'mail' && n.method !== 'phone'
+    const companyName = settings.company_name || 'Interstate Septic';
+    const companyPhone = settings.company_phone || '';
+
+    const transporter = nodemailer.createTransport({
+      host: settings.smtp_host,
+      port: parseInt(settings.smtp_port) || 587,
+      secure: parseInt(settings.smtp_port) === 465,
+      auth: { user: settings.smtp_user, pass: settings.smtp_pass },
+    });
+
+    let dirty = false;
+
+    for (let i = 0; i < notices.length; i++) {
+      const n = notices[i];
+      if (n.email_enabled === false || n.method === 'mail' || n.method === 'phone') continue;
+      if (n.status === 'confirmed') continue; // Customer confirmed — stop all reminders
+
+      const cust = customers.find(c => c.id === n.customer_id);
+      const prop = properties.find(p => p.id === n.property_id);
+      if (!cust?.email) continue;
+
+      const serviceType = n.service_type || 'Septic Service';
+
+      // --- Process auto-schedule items ---
+      if (Array.isArray(n.notification_schedule) && n.notification_schedule.length > 0) {
+        let scheduleDirty = false;
+        const updatedSchedule = n.notification_schedule.map(item => {
+          if (item.sent || !item.send_date || item.send_date > today) return item;
+          return { ...item, _pendingSend: true };
+        });
+
+        for (let s = 0; s < updatedSchedule.length; s++) {
+          const item = updatedSchedule[s];
+          if (!item._pendingSend) continue;
+          const { html, subject } = buildReminderEmail(cust, prop, serviceType, item.label, n.due_date, companyName, companyPhone, n.confirm_token);
+          try {
+            await transporter.sendMail({ from: settings.smtp_user, to: cust.email, subject, html });
+            const { _pendingSend, ...rest } = item;
+            updatedSchedule[s] = { ...rest, sent: true, sent_at: new Date().toISOString() };
+            scheduleDirty = true;
+            console.log(`[SDN] Sent "${item.label}" reminder to ${cust.email} for notice ${n.id}`);
+          } catch (err) {
+            const { _pendingSend, ...rest } = item;
+            updatedSchedule[s] = rest; // remove flag but don't mark sent so it retries
+            console.error(`[SDN] Failed to send "${item.label}" to ${cust.email}:`, err.message);
+          }
+        }
+
+        if (scheduleDirty) {
+          notices[i] = { ...n, notification_schedule: updatedSchedule, updated_at: new Date().toISOString() };
+          dirty = true;
+        }
+        continue; // Skip legacy fallback for notices with a schedule
+      }
+
+      // --- Legacy fallback: send once when due_date arrives ---
+      if (n.status === 'pending' && n.due_date && n.due_date <= today) {
+        const { html, subject } = buildReminderEmail(cust, prop, serviceType, 'Day Of', n.due_date, companyName, companyPhone, n.confirm_token);
+        try {
+          await transporter.sendMail({ from: settings.smtp_user, to: cust.email, subject, html });
+          notices[i] = { ...n, status: 'sent', sent_date: new Date().toISOString(), updated_at: new Date().toISOString() };
+          dirty = true;
+        } catch (err) {
+          console.error(`[SDN] Failed to send legacy reminder to ${cust.email}:`, err.message);
+        }
+      }
+    }
+
+    if (dirty) writeCollection('service_due_notices', notices);
+  } catch (err) {
+    console.error('checkDueNotices error:', err.message);
+  }
+}
+
+ipcMain.handle('check-due-notices', async () => {
+  await checkDueNotices();
+  return { success: true };
+});
+
+ipcMain.handle('restart-confirm-server', async () => {
+  restartConfirmServer();
+  const { port } = getServerSettings();
+  return { success: true, port };
+});
+
+ipcMain.handle('get-confirm-server-status', async () => {
+  const { port, publicUrl } = getServerSettings();
+  return { running: !!confirmServer, port, publicUrl };
+});
+
+ipcMain.handle('set-auto-start', async (e, enabled) => {
+  app.setLoginItemSettings({ openAtLogin: !!enabled });
+  return { success: true, enabled: !!enabled };
+});
+
+ipcMain.handle('get-auto-start', async () => {
+  const { openAtLogin } = app.getLoginItemSettings();
+  return { enabled: openAtLogin };
+});
+
+async function checkJobReminders() {
+  try {
+    const settingsPath = path.join(userDataPath, 'settings.json');
+    if (!fs.existsSync(settingsPath)) return;
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (!settings.smtp_host) return;
+
+    const jobs = readCollection('jobs');
+    const customers = readCollection('customers');
+    const properties = readCollection('properties');
+    
+    // Calculate tomorrow's date
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+    // Find jobs scheduled for tomorrow that haven't had reminders sent yet
+    const jobsForTomorrow = jobs.filter(j => 
+      j.scheduled_date === tomorrowStr && 
+      (!j.reminder_sent || j.reminder_sent !== tomorrowStr)
     );
 
-    if (dueNotices.length === 0) return;
+    if (jobsForTomorrow.length === 0) return;
 
     const transporter = nodemailer.createTransport({
       host: settings.smtp_host,
@@ -1281,22 +1837,28 @@ async function checkDueNotices() {
     const companyName = settings.company_name || 'Interstate Septic';
     const companyPhone = settings.company_phone || '';
 
-    for (const n of dueNotices) {
-      const cust = customers.find(c => c.id === n.customer_id);
-      const prop = properties.find(p => p.id === n.property_id);
+    for (const job of jobsForTomorrow) {
+      const cust = customers.find(c => c.id === job.customer_id);
+      const prop = properties.find(p => p.id === job.property_id);
       if (!cust?.email) continue;
 
-      const serviceType = n.service_type || 'Septic Service';
+      const scheduledDate = new Date(job.scheduled_date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
       const propAddr = prop ? `${prop.address || ''}, ${prop.city || ''} ${prop.state || ''} ${prop.zip || ''}`.trim() : 'your property';
 
       const html = `
         <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
           <h2 style="color:#1b5e20;">${companyName}</h2>
           <p>Dear ${cust.name || 'Valued Customer'},</p>
-          <p>This is a friendly reminder that your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong> is now due.</p>
-          <p>Please contact us at your earliest convenience to schedule your appointment.</p>
+          <p>This is a friendly reminder of your scheduled service appointment <strong>tomorrow (${scheduledDate})</strong>.</p>
+          <div style="background:#f0f7ff;padding:16px;border-left:4px solid #2196F3;border-radius:4px;margin:20px 0;">
+            <p style="margin:8px 0;"><strong>Service Date:</strong> ${scheduledDate}</p>
+            <p style="margin:8px 0;"><strong>Service Type:</strong> ${job.service_type || 'Service'}</p>
+            <p style="margin:8px 0;"><strong>Property:</strong> ${propAddr}</p>
+            ${job.notes ? `<p style="margin:8px 0;"><strong>Notes:</strong> ${job.notes}</p>` : ''}
+          </div>
+          <p>If you need to reschedule, please contact us as soon as possible.</p>
           ${companyPhone ? `<p>Phone: <strong>${companyPhone}</strong></p>` : ''}
-          <p>Thank you for your business!</p>
+          <p>We look forward to serving you!</p>
           <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
           <p style="font-size:12px;color:#999;">This is an automated reminder from ${companyName}.</p>
         </div>`;
@@ -1305,27 +1867,22 @@ async function checkDueNotices() {
         await transporter.sendMail({
           from: settings.smtp_user,
           to: cust.email,
-          subject: `${serviceType} Service Reminder - ${companyName}`,
+          subject: `Appointment Reminder for Tomorrow - ${companyName}`,
           html,
         });
-        // Mark as sent
-        const idx = notices.indexOf(n);
-        notices[idx] = { ...n, status: 'sent', sent_date: new Date().toISOString(), updated_at: new Date().toISOString() };
+        // Mark reminder as sent
+        job.reminder_sent = tomorrowStr;
+        job.updated_at = new Date().toISOString();
       } catch (err) {
-        console.error(`Failed to send SDN email to ${cust.email}:`, err.message);
+        console.error(`Failed to send job reminder email to ${cust.email}:`, err.message);
       }
     }
 
-    writeCollection('service_due_notices', notices);
+    writeCollection('jobs', jobs);
   } catch (err) {
-    console.error('checkDueNotices error:', err.message);
+    console.error('checkJobReminders error:', err.message);
   }
 }
-
-ipcMain.handle('check-due-notices', async () => {
-  await checkDueNotices();
-  return { success: true };
-});
 
 // ===== REMINDER ALERTS =====
 const _firedReminderAlerts = new Set();
@@ -1390,6 +1947,15 @@ function checkReminderAlerts() {
 // ===== FILE OPERATIONS =====
 ipcMain.handle('show-save-dialog', async (e, options) => {
   return await dialog.showSaveDialog(mainWindow, options);
+});
+
+ipcMain.handle('select-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Default PDF Save Folder',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+  return { folderPath: result.filePaths[0] };
 });
 
 ipcMain.handle('open-file', async (e, filePath) => {

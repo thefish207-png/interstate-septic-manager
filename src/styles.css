@@ -401,6 +401,11 @@ body {
   max-height: 85vh;
   overflow-y: auto;
   box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  user-select: none;
 }
 
 .modal-header {
@@ -409,6 +414,40 @@ body {
   align-items: center;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+}
+
+.modal-header:active {
+  cursor: grabbing;
+}
+
+.modal-min-btn {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-light);
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.modal-min-btn:hover { background: #f0f0f0; color: var(--text); }
+
+.modal.minimized .modal-body,
+.modal.minimized .modal-footer {
+  display: none;
+}
+.modal.minimized {
+  max-height: none;
+  overflow: visible;
+  min-width: 260px;
+  width: auto;
+  cursor: default;
+}
+.modal.minimized .modal-header {
+  border-bottom: none;
+  border-radius: 10px;
+  cursor: pointer;
 }
 
 .modal-header h3 {
@@ -1781,10 +1820,10 @@ body {
 /* ===== TRUCK DRIVER SELECT ===== */
 .truck-driver-select {
   width: 100%;
-  padding: 8px 24px 8px 10px;
+  padding: 4px 20px 4px 8px;
   border: none;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   color: white;
   cursor: pointer;
@@ -2510,3 +2549,8 @@ body {
   transform: translateY(-3px);
   box-shadow: 3px 5px 15px rgba(0,0,0,0.18) !important;
 }
+
+/* Hide number input spinners */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; }

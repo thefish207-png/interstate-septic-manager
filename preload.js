@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('api', {
   getVehicles: () => ipcRenderer.invoke('get-vehicles'),
   saveVehicle: (data) => ipcRenderer.invoke('save-vehicle', data),
   deleteVehicle: (id) => ipcRenderer.invoke('delete-vehicle', id),
+  getTruckDayAssignments: (date) => ipcRenderer.invoke('get-truck-day-assignments', date),
+  saveTruckDayAssignment: (data) => ipcRenderer.invoke('save-truck-day-assignment', data),
 
   // Jobs
   getJobs: (filters) => ipcRenderer.invoke('get-jobs', filters),
@@ -60,12 +62,15 @@ contextBridge.exposeInMainWorld('api', {
   getServiceDueNotices: (filters) => ipcRenderer.invoke('get-service-due-notices', filters),
   saveServiceDueNotice: (data) => ipcRenderer.invoke('save-service-due-notice', data),
   deleteServiceDueNotice: (id) => ipcRenderer.invoke('delete-service-due-notice', id),
+  sendServiceDueNotification: (id, daysBeforeDue) => ipcRenderer.invoke('send-service-due-notification', id, daysBeforeDue),
+  scheduleServiceDueNotifications: (id, schedule) => ipcRenderer.invoke('schedule-service-due-notifications', id, schedule),
 
   // Disposal
   getDisposalLoads: (filters) => ipcRenderer.invoke('get-disposal-loads', filters),
   saveDisposalLoad: (data) => ipcRenderer.invoke('save-disposal-load', data),
   deleteDisposalLoad: (id) => ipcRenderer.invoke('delete-disposal-load', id),
   getDisposalSummary: (period) => ipcRenderer.invoke('get-disposal-summary', period),
+  getNextDisposalNumber: () => ipcRenderer.invoke('get-next-disposal-number'),
 
   // Schedule Items (manifests & driver changes on schedule)
   getScheduleItems: (vehicleId, date) => ipcRenderer.invoke('get-schedule-items', vehicleId, date),
@@ -78,6 +83,11 @@ contextBridge.exposeInMainWorld('api', {
   saveWasteSite: (data) => ipcRenderer.invoke('save-waste-site', data),
   deleteWasteSite: (id) => ipcRenderer.invoke('delete-waste-site', id),
   getDefaultWasteSite: () => ipcRenderer.invoke('get-default-waste-site'),
+
+  // Outside Pumpers
+  getOutsidePumpers: () => ipcRenderer.invoke('get-outside-pumpers'),
+  saveOutsidePumper: (data) => ipcRenderer.invoke('save-outside-pumper', data),
+  deleteOutsidePumper: (id) => ipcRenderer.invoke('delete-outside-pumper', id),
 
   // DEP Reports
   getDepReports: () => ipcRenderer.invoke('get-dep-reports'),
@@ -113,11 +123,12 @@ contextBridge.exposeInMainWorld('api', {
   deleteUser: (id) => ipcRenderer.invoke('delete-user', id),
 
   // PDF & Email
-  generatePdf: (html, filename) => ipcRenderer.invoke('generate-pdf', html, filename),
+  generatePdf: (html, filename, options) => ipcRenderer.invoke('generate-pdf', html, filename, options),
   sendEmail: (to, subject, body, attachmentPath) => ipcRenderer.invoke('send-email', to, subject, body, attachmentPath),
 
   // File operations
   showSaveDialog: (options) => ipcRenderer.invoke('show-save-dialog', options),
+  selectFolder: () => ipcRenderer.invoke('select-folder'),
   openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
 
   // Seed
@@ -134,6 +145,15 @@ contextBridge.exposeInMainWorld('api', {
   importExecuteTanktrack: (filePath, maxCustomers) => ipcRenderer.invoke('import-execute-tanktrack', filePath, maxCustomers),
   importInvoicesTanktrack: (filePath) => ipcRenderer.invoke('import-invoices-tanktrack', filePath),
 
+  // Confirmation server
+  restartConfirmServer: () => ipcRenderer.invoke('restart-confirm-server'),
+  getConfirmServerStatus: () => ipcRenderer.invoke('get-confirm-server-status'),
+
+  // Auto-start
+  setAutoStart: (enabled) => ipcRenderer.invoke('set-auto-start', enabled),
+  getAutoStart: () => ipcRenderer.invoke('get-auto-start'),
+
   // Event listeners
   onReminderAlert: (callback) => ipcRenderer.on('reminder-alert', (e, data) => callback(data)),
+  onSdnConfirmed: (callback) => ipcRenderer.on('sdn-confirmed', (e, data) => callback(data)),
 });

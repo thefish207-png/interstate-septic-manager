@@ -81,7 +81,7 @@
         <span class="nav-icon">&#128196;</span> Invoices
       </button>
       <button class="nav-item" data-page="disposal">
-        <span class="nav-icon">&#128666;</span> Disposal
+        <span class="nav-icon">&#128666;</span> Disposals
       </button>
       <button class="nav-item" data-page="sdn">
         <span class="nav-icon">&#128197;</span> Service Due
@@ -226,7 +226,10 @@
     <div class="modal">
       <div class="modal-header">
         <h3 id="modalTitle">Modal</h3>
-        <button class="modal-close" onclick="closeModal()">&times;</button>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button class="modal-min-btn" onclick="toggleMinimizeModal()" title="Minimize">&#8210;</button>
+          <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
       </div>
       <div class="modal-body" id="modalBody"></div>
       <div class="modal-footer" id="modalFooter"></div>

@@ -140,6 +140,13 @@ function enterApp() {
       updateReminderBadge();
     });
   }
+  if (window.api.onSdnConfirmed) {
+    window.api.onSdnConfirmed((data) => {
+      const name = data.customerName ? ` from ${data.customerName}` : '';
+      showToast(`Customer confirmed${name} — reminders stopped.`, 'success', 8000);
+      if (currentPage === 'sdn') loadServiceDueNotices();
+    });
+  }
 }
 
 async function updateReminderBadge() {
@@ -240,7 +247,7 @@ function navigateTo(page) {
     invoices: 'Invoices',
     vehicles: 'Vehicles',
     wastesites: 'Waste Sites',
-    disposal: 'Disposal Tracking',
+    disposal: 'Disposals',
     dep: 'DEP Reports',
     reports: 'Reports',
     reminders: 'Reminders',
@@ -289,6 +296,14 @@ function openModal(title, bodyHtml, footerHtml) {
   document.getElementById('modalTitle').textContent = title;
   document.getElementById('modalBody').innerHTML = bodyHtml;
   document.getElementById('modalFooter').innerHTML = footerHtml || '';
+  // Reset position to center on each open
+  const modal = document.querySelector('.modal');
+  modal.style.top = '';
+  modal.style.left = '';
+  modal.style.transform = '';
+  modal.style.top = '50%';
+  modal.style.left = '50%';
+  modal.style.transform = 'translate(-50%, -50%)';
   document.getElementById('modalOverlay').classList.add('active');
   // Auto-focus first input
   setTimeout(() => {
@@ -299,10 +314,68 @@ function openModal(title, bodyHtml, footerHtml) {
 
 function closeModal() {
   document.getElementById('modalOverlay').classList.remove('active');
+  document.querySelector('.modal')?.classList.remove('minimized');
 }
 
-document.getElementById('modalOverlay').addEventListener('click', (e) => {
-  if (e.target === e.currentTarget) closeModal();
+function toggleMinimizeModal() {
+  const modal = document.querySelector('.modal');
+  const isMin = modal.classList.toggle('minimized');
+  const minBtn = modal.querySelector('.modal-min-btn');
+  if (minBtn) minBtn.title = isMin ? 'Restore' : 'Minimize';
+  // When minimizing, snap to bottom-left; when restoring, re-center
+  if (isMin) {
+    modal.style.transform = 'none';
+    modal.style.left = '20px';
+    modal.style.top = (window.innerHeight - 56) + 'px';
+  } else {
+    modal.style.left = '50%';
+    modal.style.top = '50%';
+    modal.style.transform = 'translate(-50%, -50%)';
+  }
+}
+
+// ===== MODAL DRAG =====
+(function initModalDrag() {
+  let dragging = false, startX, startY, origLeft, origTop;
+
+  document.addEventListener('mousedown', (e) => {
+    const header = e.target.closest('.modal-header');
+    if (!header || e.target.closest('.modal-close') || e.target.closest('.modal-min-btn')) return;
+    // Clicking minimized header restores it
+    const modal = header.closest('.modal');
+    if (!modal) return;
+    if (modal.classList.contains('minimized')) { toggleMinimizeModal(); return; }
+
+    // Convert current position to absolute px so transform doesn't fight dragging
+    const rect = modal.getBoundingClientRect();
+    modal.style.transform = 'none';
+    modal.style.left = rect.left + 'px';
+    modal.style.top = rect.top + 'px';
+
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    origLeft = rect.left;
+    origTop = rect.top;
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const modal = document.querySelector('.modal');
+    if (!modal) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    modal.style.left = (origLeft + dx) + 'px';
+    modal.style.top = (origTop + dy) + 'px';
+  });
+
+  document.addEventListener('mouseup', () => { dragging = false; });
+})();
+
+// Modal backdrop click intentionally disabled — use X button or Escape to close
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
 });
 
 // ===== TOAST =====
@@ -586,7 +659,7 @@ async function openCustomerDetail(id, selectedPropertyId = null) {
     : properties[0];
   currentPropertyId = prop?.id || null;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = formatDate(new Date());
   const upcomingJobs = customerJobs.filter(j => j.scheduled_date >= today && j.status !== 'completed').sort((a, b) => (a.scheduled_date || '').localeCompare(b.scheduled_date || ''));
   const pastJobs = customerJobs.filter(j => j.scheduled_date < today || j.status === 'completed').sort((a, b) => (b.scheduled_date || '').localeCompare(a.scheduled_date || ''));
 
@@ -797,7 +870,7 @@ async function openCustomerDetail(id, selectedPropertyId = null) {
           </div>
           ${notices.length === 0 ? '<div style="color:var(--text-light);font-size:12px;">No service due notices.</div>' : ''}
           ${notices.map(n => {
-            const statusColors = { pending: '#ff9800', sent: '#2196f3', scheduled: '#4caf50', completed: '#388e3c', dismissed: '#9e9e9e' };
+            const statusColors = { pending: '#ff9800', sent: '#2196f3', scheduled: '#4caf50', completed: '#388e3c', dismissed: '#9e9e9e', confirmed: '#43a047' };
             return `
             <div style="padding:6px 8px;margin-bottom:4px;border-radius:4px;background:#fafafa;border-left:3px solid ${statusColors[n.status] || '#ccc'};cursor:pointer;" onclick="openServiceDueNoticeModal(${JSON.stringify(n).replace(/"/g, '&quot;')},'${id}','${prop?.id || ''}')">
               <div style="display:flex;justify-content:space-between;">
@@ -1521,7 +1594,7 @@ async function sendStatementEmail(customerId) {
   let pdfPath = null;
 
   if (attachPdf) {
-    const pdfResult = await window.api.generatePdf(stmtHtml);
+    const pdfResult = await window.api.generatePdf(stmtHtml, 'statement.pdf', { skipDialog: true });
     if (pdfResult.success) {
       pdfPath = pdfResult.path;
     } else {
@@ -1560,7 +1633,7 @@ async function exportStatementPdf(customerId) {
   const saveResult = await window.api.showSaveDialog({ defaultPath: filename, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
   if (!saveResult || saveResult.canceled) return;
 
-  const result = await window.api.generatePdf(stmtHtml, saveResult.filePath);
+  const result = await window.api.generatePdf(stmtHtml, saveResult.filePath, { skipDialog: true, forcePath: saveResult.filePath });
   if (result.success) {
     showToast('PDF saved!', 'success');
     window.api.openFile(result.path);
@@ -1968,7 +2041,23 @@ async function openServiceDueNoticeModal(notice = null, customerId = null, prope
       <label>Notes</label>
       <textarea id="sdnModalNotes" placeholder="Notice notes...">${esc(n.notes || '')}</textarea>
     </div>
+    ${isEdit && Array.isArray(n.notification_schedule) && n.notification_schedule.length > 0 ? `
+    <div style="margin-top:12px;padding:10px 12px;background:${n.status === 'confirmed' ? '#e8f5e9' : '#f0f7ff'};border-left:4px solid ${n.status === 'confirmed' ? '#43a047' : '#2196F3'};border-radius:4px;">
+      <div style="font-size:12px;font-weight:700;color:${n.status === 'confirmed' ? '#2e7d32' : '#1565c0'};margin-bottom:6px;">
+        ${n.status === 'confirmed' ? '✅ CONFIRMED — No further reminders will be sent' : '📅 AUTO REMINDERS'}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+        ${n.notification_schedule.map(item => `
+          <div style="font-size:11px;padding:3px 6px;border-radius:3px;background:${item.sent ? '#e8f5e9' : n.status === 'confirmed' ? '#f5f5f5' : '#fff'};border:1px solid ${item.sent ? '#a5d6a7' : '#ddd'};display:flex;justify-content:space-between;align-items:center;${n.status === 'confirmed' && !item.sent ? 'opacity:0.45;' : ''}">
+            <span style="color:var(--text);">${esc(item.label)}</span>
+            <span style="color:${item.sent ? '#388e3c' : '#999'};font-weight:600;">${item.sent ? '✓ Sent' : n.status === 'confirmed' ? 'Cancelled' : item.send_date}</span>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
   `, `
+    ${isEdit && n.status !== 'confirmed' ? `<button class="btn" style="background:#43a047;color:white;" onclick="confirmSdn('${n.id}','${cId}','${pId}')">✓ Mark Confirmed / Booked</button>` : ''}
+    ${isEdit && n.status === 'confirmed' ? `<button class="btn btn-secondary" onclick="unconfirmSdn('${n.id}','${cId}','${pId}')">↩ Unconfirm</button>` : ''}
+    ${isEdit ? `<button class="btn btn-info" onclick="openServiceDueNotificationScheduler('${n.id}')">📧 Send Notification</button>` : ''}
     ${isEdit ? `<button class="btn btn-danger" onclick="deleteServiceDueNotice('${n.id}','${cId}','${pId}')">Delete</button>` : ''}
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     <button class="btn btn-primary" onclick="saveServiceDueNoticeModal('${cId}','${pId}')">Save</button>
@@ -2021,17 +2110,142 @@ async function deleteServiceDueNotice(id, customerId, propertyId) {
   }
 }
 
+async function confirmSdn(id, customerId, propertyId) {
+  await window.api.saveServiceDueNotice({ id, status: 'confirmed', confirmed_at: new Date().toISOString() });
+  closeModal();
+  showToast('Marked as confirmed — no further reminders will send.', 'success');
+  if (currentPage === 'sdn') loadServiceDueNotices();
+  else if (customerId) openCustomerDetail(customerId, propertyId);
+}
+
+async function unconfirmSdn(id, customerId, propertyId) {
+  await window.api.saveServiceDueNotice({ id, status: 'pending', confirmed_at: null });
+  closeModal();
+  showToast('Notice set back to pending — reminders will resume.', 'success');
+  if (currentPage === 'sdn') loadServiceDueNotices();
+  else if (customerId) openCustomerDetail(customerId, propertyId);
+}
+
+async function openServiceDueNotificationScheduler(noticeId) {
+  const noticeResult = await window.api.getServiceDueNotices({ id: noticeId });
+  const notices = noticeResult.data || [];
+  const notice = notices[0];
+  if (!notice) {
+    showToast('Notice not found.', 'error');
+    return;
+  }
+
+  const presets = [
+    { days: 0, label: 'Today (Now)', selected: false },
+    { days: 1, label: '1 Day Before', selected: false },
+    { days: 3, label: '3 Days Before', selected: false },
+    { days: 7, label: '1 Week Before', selected: false },
+    { days: 14, label: '2 Weeks Before', selected: false },
+    { days: 30, label: '1 Month Before', selected: false },
+  ];
+
+  openModal('Send Notification', `
+    <input type="hidden" id="notifNoticeId" value="${notice.id}">
+    <div style="margin-bottom:16px;">
+      <p style="margin:0 0 12px 0;font-size:14px;color:var(--text-light);">
+        Select when to send this notification to the customer:
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        ${presets.map((p, i) => `
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:10px;border:1px solid #ddd;border-radius:4px;background:#fafafa;">
+            <input type="radio" name="notificationDay" value="${p.days}" style="width:18px;height:18px;" />
+            <span style="font-weight:500;">${p.label}</span>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+    <div style="padding:12px;background:#f0f7ff;border-left:4px solid #2196F3;border-radius:4px;margin-top:16px;">
+      <p style="margin:0;font-size:13px;color:#1565c0;">
+        💡 <strong>Note:</strong> Selecting a day will send the notification immediately to the customer.
+      </p>
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="sendServiceDueNotificationNow()">Send Notification</button>
+  `);
+
+  // Set first option as selected by default
+  setTimeout(() => {
+    const firstRadio = document.querySelector('input[name="notificationDay"]');
+    if (firstRadio) firstRadio.checked = true;
+  }, 100);
+}
+
+async function sendServiceDueNotificationNow() {
+  const noticeId = document.getElementById('notifNoticeId').value;
+  const daysSelected = document.querySelector('input[name="notificationDay"]:checked')?.value;
+  
+  if (!daysSelected) {
+    showToast('Please select when to send the notification.', 'error');
+    return;
+  }
+
+  try {
+    const result = await window.api.sendServiceDueNotification(noticeId, parseInt(daysSelected));
+    if (result.success) {
+      closeModal();
+      showToast(result.message || 'Notification sent!', 'success');
+    } else {
+      showToast(result.error || 'Failed to send notification', 'error');
+    }
+  } catch (err) {
+    showToast('Error sending notification: ' + err.message, 'error');
+  }
+}
+
+// Default auto-notification schedule by service type (days relative to due date; negative = before, positive = after)
+const SDN_AUTO_SCHEDULES = {
+  'Pumping': [
+    { days_offset: -30, label: '1 Month Before' },
+    { days_offset: -7,  label: '1 Week Before' },
+    { days_offset: 0,   label: 'Day Of' },
+    { days_offset: 30,  label: '1 Month After' },
+  ],
+};
+// Fallback schedule for any service type not listed above
+const SDN_DEFAULT_SCHEDULE = [
+  { days_offset: -30, label: '1 Month Before' },
+  { days_offset: -7,  label: '1 Week Before' },
+  { days_offset: 0,   label: 'Day Of' },
+];
+
+function addDaysToDate(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
 async function quickCreateSdn(customerId, propertyId, serviceType, interval, unit, fromJobId) {
-  // Find most recent job for this customer to base due date off of
-  const { data: jobs } = await window.api.getJobs({ customerId });
-  const recentJob = jobs.sort((a, b) => (b.svc_date || '').localeCompare(a.svc_date || ''))[0];
-  const baseDate = recentJob?.svc_date || new Date().toISOString().split('T')[0];
+  // Use the specific job's service date if coming from a job; fall back to most recent job
+  let baseDate;
+  if (fromJobId) {
+    const { data: job } = await window.api.getJob(fromJobId);
+    baseDate = job?.svc_date || new Date().toISOString().split('T')[0];
+  } else {
+    const { data: jobs } = await window.api.getJobs({ customerId });
+    const recentJob = jobs.sort((a, b) => (b.svc_date || '').localeCompare(a.svc_date || ''))[0];
+    baseDate = recentJob?.svc_date || new Date().toISOString().split('T')[0];
+  }
   const dueDate = calcNextServiceDate(baseDate, interval, unit);
+
+  // Build auto-notification schedule
+  const scheduleTemplate = SDN_AUTO_SCHEDULES[serviceType] || SDN_DEFAULT_SCHEDULE;
+  const notification_schedule = scheduleTemplate.map(item => ({
+    days_offset: item.days_offset,
+    label: item.label,
+    send_date: addDaysToDate(dueDate, item.days_offset),
+    sent: false,
+  }));
 
   const data = {
     customer_id: customerId,
     property_id: propertyId,
-    job_id: fromJobId || recentJob?.id || null,
+    job_id: fromJobId || null,
     service_type: serviceType,
     due_date: dueDate,
     method: 'email',
@@ -2039,12 +2253,14 @@ async function quickCreateSdn(customerId, propertyId, serviceType, interval, uni
     email_enabled: true,
     interval_value: interval,
     interval_unit: unit,
+    notification_schedule,
+    confirm_token: crypto.randomUUID(),
   };
 
   const result = await window.api.saveServiceDueNotice(data);
   if (result.success) {
-    showToast(`${serviceType} / ${interval} ${unit} SDN created — due ${dueDate}`, 'success');
-    // Stay on job detail if called from a job, otherwise go to customer
+    const scheduleDesc = notification_schedule.map(s => s.label).join(', ');
+    showToast(`${serviceType} / ${interval} ${unit} notice created (due ${dueDate}). Auto-reminders: ${scheduleDesc}.`, 'success');
     if (fromJobId) {
       openJobDetail(fromJobId);
     } else {
@@ -2297,6 +2513,7 @@ async function buildDayView(vehicles, users, dateStr) {
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
   const { data: wasteSites } = await window.api.getWasteSites();
   const { data: allScheduleItems } = await window.api.getScheduleItems(null, dateStr);
+  const { data: dayAssignments } = await window.api.getTruckDayAssignments(dateStr);
   const defaultSite = wasteSites.find(s => s.is_default);
 
   // Geocode lookup for smart dump recommendations
@@ -2375,7 +2592,9 @@ async function buildDayView(vehicles, users, dateStr) {
       <div class="schedule-day-main">
         <div class="day-schedule-grid" style="grid-template-columns: repeat(${vehicles.length}, minmax(240px, 1fr)); min-width: ${vehicles.length * 240}px;">
           ${vehicles.map(v => {
-            const tech = users.find(u => u.id === v.default_tech_id);
+            const dayAssign = dayAssignments.find(a => a.vehicle_id === v.id);
+            const activeTechId = dayAssign?.user_id ?? v.default_tech_id;
+            const tech = users.find(u => u.id === activeTechId);
             const vehicleJobs = jobs.filter(j => j.vehicle_id === v.id).sort((a,b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || ''));
             const vehicleItems = allScheduleItems.filter(i => i.vehicle_id === v.id);
 
@@ -2434,8 +2653,8 @@ async function buildDayView(vehicles, users, dateStr) {
                   <select class="truck-driver-select" style="background:${tech?.color || '#888'};"
                     onchange="changeTruckDriver('${v.id}', '${dateStr}', this.value); this.style.background = this.selectedOptions[0]?.dataset?.color || '#888';"
                     >
-                    <option value="" data-color="#888" ${!v.default_tech_id ? 'selected' : ''}>Unassigned</option>
-                    ${users.map(u => `<option value="${u.id}" data-color="${u.color || '#1565c0'}" ${u.id === v.default_tech_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+                    <option value="" data-color="#888" ${!activeTechId ? 'selected' : ''}>Unassigned</option>
+                    ${users.map(u => `<option value="${u.id}" data-color="${u.color || '#1565c0'}" ${u.id === activeTechId ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
                   </select>
                   ${plannedGallons > 0 ? `
                     <div class="capacity-bar-container">
@@ -3833,11 +4052,13 @@ async function onMapRouteDrop(e, vehicleId) {
 }
 
 async function reassignJobFromMap(jobId, newVehicleId) {
+  const dateStr = formatDate(scheduleDate);
   const { data: allVehicles } = await window.api.getVehicles();
   const newTruck = allVehicles.find(v => v.id === newVehicleId);
-  const newDriver = newTruck?.default_tech_id || '';
+  const { data: dayAssignments } = await window.api.getTruckDayAssignments(dateStr);
+  const dayAssign = dayAssignments.find(a => a.vehicle_id === newVehicleId);
+  const newDriver = dayAssign?.user_id ?? newTruck?.default_tech_id ?? '';
   await window.api.saveJob({ id: jobId, vehicle_id: newVehicleId, assigned_to: newDriver });
-  const dateStr = formatDate(scheduleDate);
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
   jobs.forEach(j => {
     const addr = j.property?.address || '';
@@ -4241,7 +4462,9 @@ document.addEventListener('mouseup', async (e) => {
 
     const { data: vehicles } = await window.api.getVehicles();
     const destTruck = vehicles.find(v => v.id === dropVehicleId);
-    const destDriver = destTruck?.default_tech_id || '';
+    const { data: dropDayAssigns } = await window.api.getTruckDayAssignments(dropDateStr);
+    const dropDayAssign = dropDayAssigns.find(a => a.vehicle_id === dropVehicleId);
+    const destDriver = dropDayAssign?.user_id ?? destTruck?.default_tech_id ?? '';
     const savePromises = domOrder.map((jobId, i) => {
       const updates = { id: jobId, sort_order: (i + 1) * 10 };
       if (jobId === drag.id) { updates.vehicle_id = dropVehicleId; updates.assigned_to = destDriver; }
@@ -4259,15 +4482,15 @@ async function removeScheduleItem(id) {
 }
 
 async function changeTruckDriver(vehicleId, dateStr, userId) {
-  // This changes the truck's default driver (header dropdown)
+  // Save per-day assignment only — does not change the truck's default tech
+  await window.api.saveTruckDayAssignment({ vehicle_id: vehicleId, date: dateStr, user_id: userId || null });
+  // Update all jobs for this truck on this day
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
   const truckJobs = jobs.filter(j => j.vehicle_id === vehicleId);
   for (const j of truckJobs) {
     await window.api.saveJob({ id: j.id, assigned_to: userId });
   }
-  // Also update vehicle default
-  await window.api.saveVehicle({ id: vehicleId, default_tech_id: userId || null });
-  showToast('Driver updated.', 'success');
+  showToast('Driver updated for ' + dateStr + '.', 'success');
 }
 
 // ===== MANIFEST DETAIL (click on manifest card) =====
@@ -4296,14 +4519,11 @@ async function openManifestDetail(itemId) {
     return jobSort < item.sort_order && jobSort > prevManifestSort && !j.manifest_number;
   });
 
-  // Calculate total gallons from jobs above
+  // Calculate total gallons from jobs above — only manually entered gallons_pumped, never tank capacity
   let totalGallons = 0;
   jobsAbove.forEach(j => {
     const pumped = j.gallons_pumped || {};
-    const jobTanks = j.property?.tanks || [];
-    totalGallons += Object.keys(pumped).length > 0
-      ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
-      : jobTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
+    totalGallons += Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0);
   });
 
   const isCompleted = item.status === 'completed';
@@ -4315,16 +4535,22 @@ async function openManifestDetail(itemId) {
 
   // Auto-detect waste types from tank types in the jobs above
   const tankTypeToWaste = { 'Septic Tank': 'Septage', 'Septic Tank+Filter': 'Septage', 'Septic': 'Septage', 'Grease Trap': 'Grease Trap', 'Holding Tank': 'Holding Tank', 'Cesspool': 'Septage', 'Dry Well': 'Septage', 'Portable Toilet': 'Portable Toilet', 'Pump Chamber': 'Septage' };
-  const detectedWasteTypes = [...new Set(jobsAbove.flatMap(j => (j.property?.tanks || []).map(t => tankTypeToWaste[t.tank_type] || 'Septage')))];
+  // Only count tanks that were actually pumped (respect pumped_tank_ids if set)
+  const getActiveTanks = (j) => {
+    const all = j.property?.tanks || [];
+    return j.pumped_tank_ids && j.pumped_tank_ids.length > 0
+      ? all.filter(t => j.pumped_tank_ids.includes(t.id))
+      : all;
+  };
+  const detectedWasteTypes = [...new Set(jobsAbove.flatMap(j => getActiveTanks(j).map(t => tankTypeToWaste[t.tank_type] || 'Septage')))];
   // Use saved waste_types if available, otherwise use auto-detected
   const activeWasteTypes = Array.isArray(item.waste_types) && item.waste_types.length > 0 ? item.waste_types : (detectedWasteTypes.length > 0 ? detectedWasteTypes : ['Septage']);
 
-  // Calculate per-waste-type volume breakdown
+  // Calculate per-waste-type volume breakdown (only pumped tanks)
   const wasteTypeVolumes = {};
   jobsAbove.forEach(j => {
     const pumped = j.gallons_pumped || {};
-    const jobTanks = j.property?.tanks || [];
-    jobTanks.forEach(t => {
+    getActiveTanks(j).forEach(t => {
       const wasteType = tankTypeToWaste[t.tank_type] || 'Septage';
       const gal = pumped[t.id] != null ? (parseInt(pumped[t.id]) || 0) : (t.volume_gallons || 0);
       wasteTypeVolumes[wasteType] = (wasteTypeVolumes[wasteType] || 0) + gal;
@@ -4335,48 +4561,111 @@ async function openManifestDetail(itemId) {
     : '';
 
   openModal('Manifest — ' + (vehicle?.name || 'Truck'), `
-    <div style="margin-bottom:12px;padding:12px;background:${capacityWarning ? '#fbe9e7' : '#e8f5e9'};border-radius:6px;border-left:4px solid ${capacityWarning ? '#c62828' : '#2e7d32'};">
-      <div style="font-size:14px;font-weight:600;">${jobsAbove.length} job(s) above this manifest — ${totalGallons.toLocaleString()} gal</div>
-      <div style="font-size:13px;color:var(--text-light);margin-top:4px;">Date: ${item.scheduled_date} &bull; ${esc(vehicle?.name || 'Truck')}${vehicle?.waste_hauler_id ? ' &bull; Hauler ID: ' + esc(vehicle.waste_hauler_id) : ''}</div>
-      ${wasteBreakdownHtml ? `<div style="font-size:13px;margin-top:6px;">${wasteBreakdownHtml}</div>` : ''}
-      ${capacityWarning ? `<div style="color:#c62828;font-weight:700;margin-top:6px;">&#9888; Exceeds truck capacity of ${truckCapacity.toLocaleString()} gal!</div>` : ''}
-      ${truckCapacity > 0 ? `<div style="font-size:12px;color:var(--text-light);margin-top:2px;">Truck capacity: ${truckCapacity.toLocaleString()} gal</div>` : ''}
-    </div>
-    <div class="form-row">
+    <input type="hidden" id="mfWasteTypesHidden" value="${activeWasteTypes.join(',')}">
+
+    <!-- DATE / TRUCK / CAPACITY ROW -->
+    <div class="form-row" style="margin-bottom:12px;">
       <div class="form-group">
-        <label>Total Gallons${truckCapacity > 0 ? ' (max ' + truckCapacity.toLocaleString() + ')' : ''}</label>
-        <input type="number" id="mfGallons" value="${item.total_gallons || totalGallons}" min="0" ${truckCapacity > 0 ? 'max="' + truckCapacity + '"' : ''} ${isCompleted ? 'disabled' : ''}>
+        <label>Date of Disposal</label>
+        <div style="font-size:14px;font-weight:600;padding:6px 0;">${item.scheduled_date || ''}</div>
       </div>
       <div class="form-group">
-        <label>Waste Type(s) — auto-detected from jobs</label>
-        <div style="padding:6px 0;font-size:14px;font-weight:600;">${activeWasteTypes.join(', ') || 'None'}</div>
-        <input type="hidden" id="mfWasteTypesHidden" value="${activeWasteTypes.join(',')}">
+        <label>Truck</label>
+        <div style="font-size:14px;font-weight:600;padding:6px 0;">${esc(vehicle?.name || '')}</div>
+      </div>
+      <div style="text-align:right;font-size:13px;color:var(--text-light);align-self:flex-end;padding-bottom:8px;">
+        Truck Capacity: <strong>${truckCapacity.toLocaleString()} Gallons</strong>
       </div>
     </div>
-    <div class="form-group">
-      <label>Waste Site *</label>
-      <select id="mfWasteSite" ${isCompleted ? 'disabled' : ''}>
-        <option value="">Select waste site...</option>
-        ${wasteSites.map(s => `<option value="${s.id}" ${s.id === selectedSiteId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
-      </select>
+
+    <!-- JOB LIST -->
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-header"><h3>Jobs on this Manifest</h3></div>
+      ${jobsAbove.length === 0
+        ? '<div style="padding:12px;color:var(--text-light);font-size:13px;">No jobs found above this manifest.</div>'
+        : `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:#f5f5f5;">
+              <th style="padding:6px 8px;text-align:left;"></th>
+              <th style="padding:6px 8px;text-align:left;">Customer / Address</th>
+              <th style="padding:6px 8px;text-align:left;">Tank Type</th>
+              <th style="padding:6px 8px;text-align:right;white-space:nowrap;">Gallons</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${jobsAbove.map(j => {
+              const activeTanks = getActiveTanks(j);
+              const pumped = j.gallons_pumped || {};
+              const jGal = Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0);
+              const tankDesc = activeTanks.map(t => `${esc(t.tank_type || 'Tank')} (${(t.volume_gallons||0).toLocaleString()})`).join(', ') || 'Unknown';
+              return `<tr style="border-top:1px solid #eee;">
+                <td style="padding:6px 8px;"><input type="checkbox" class="mf-job-check" data-job-id="${j.id}" data-gallons="${jGal}" checked ${isCompleted ? 'disabled' : ''} onchange="updateManifestTotal()"></td>
+                <td style="padding:6px 8px;"><strong>${esc(j.customers?.name || '')}</strong><div style="font-size:11px;color:var(--text-light);">${esc(j.property?.address || '')}, ${esc(j.property?.city || '')}</div></td>
+                <td style="padding:6px 8px;">${tankDesc}</td>
+                <td style="padding:6px 8px;text-align:right;">
+                  <input type="number" class="mf-job-gal" value="${jGal > 0 ? jGal : ''}" min="0" ${isCompleted ? 'disabled' : ''}
+                    placeholder="—"
+                    style="width:80px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;text-align:right;"
+                    onchange="this.closest('tr').querySelector('.mf-job-check').dataset.gallons=this.value;updateManifestTotal()">
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-top:2px solid #333;font-weight:700;">
+          <span>Waste Type(s): <span style="color:var(--primary);">${activeWasteTypes.join(', ') || 'None'}</span></span>
+          <span>Predicted Total: <span id="mfPredictedTotal" style="color:var(--primary);">${totalGallons.toLocaleString()}</span> Gallons
+            ${capacityWarning ? `<span style="color:#c62828;margin-left:8px;">&#9888; Exceeds capacity!</span>` : ''}
+          </span>
+        </div>`
+      }
     </div>
+
+    <!-- MANIFEST FIELDS -->
     <div class="form-row">
+      <div class="form-group">
+        <label>Waste Site *</label>
+        <select id="mfWasteSite" ${isCompleted ? 'disabled' : ''}>
+          <option value="">Select waste site...</option>
+          ${wasteSites.map(s => `<option value="${s.id}" ${s.id === selectedSiteId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+        </select>
+      </div>
       <div class="form-group">
         <label>Manifest #</label>
-        <input type="text" id="mfNumber" value="${esc(item.manifest_number || '')}" placeholder="Enter manifest number" ${isCompleted ? 'disabled' : ''}>
+        <div style="font-size:14px;font-weight:600;padding:6px 0;color:var(--text);">${esc(item.manifest_number || '—')}</div>
+        <input type="hidden" id="mfNumber" value="${esc(item.manifest_number || '')}">
       </div>
+    </div>
+    <div class="form-row">
       <div class="form-group">
-        <label>Driver</label>
+        <label>Technician</label>
         <select id="mfDriver" ${isCompleted ? 'disabled' : ''}>
           ${users.map(u => `<option value="${u.id}" ${(item.driver_id || tech?.id) === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
         </select>
       </div>
+      <div class="form-group">
+        <label>Total Gallons${truckCapacity > 0 ? ' (max ' + truckCapacity.toLocaleString() + ')' : ''}</label>
+        <input type="number" id="mfGallons" value="${item.total_gallons || totalGallons}" min="0" ${truckCapacity > 0 ? 'max="' + truckCapacity + '"' : ''} ${isCompleted ? 'disabled' : ''}>
+      </div>
+    </div>
+
+    <!-- DISPOSAL DATA -->
+    <div class="form-row">
+      <div class="form-group">
+        <label>Receipt #</label>
+        <input type="text" id="mfReceipt" value="${esc(item.receipt_number || '')}" placeholder="Receipt number" ${isCompleted ? 'disabled' : ''}>
+      </div>
+      <div class="form-group">
+        <label>Actual Gallons Delivered</label>
+        <input type="number" id="mfActualGallons" value="${item.actual_gallons || totalGallons}" min="0" placeholder="Actual gallons" ${isCompleted ? 'disabled' : ''}>
+      </div>
     </div>
     <div class="form-group">
-      <label>Notes</label>
+      <label>Disposal Notes</label>
       <textarea id="mfNotes" ${isCompleted ? 'disabled' : ''}>${esc(item.notes || '')}</textarea>
     </div>
-    ${isCompleted ? '<div style="padding:8px;background:#e8f5e9;border-radius:4px;text-align:center;color:#2e7d32;font-weight:600;">&#9989; Manifest Completed & Locked</div>' : ''}
+
+    ${isCompleted ? '<div style="padding:10px;background:#e8f5e9;border-radius:4px;text-align:center;color:#2e7d32;font-weight:600;margin-top:4px;">&#9989; Manifest Completed & Locked</div>' : ''}
   `, `
     ${!isCompleted ? `
       <button class="btn btn-danger" onclick="removeScheduleItem('${item.id}'); closeModal();">Remove</button>
@@ -4388,6 +4677,30 @@ async function openManifestDetail(itemId) {
     `}
   `);
 }
+
+function updateManifestTotal() {
+  const checks = document.querySelectorAll('.mf-job-check');
+  let total = 0;
+  checks.forEach(cb => {
+    if (cb.checked) {
+      total += parseInt(cb.dataset.gallons) || 0;
+    }
+  });
+  const el = document.getElementById('mfPredictedTotal');
+  if (el) el.textContent = total.toLocaleString();
+  const galEl = document.getElementById('mfGallons');
+  if (galEl) galEl.value = total;
+  // Auto-sync actual gallons if it hasn't been manually changed from its auto value
+  const actEl = document.getElementById('mfActualGallons');
+  if (actEl && !actEl.dataset.manuallyChanged) actEl.value = total;
+}
+
+// Track when user manually edits actual gallons so auto-sync stops
+document.addEventListener('input', function(e) {
+  if (e.target && e.target.id === 'mfActualGallons') {
+    e.target.dataset.manuallyChanged = '1';
+  }
+});
 
 async function deleteCompletedManifest(itemId) {
   if (!confirm('Delete this manifest? This will also remove the associated disposal record and un-stamp the jobs.')) return;
@@ -4448,6 +4761,8 @@ async function saveManifestDraft(itemId) {
     manifest_number: document.getElementById('mfNumber').value.trim(),
     driver_id: document.getElementById('mfDriver').value,
     notes: document.getElementById('mfNotes').value.trim(),
+    receipt_number: document.getElementById('mfReceipt')?.value.trim() || '',
+    actual_gallons: parseInt(document.getElementById('mfActualGallons')?.value) || 0,
   });
   closeModal();
   showToast('Manifest draft saved.', 'success');
@@ -4465,6 +4780,8 @@ async function completeManifest(itemId, vehicleId, dateStr) {
   const wasteType = wasteTypes.join(', ') || 'Septage';
   const driverId = document.getElementById('mfDriver').value;
   const notes = document.getElementById('mfNotes').value.trim();
+  const receiptNumber = document.getElementById('mfReceipt')?.value.trim() || '';
+  const actualGallons = parseInt(document.getElementById('mfActualGallons')?.value) || 0;
 
   const { data: wasteSites } = await window.api.getWasteSites();
   const site = wasteSites.find(s => s.id === wasteSiteId);
@@ -4486,26 +4803,61 @@ async function completeManifest(itemId, vehicleId, dateStr) {
   const prevManifests = allItems.filter(i => i.item_type === 'manifest' && i.id !== itemId && (i.sort_order || 0) < (item?.sort_order || 999));
   const prevManifestSort = prevManifests.length > 0 ? Math.max(...prevManifests.map(i => i.sort_order || 0)) : -1;
 
-  // Find completed jobs BETWEEN the previous manifest and this one
+  // Read which jobs are checked in the modal and their gallons
+  const checkedJobData = {};
+  const missingGallons = [];
+  document.querySelectorAll('.mf-job-check').forEach(cb => {
+    if (!cb.checked) return;
+    const row = cb.closest('tr');
+    const galInput = row?.querySelector('.mf-job-gal');
+    const galVal = galInput?.value ?? '';
+    checkedJobData[cb.dataset.jobId] = {
+      checked: true,
+      gallons: galVal === '' ? null : (parseInt(galVal) || 0),
+    };
+    if (galVal === '') {
+      // Get the customer name from the row for the error message
+      const custCell = row?.querySelector('td:nth-child(2) strong');
+      missingGallons.push(custCell?.textContent?.trim() || 'Unknown');
+    }
+  });
+
+  if (missingGallons.length > 0) {
+    showToast(`Cannot complete manifest — enter gallons for: ${missingGallons.join(', ')}`, 'error');
+    return;
+  }
+
+  // Find all jobs BETWEEN the previous manifest and this one (all statuses)
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
   const truckJobs = jobs.filter(j => j.vehicle_id === vehicleId).sort((a,b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || ''));
   const jobsAbove = truckJobs.filter(j => {
     const jobSort = j.sort_order != null ? j.sort_order : truckJobs.indexOf(j) * 10;
-    return jobSort < (item?.sort_order || 999) && jobSort > prevManifestSort && !j.manifest_number && j.status === 'completed';
+    return jobSort < (item?.sort_order || 999) && jobSort > prevManifestSort && !j.manifest_number;
   });
 
-  // Build pickup addresses from jobs — use 'customers' (the joined field from get-jobs)
-  const pickupAddresses = jobsAbove.map(j => {
+  // Use modal checkbox state to determine which jobs are included; fall back to all if no modal data
+  const includedJobs = Object.keys(checkedJobData).length > 0
+    ? jobsAbove.filter(j => checkedJobData[j.id]?.checked !== false)
+    : jobsAbove;
+
+  const tankTypeToWasteMap = { 'Septic Tank': 'Septage', 'Septic Tank+Filter': 'Septage', 'Septic': 'Septage', 'Grease Trap': 'Grease Trap', 'Holding Tank': 'Holding Tank', 'Cesspool': 'Septage', 'Dry Well': 'Septage', 'Portable Toilet': 'Portable Toilet', 'Pump Chamber': 'Septage' };
+
+  // Build pickup addresses — respect pumped_tank_ids and use modal gallons overrides
+  const pickupAddresses = includedJobs.map(j => {
     const addr = j.property?.address || j.address || '';
     const city = j.property?.city || j.city || '';
     const state = j.property?.state || j.state || '';
     const custName = j.customers?.name || j.customer_name || '';
     const pumped = j.gallons_pumped || {};
     const jobTanks = j.property?.tanks || [];
-    const gal = Object.keys(pumped).length > 0
-      ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
-      : jobTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
-    const tankTypes = jobTanks.map(t => ({ type: t.tank_type || 'Septic Tank', volume: pumped[t.id] != null ? (parseInt(pumped[t.id]) || 0) : (t.volume_gallons || 0) }));
+    // Only include tanks that were actually selected (pumped_tank_ids)
+    const activeTanks = j.pumped_tank_ids && j.pumped_tank_ids.length > 0
+      ? jobTanks.filter(t => j.pumped_tank_ids.includes(t.id))
+      : jobTanks;
+    // Use modal gallons (null means blank — fall back to gallons_pumped)
+    const modalGal = checkedJobData[j.id]?.gallons;
+    const gal = (modalGal != null) ? modalGal : Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0);
+    const tankTypes = activeTanks.map(t => ({ type: t.tank_type || 'Septic Tank', volume: parseInt(pumped[t.id]) || 0 }));
     return { customer: custName, address: addr, city: city, state: state, gallons: gal, customer_id: j.customer_id || '', tank_types: tankTypes, job_id: j.id };
   });
 
@@ -4519,6 +4871,7 @@ async function completeManifest(itemId, vehicleId, dateStr) {
     customer_id: primaryCustomerId,
     customer_names: customerNames,
     volume_gallons: totalGallons,
+    actual_gallons: actualGallons || totalGallons,
     waste_type: wasteType,
     disposal_site: site?.name || '',
     waste_site_id: wasteSiteId,
@@ -4529,17 +4882,20 @@ async function completeManifest(itemId, vehicleId, dateStr) {
     waste_site_license: site?.state_license || '',
     driver: driverId,
     manifest_number: manifestNumber,
+    receipt_number: receiptNumber,
     notes: notes,
-    job_ids: jobsAbove.map(j => j.id),
+    job_ids: includedJobs.map(j => j.id),
     pickup_addresses: pickupAddresses,
   });
 
-  // Stamp jobs above with manifest
-  for (const j of jobsAbove) {
+  // Stamp included jobs with manifest and mark as completed
+  for (const j of includedJobs) {
     await window.api.saveJob({
       id: j.id,
       waste_site: site?.name || '',
       manifest_number: manifestNumber,
+      status: 'completed',
+      completed_at: new Date().toISOString(),
     });
   }
 
@@ -4548,6 +4904,7 @@ async function completeManifest(itemId, vehicleId, dateStr) {
     id: itemId,
     status: 'completed',
     total_gallons: totalGallons,
+    actual_gallons: actualGallons,
     waste_type: wasteType,
     waste_types: wasteTypes,
     waste_site_id: wasteSiteId,
@@ -4555,11 +4912,12 @@ async function completeManifest(itemId, vehicleId, dateStr) {
     manifest_number: manifestNumber,
     driver_id: driverId,
     notes: notes,
-    job_ids: jobsAbove.map(j => j.id),
+    receipt_number: receiptNumber,
+    job_ids: includedJobs.map(j => j.id),
   });
 
   closeModal();
-  showToast(`Manifest ${manifestNumber} completed. ${jobsAbove.length} job(s) stamped.`, 'success');
+  showToast(`Manifest ${manifestNumber} completed. ${includedJobs.length} job(s) stamped.`, 'success');
   loadSchedule();
 }
 
@@ -4569,7 +4927,7 @@ let jobPropertyTanks = []; // tanks for currently selected property in job modal
 let jobTankTypesCache = []; // tank type configs cached for current job modal session
 
 async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
-  const isEdit = !!job;
+  const isEdit = !!(job && job.id);
   const j = job || {};
   const { data: customers } = await window.api.getCustomers();
   const { data: users } = await window.api.getUsers();
@@ -4638,7 +4996,7 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
 
   openModal(isEdit ? 'Edit Job' : 'Create New Job', `
     <input type="hidden" id="jobId" value="${j.id || ''}">
-    ${(isEdit && j.customers) ? `
+    ${isEdit ? `
     ${customerHeader}
     <input type="hidden" id="jobCustomer" value="${j.customer_id || ''}">
     <input type="hidden" id="jobProperty" value="${j.property_id || ''}">
@@ -4661,8 +5019,8 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
             oninput="filterJobCustomers()"
             onfocus="document.getElementById('jobCustomerDropdown').style.display='block'"
             style="width:100%;">
-          <div id="jobCustomerDropdown" class="autocomplete-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:white;border:1px solid #ccc;border-top:none;border-radius:0 0 4px 4px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.15);">
-            ${customers.map(c => `<div class="autocomplete-item" data-id="${c.id}" onclick="selectJobCustomer('${c.id}','${esc(c.name).replace(/'/g, "\\'")}')" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;">
+          <div id="jobCustomerDropdown" class="autocomplete-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:white;border:1px solid #ccc;border-top:none;border-radius:0 0 4px 4px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.15);" onmousedown="event.preventDefault()">
+            ${customers.map(c => `<div class="autocomplete-item" data-id="${c.id}" data-name="${esc(c.name).replace(/"/g, '&quot;')}" onclick="selectJobCustomer(this.dataset.id, this.dataset.name)" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;">
               <strong>${esc(c.name)}</strong>
               <div style="font-size:11px;color:var(--text-light);">${esc(c.primary_address || '')}</div>
             </div>`).join('')}
@@ -4704,10 +5062,9 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
             <option value="">Choose a category</option>
             ${categories.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
           </select>
-          <select id="jobProductPick">
+          <select id="jobProductPick" onchange="addJobServiceItem()">
             <option value="">Choose a product or service</option>
           </select>
-          <button class="btn btn-primary btn-sm" onclick="addJobServiceItem()">ADD</button>
         </div>
         <div class="custom-item-row">
           <input type="text" id="jobCustomItemName" placeholder="Type custom invoice item here">
@@ -4719,17 +5076,20 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
       <div id="jobItemsTotal" class="job-items-total"></div>
     </div>
 
-    <!-- DATE / TIME / TRUCK -->
+    <!-- DATE / TIME -->
     <div class="form-row">
       <div class="form-group">
         <label>Date of Service *</label>
-        <input type="date" id="jobDate" value="${dateVal}">
+        <input type="date" id="jobDate" value="${isEdit ? dateVal : (defaultDate || '')}">
       </div>
       <div class="form-group">
         <label>Time</label>
         <input type="time" id="jobTime" value="${j.scheduled_time || ''}">
       </div>
     </div>
+
+    ${isEdit ? `
+    <!-- EDIT MODE: dropdown truck + driver + helpers -->
     <div class="form-row">
       <div class="form-group">
         <label>Truck *</label>
@@ -4739,16 +5099,15 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
         </select>
       </div>
       <div class="form-group">
-        <label>Driver/Tech</label>
+        <label>Technician</label>
         <select id="jobAssigned">
           <option value="">-- Unassigned --</option>
           ${users.map(u => `<option value="${u.id}" ${u.id === j.assigned_to ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
         </select>
       </div>
     </div>
-    <!-- HELPERS -->
     <div class="form-group">
-      <label>Helper Techs</label>
+      <label>Additional Technician</label>
       <div id="jobHelpers" style="display:flex;flex-wrap:wrap;gap:6px;">
         ${users.map(u => {
           const isHelper = (j.helpers || []).includes(u.id);
@@ -4760,6 +5119,33 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
         }).join('')}
       </div>
     </div>
+    ` : `
+    <!-- NEW JOB: TankTrack-style colored truck buttons -->
+    <div class="form-group">
+      <label>Truck *</label>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
+        <button type="button" class="truck-btn ${!vehicleVal ? 'truck-btn-sel' : ''}" data-vid=""
+          onclick="selectJobTruck('')"
+          style="background:#e0e0e0;color:#555;padding:8px 16px;border:2px solid ${!vehicleVal ? '#555' : 'transparent'};border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;${!vehicleVal ? '' : 'opacity:0.55;'}">
+          None
+        </button>
+        ${vehicles.map(v => {
+          const sel = v.id === vehicleVal;
+          const c = v.color || '#1565c0';
+          return `<button type="button" class="truck-btn ${sel ? 'truck-btn-sel' : ''}" data-vid="${v.id}"
+            onclick="selectJobTruck('${v.id}')"
+            style="background:${c};color:#fff;padding:8px 16px;border:2px solid ${sel ? '#fff' : 'transparent'};border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;${sel ? 'box-shadow:0 0 0 2px ' + c + ';' : 'opacity:0.55;'}">
+            ${esc(v.name)}
+          </button>`;
+        }).join('')}
+      </div>
+      <input type="hidden" id="jobVehicle" value="${vehicleVal}">
+    </div>
+    <div id="jobTechDisplay" style="font-size:13px;color:var(--text-light);margin-top:4px;margin-bottom:10px;">
+      ${vehicleVal ? (() => { const veh = vehicles.find(v => v.id === vehicleVal); const tech = veh && users.find(u => u.id === veh.default_tech_id); return tech ? `Technician: <strong>${esc(tech.name)}</strong>` : ''; })() : ''}
+    </div>
+    <input type="hidden" id="jobAssigned" value="${vehicleVal ? (vehicles.find(v => v.id === vehicleVal)?.default_tech_id || '') : ''}">
+    `}
 
     ${isEdit ? `
     <div class="form-row">
@@ -4824,17 +5210,23 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
     <button class="btn btn-primary" onclick="saveJob()">Save</button>
   `);
 
-  // Store categories data for the product picker
+  // Store data for use in truck/category picker functions
   window._jobCategories = categories;
+  window._jobVehicles = vehicles;
+  window._jobUsers = users;
 
-  // Auto-select tech when vehicle is chosen
-  document.getElementById('jobVehicle').addEventListener('change', function() {
-    const vid = this.value;
-    const veh = vehicles.find(v => v.id === vid);
-    if (veh && veh.default_tech_id) {
-      document.getElementById('jobAssigned').value = veh.default_tech_id;
-    }
-  });
+  // Auto-select tech when vehicle dropdown is changed (edit mode only)
+  const jobVehicleEl = document.getElementById('jobVehicle');
+  if (jobVehicleEl && jobVehicleEl.tagName === 'SELECT') {
+    jobVehicleEl.addEventListener('change', function() {
+      const vid = this.value;
+      const veh = vehicles.find(v => v.id === vid);
+      const assignedEl = document.getElementById('jobAssigned');
+      if (veh && veh.default_tech_id && assignedEl) {
+        assignedEl.value = veh.default_tech_id;
+      }
+    });
+  }
 
   // Render existing line items
   renderJobLineItems();
@@ -4864,7 +5256,7 @@ function onJobCategoryChange() {
 function addJobServiceItem() {
   const prodSelect = document.getElementById('jobProductPick');
   const selected = prodSelect.options[prodSelect.selectedIndex];
-  if (!selected || !selected.value) { showToast('Select a product or service first.', 'error'); return; }
+  if (!selected || !selected.value) return;
 
   jobLineItems.push({
     description: selected.dataset.name,
@@ -4923,7 +5315,7 @@ function renderJobLineItems() {
           return `
             <tr>
               <td>${esc(li.description)}</td>
-              <td><input type="number" value="${li.qty || 1}" min="0.01" step="0.01" style="width:50px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;text-align:center;" onchange="updateJobLineItemQty(${idx}, this.value)"></td>
+              <td><input type="number" value="${li.qty || 1}" min="0.01" step="1" style="width:50px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;text-align:center;" onchange="updateJobLineItemQty(${idx}, this.value)"></td>
               <td style="text-align:right;"><input type="number" value="${(li.unit_price || 0).toFixed(2)}" min="0" step="0.01" style="width:80px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;text-align:right;" onchange="updateJobLineItemPrice(${idx}, this.value)"></td>
               <td style="text-align:right;">$${lineTotal.toFixed(2)}</td>
               <td><button class="btn btn-sm btn-danger" onclick="removeJobLineItem(${idx})" style="padding:2px 6px;">&#10005;</button></td>
@@ -4997,7 +5389,8 @@ async function onJobCustomerChange() {
     props.forEach(p => {
       const opt = document.createElement('option');
       opt.value = p.id;
-      opt.textContent = p.address;
+      const cityState = [p.city, p.state].filter(Boolean).join(', ');
+      opt.textContent = cityState ? `${p.address}, ${cityState}` : p.address;
       propSelect.appendChild(opt);
     });
     if (props.length === 1) {
@@ -5015,6 +5408,36 @@ async function onJobCustomerChange() {
       }
     } catch (e) { /* ignore */ }
   }
+}
+
+function selectJobTruck(vid) {
+  const hiddenInput = document.getElementById('jobVehicle');
+  if (hiddenInput) hiddenInput.value = vid;
+
+  // Update button visual state
+  document.querySelectorAll('.truck-btn').forEach(btn => {
+    const sel = btn.dataset.vid === vid;
+    btn.classList.toggle('truck-btn-sel', sel);
+    btn.style.opacity = sel ? '1' : '0.55';
+    if (sel) {
+      btn.style.border = '2px solid #fff';
+      const bg = btn.style.background;
+      btn.style.boxShadow = bg && bg !== 'rgb(224, 224, 224)' ? `0 0 0 2px ${bg}` : '';
+    } else {
+      btn.style.border = '2px solid transparent';
+      btn.style.boxShadow = '';
+    }
+  });
+
+  // Auto-assign default tech and show name
+  const veh = vid ? (window._jobVehicles || []).find(v => v.id === vid) : null;
+  const tech = veh && veh.default_tech_id
+    ? (window._jobUsers || []).find(u => u.id === veh.default_tech_id)
+    : null;
+  const assignedEl = document.getElementById('jobAssigned');
+  if (assignedEl) assignedEl.value = tech ? tech.id : '';
+  const techDisplay = document.getElementById('jobTechDisplay');
+  if (techDisplay) techDisplay.innerHTML = tech ? `Technician: <strong>${esc(tech.name)}</strong>` : '';
 }
 
 function toggleAllTanks(checked) {
@@ -5061,16 +5484,16 @@ function recomputePumpingLineItems(selectedTanks) {
     return;
   }
 
-  // Consolidated pumping: total qty across all selected tanks
+  // Pumping: total gallons / 1000, no per-tank minimum (0.5 + 1.5 = 2, not 1 + 1.5 = 2.5)
   let totalPumpQty = 0;
   let pumpPrice = 250;
-  // Disposal: group by label, accumulate qty
+  // Disposal: group by label, per-tank minimum of 1 (500 gal = 1 unit, 1500 gal = 1.5 units)
   const dispGroups = {};
 
   selectedTanks.forEach(t => {
     const tt = ttMap[t.tank_type] || {};
-    const tankQty = Math.max(1, Math.round(((t.volume_gallons || 0) / 1000) * 100) / 100);
-    totalPumpQty += tankQty;
+    const vol = t.volume_gallons || 0;
+    totalPumpQty += vol / 1000;
     if (tt.pumping_price) pumpPrice = tt.pumping_price;
 
     if (tt.generates_disposal !== false && tt.disposal_label) {
@@ -5078,7 +5501,8 @@ function recomputePumpingLineItems(selectedTanks) {
       if (!dispGroups[label]) {
         dispGroups[label] = { qty: 0, price: tt.disposal_price ?? 140 };
       }
-      dispGroups[label].qty += tankQty;
+      // Per-tank minimum of 1 for disposal
+      dispGroups[label].qty += Math.max(1, vol / 1000);
     }
   });
 
@@ -5148,12 +5572,21 @@ async function saveJob() {
   // Derive job_type from first line item or "Service"
   const jobType = jobLineItems.length > 0 ? jobLineItems[0].description : 'Service';
 
+  // Capture which tanks are checked in the modal (so job detail reflects user's selection)
+  const tankCheckEls = document.querySelectorAll('.tank-check');
+  const selectedTankIds = tankCheckEls.length > 0
+    ? Array.from(tankCheckEls)
+        .filter(cb => cb.checked)
+        .map(cb => { const t = jobPropertyTanks[parseInt(cb.dataset.idx, 10)]; return t?.id; })
+        .filter(Boolean)
+    : null;
+
   const data = {
     customer_id: document.getElementById('jobCustomer').value,
     property_id: document.getElementById('jobProperty').value || null,
     job_type: jobType,
     vehicle_id: document.getElementById('jobVehicle').value,
-    assigned_to: document.getElementById('jobAssigned').value || null,
+    assigned_to: document.getElementById('jobAssigned')?.value || null,
     scheduled_date: document.getElementById('jobDate').value,
     scheduled_time: document.getElementById('jobTime').value || null,
     time_in: document.getElementById('jobTimeIn')?.value || null,
@@ -5165,6 +5598,7 @@ async function saveJob() {
     line_items: jobLineItems.map(li => { const item = Object.assign({}, li); delete item._auto; return item; }),
     total: total,
     helpers: Array.from(document.querySelectorAll('.helper-check:checked')).map(cb => cb.value),
+    ...(selectedTankIds !== null && { pumped_tank_ids: selectedTankIds }),
   };
 
   const id = document.getElementById('jobId').value;
@@ -5466,7 +5900,7 @@ async function openJobDetail(id) {
                 <tr>
                   <td style="font-weight:600;">${esc(li.description)}</td>
                   <td style="text-align:right;">
-                    <input type="number" value="${li.qty || 1}" min="0" step="0.01" class="form-control" style="width:70px;text-align:right;padding:2px 4px;font-size:13px;display:inline;"
+                    <input type="number" value="${li.qty || 1}" min="0" step="1" class="form-control" style="width:70px;text-align:right;padding:2px 4px;font-size:13px;display:inline;"
                       onchange="updateLineItem('${job.id}', ${i}, 'qty', parseFloat(this.value))">
                   </td>
                   <td style="text-align:right;">
@@ -5506,33 +5940,41 @@ async function openJobDetail(id) {
         <!-- Tanks & Gallons Pumped -->
         <div class="card">
           <div class="card-header"><h3>Tanks & Gallons Pumped</h3></div>
-          ${tanks.length > 0 ? `
+          ${tanks.length > 0 ? (() => {
+            const pumpedIds = job.pumped_tank_ids || tanks.map(t => t.id);
+            const allChecked = pumpedIds.length === tanks.length;
+            return `
             <div style="margin-bottom:8px;font-size:13px;display:flex;gap:12px;align-items:center;">
-              <span>&#9745; All</span>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-weight:600;">
+                <input type="checkbox" id="jobDetailAllTanks" data-job-id="${job.id}" ${allChecked ? 'checked' : ''} onchange="toggleAllJobDetailTanks('${job.id}', this.checked)"> All
+              </label>
               <span>${tanks.length} Tank${tanks.length > 1 ? 's' : ''}</span>
               <span>${totalCapacity.toLocaleString()} Gallons</span>
               <span><strong>Job Volume:</strong> ${totalPumped > 0 ? totalPumped.toLocaleString() : totalCapacity.toLocaleString()}</span>
             </div>
-            ${tanks.map(t => `
+            ${tanks.map(t => {
+              const isChecked = pumpedIds.includes(t.id);
+              return `
               <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid #f0f0f0;">
                 <div style="display:flex;align-items:center;gap:8px;">
-                  <input type="checkbox" checked disabled>
+                  <input type="checkbox" class="job-detail-tank-check" data-tank-id="${t.id}" ${isChecked ? 'checked' : ''} onchange="onJobDetailTankToggle('${job.id}')">
                   <span style="font-weight:600;">(${esc(t.tank_type || 'Tank')}${(t.filter === 'yes' || t.filter === true) ? '+Filter' : ''}) ${(t.volume_gallons || 0).toLocaleString()}</span>
                   ${(t.filter === 'yes' || t.filter === true || (t.tank_type || '').includes('Filter')) ? '<span class="badge badge-info" style="margin-left:6px;font-size:11px;">Filter</span>' : ''}
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
-                  <span style="font-size:12px;color:var(--text-light);">Gallons Pumped</span>
+                  <span style="font-size:12px;font-weight:600;">Gallons Pumped</span>
                   <input type="number" value="${gallonsPumped[t.id] || ''}" min="0"
                     class="form-control" style="width:100px;text-align:right;padding:4px 8px;"
+                    ${!isChecked ? 'disabled' : ''}
                     onchange="updateJobGallons('${job.id}', '${t.id}', this.value)">
                 </div>
-              </div>
-            `).join('')}
+              </div>`;
+            }).join('')}
             <div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid #333;font-weight:700;font-size:15px;">
               <span>Total Volume Pumped</span>
               <span>${totalPumped.toLocaleString()}</span>
-            </div>
-          ` : '<div style="color:var(--text-light);">No tanks on this property.</div>'}
+            </div>`; })()
+          : '<div style="color:var(--text-light);">No tanks on this property.</div>'}
           <div style="margin-top:12px;padding-top:10px;border-top:2px solid #eee;display:flex;justify-content:flex-end;align-items:center;gap:10px;">
               <strong>JOB STATUS</strong>
               <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -5647,6 +6089,71 @@ async function updateJobGallons(jobId, tankId, value) {
   gallonsPumped[tankId] = parseInt(value) || 0;
   await window.api.saveJob({ id: jobId, gallons_pumped: gallonsPumped });
   showToast('Gallons updated.', 'success');
+}
+
+function toggleAllJobDetailTanks(jobId, checked) {
+  document.querySelectorAll('.job-detail-tank-check').forEach(cb => { cb.checked = checked; });
+  onJobDetailTankToggle(jobId);
+}
+
+async function onJobDetailTankToggle(jobId) {
+  const checkedIds = Array.from(document.querySelectorAll('.job-detail-tank-check:checked')).map(cb => cb.dataset.tankId);
+  const total = document.querySelectorAll('.job-detail-tank-check').length;
+  const allEl = document.getElementById('jobDetailAllTanks');
+  if (allEl) allEl.checked = checkedIds.length === total;
+
+  // Immediately disable/enable the gallons input for each tank row
+  document.querySelectorAll('.job-detail-tank-check').forEach(cb => {
+    const row = cb.closest('div[style*="border-top"]');
+    if (row) {
+      const input = row.querySelector('input[type="number"]');
+      if (input) input.disabled = !cb.checked;
+    }
+  });
+
+  const { data: job } = await window.api.getJob(jobId);
+  if (!job || !job.property_id) return;
+
+  const [{ data: prop }, { data: tankTypes }] = await Promise.all([
+    window.api.getProperty(job.property_id),
+    window.api.getTankTypes(),
+  ]);
+
+  const ttMap = {};
+  (tankTypes || []).forEach(tt => { ttMap[tt.name] = tt; });
+
+  // All possible auto-generated descriptions (to filter out before recomputing)
+  const autoDescs = new Set(['Pumping']);
+  (tankTypes || []).forEach(tt => { if (tt.disposal_label) autoDescs.add(tt.disposal_label); });
+  const manualItems = (job.line_items || []).filter(li => !autoDescs.has(li.description));
+
+  const checkedTanks = (prop?.tanks || []).filter(t => checkedIds.includes(t.id));
+  let totalPumpQty = 0;
+  let pumpPrice = 250;
+  const dispGroups = {};
+  checkedTanks.forEach(t => {
+    const tt = ttMap[t.tank_type] || {};
+    const vol = t.volume_gallons || 0;
+    totalPumpQty += vol / 1000;
+    if (tt.pumping_price) pumpPrice = tt.pumping_price;
+    if (tt.generates_disposal !== false && tt.disposal_label) {
+      const label = tt.disposal_label;
+      if (!dispGroups[label]) dispGroups[label] = { qty: 0, price: tt.disposal_price ?? 140 };
+      dispGroups[label].qty += Math.max(1, vol / 1000);
+    }
+  });
+
+  const autoItems = checkedTanks.length > 0 ? [
+    { description: 'Pumping', qty: Math.round(totalPumpQty * 100) / 100, unit_price: pumpPrice },
+    ...Object.entries(dispGroups).map(([label, { qty, price }]) => ({
+      description: label, qty: Math.round(qty * 100) / 100, unit_price: price,
+    })),
+  ] : [];
+
+  const newLineItems = [...autoItems, ...manualItems];
+  const newTotal = newLineItems.reduce((s, li) => s + (li.qty || 1) * (li.unit_price || 0), 0);
+  await window.api.saveJob({ id: jobId, pumped_tank_ids: checkedIds, line_items: newLineItems, total: newTotal });
+  openJobDetail(jobId);
 }
 
 function calcNextServiceDate(svcDate, interval, unit) {
@@ -6354,9 +6861,9 @@ async function invoiceBatchSend() {
     const { data: inv } = await window.api.getInvoice(id);
     if (inv?.customers?.email) {
       const html = generateInvoiceHtml(inv);
-      const pdfPath = await window.api.generatePdf(html, `Invoice-${inv.invoice_number}.pdf`);
-      if (pdfPath) {
-        await window.api.sendEmail(inv.customers.email, `Invoice ${inv.invoice_number}`, `Please find attached invoice ${inv.invoice_number}.`, pdfPath);
+      const pdfResult = await window.api.generatePdf(html, `Invoice-${inv.invoice_number}.pdf`, { skipDialog: true });
+      if (pdfResult?.success) {
+        await window.api.sendEmail(inv.customers.email, `Invoice ${inv.invoice_number}`, `Please find attached invoice ${inv.invoice_number}.`, pdfResult.path);
         await window.api.saveInvoice({ id: inv.id, status: 'sent', sent_date: new Date().toISOString().split('T')[0] });
         sent++;
       }
@@ -6374,8 +6881,8 @@ async function invoiceBatchPrint() {
     const { data: inv } = await window.api.getInvoice(id);
     if (inv) allHtml += generateInvoiceHtml(inv) + '<div style="page-break-after:always;"></div>';
   }
-  const pdfPath = await window.api.generatePdf(allHtml, 'Invoices-Batch.pdf');
-  if (pdfPath) await window.api.openFile(pdfPath);
+  const pdfResult = await window.api.generatePdf(allHtml, 'Invoices-Batch.pdf', { skipDialog: true });
+  if (pdfResult?.success) await window.api.openFile(pdfResult.path);
 }
 
 async function invoiceBatchDelete() {
@@ -6955,21 +7462,27 @@ async function deleteWasteSiteItem(id) {
 async function loadDisposal() {
   const page = document.getElementById('page-disposal');
 
-  // Get date range from existing inputs or default to current month
-  const existingFrom = document.getElementById('disposalFilterFrom')?.value;
-  const existingTo = document.getElementById('disposalFilterTo')?.value;
+  // Preserve filter state
+  const existingFrom   = document.getElementById('disposalFilterFrom')?.value;
+  const existingTo     = document.getElementById('disposalFilterTo')?.value;
+  const existingSite   = document.getElementById('disposalFilterSite')?.value || '';
+  const existingTruck  = document.getElementById('disposalFilterTruck')?.value || '';
+  const existingWaste  = document.getElementById('disposalFilterWaste')?.value || '';
+
   const now = new Date();
   const defaultFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   const defaultTo = formatDate(now);
   const dateFrom = existingFrom || defaultFrom;
-  const dateTo = existingTo || defaultTo;
+  const dateTo   = existingTo   || defaultTo;
 
-  const { data: allLoads } = await window.api.getDisposalLoads();
-  const { data: _vehicles } = await window.api.getVehicles();
-  const { data: _wasteSites } = await window.api.getWasteSites();
-  const loads = allLoads.filter(l => l.disposal_date >= dateFrom && l.disposal_date <= dateTo);
-  // Enrich loads with hauler ID and site license from related records
-  loads.forEach(l => {
+  const { data: allLoads }      = await window.api.getDisposalLoads();
+  const { data: _vehicles }     = await window.api.getVehicles();
+  const { data: _wasteSites }   = await window.api.getWasteSites();
+  const { data: _users }        = await window.api.getUsers();
+  const { data: _outsidePumpers } = await window.api.getOutsidePumpers();
+
+  // Enrich with vehicle/site lookups
+  allLoads.forEach(l => {
     if (!l.waste_hauler_id) {
       const veh = _vehicles.find(v => v.id === l.vehicle_id || v.name === l.vehicle);
       if (veh) l.waste_hauler_id = veh.waste_hauler_id || '';
@@ -6979,63 +7492,195 @@ async function loadDisposal() {
       if (ws) l.waste_site_license = ws.state_license || '';
     }
   });
-  const totalGallons = loads.reduce((s, l) => s + (l.volume_gallons || 0), 0);
+
+  // Apply date filter first
+  let loads = allLoads.filter(l => l.disposal_date >= dateFrom && l.disposal_date <= dateTo);
+
+  // Apply sidebar filters
+  if (existingSite)  loads = loads.filter(l => l.waste_site_id === existingSite || l.disposal_site === existingSite);
+  if (existingTruck) loads = loads.filter(l => l.vehicle_id === existingTruck || l.vehicle === existingTruck);
+  if (existingWaste) loads = loads.filter(l => (l.waste_type || '').toLowerCase().includes(existingWaste.toLowerCase()));
+
+  // Totals
+  const totalPumpVol   = loads.reduce((s, l) => s + (l.volume_gallons  || 0), 0);
+  const totalActual    = loads.reduce((s, l) => s + (l.actual_gallons   || l.volume_gallons || 0), 0);
+
+  // Waste type abbreviation map (matches TankTrack style)
+  const wasteAbbr = {
+    'Septage': 'S', 'Grease Trap': 'G', 'Grease': 'G',
+    'Holding Tank': 'H', 'Portable Toilet': 'Pt',
+    'Septic Waste Disposal': 'Sw', 'Grease Trap Waste': 'G',
+    'GIgS': 'GIgS', 'Other': 'Oth',
+  };
+  const abbr = (wt) => {
+    if (!wt) return 'S';
+    for (const [k, v] of Object.entries(wasteAbbr)) {
+      if (wt.toLowerCase().includes(k.toLowerCase())) return v;
+    }
+    return wt.substring(0, 3);
+  };
+
+  // Build site options for filter
+  const siteOptions = _wasteSites.map(s =>
+    `<option value="${s.id}" ${existingSite === s.id ? 'selected' : ''}>${esc(s.name)}</option>`
+  ).join('');
+  const truckOptions = _vehicles.map(v =>
+    `<option value="${v.id}" ${existingTruck === v.id ? 'selected' : ''}>${esc(v.name)}</option>`
+  ).join('');
+
+  // Date range label (TankTrack style header)
+  const fmtDisplay = (d) => {
+    if (!d) return '';
+    const [y, m, dy] = d.split('-');
+    return `${['January','February','March','April','May','June','July','August','September','October','November','December'][parseInt(m)-1]} ${parseInt(dy)}, ${y}`;
+  };
+  const dateRangeLabel = `${fmtDisplay(dateFrom)} \u2013 ${fmtDisplay(dateTo)}`;
 
   page.innerHTML = `
-    <div class="card" style="margin-bottom:16px;">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-        <div class="form-group" style="margin:0;">
-          <label style="font-size:12px;margin-bottom:2px;">From</label>
-          <input type="date" id="disposalFilterFrom" value="${dateFrom}" onchange="loadDisposal()" style="padding:6px 8px;">
+    <div style="display:flex;height:100%;min-height:0;">
+
+      <!-- LEFT FILTER SIDEBAR -->
+      <div style="width:180px;min-width:160px;flex-shrink:0;background:#f7f8fa;border-right:1px solid var(--border);padding:12px 10px;overflow-y:auto;font-size:13px;">
+        <div style="font-weight:700;font-size:11px;letter-spacing:.5px;color:var(--text-light);margin-bottom:10px;text-transform:uppercase;">Filter Disposals</div>
+
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+          <button class="btn btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="clearDisposalFilters()">Clear All</button>
         </div>
-        <div class="form-group" style="margin:0;">
-          <label style="font-size:12px;margin-bottom:2px;">To</label>
-          <input type="date" id="disposalFilterTo" value="${dateTo}" onchange="loadDisposal()" style="padding:6px 8px;">
+
+        <div style="margin-bottom:10px;">
+          <div style="font-weight:600;font-size:11px;margin-bottom:4px;color:var(--text);">Service Date Range</div>
+          <select onchange="setDisposalRange(this.value);this.value=''" style="width:100%;padding:4px 6px;font-size:12px;margin-bottom:4px;">
+            <option value="">Quick range…</option>
+            <option value="month">This Month</option>
+            <option value="lastmonth">Last Month</option>
+            <option value="quarter">This Quarter</option>
+            <option value="year">This Year</option>
+          </select>
+          <input type="date" id="disposalFilterFrom" value="${dateFrom}" onchange="loadDisposal()" style="width:100%;padding:4px 6px;font-size:12px;margin-bottom:3px;">
+          <input type="date" id="disposalFilterTo"   value="${dateTo}"   onchange="loadDisposal()" style="width:100%;padding:4px 6px;font-size:12px;">
         </div>
-        <div style="display:flex;gap:6px;margin-left:auto;">
-          <button class="btn btn-secondary" onclick="setDisposalRange('month')">This Month</button>
-          <button class="btn btn-secondary" onclick="setDisposalRange('quarter')">This Quarter</button>
-          <button class="btn btn-secondary" onclick="setDisposalRange('year')">This Year</button>
-          <button class="btn btn-primary" onclick="exportDisposalPdf()">&#128196; Export PDF</button>
+
+        <div style="margin-bottom:10px;">
+          <div style="font-weight:600;font-size:11px;margin-bottom:4px;color:var(--text);">Waste Site</div>
+          <select id="disposalFilterSite" onchange="loadDisposal()" style="width:100%;padding:4px 6px;font-size:12px;">
+            <option value="">All sites</option>
+            ${siteOptions}
+          </select>
+        </div>
+
+        <div style="margin-bottom:10px;">
+          <div style="font-weight:600;font-size:11px;margin-bottom:4px;color:var(--text);">Truck</div>
+          <select id="disposalFilterTruck" onchange="loadDisposal()" style="width:100%;padding:4px 6px;font-size:12px;">
+            <option value="">All trucks</option>
+            ${truckOptions}
+          </select>
+        </div>
+
+        <div style="margin-bottom:10px;">
+          <div style="font-weight:600;font-size:11px;margin-bottom:4px;color:var(--text);">Waste Type</div>
+          <input type="text" id="disposalFilterWaste" value="${esc(existingWaste)}" placeholder="e.g. Septage" oninput="loadDisposal()" style="width:100%;padding:4px 6px;font-size:12px;">
         </div>
       </div>
-      <div style="margin-top:8px;font-size:13px;color:var(--text-light);">
-        Showing <strong>${loads.length}</strong> record${loads.length !== 1 ? 's' : ''} &bull; <strong>${totalGallons.toLocaleString()}</strong> total gallons
+
+      <!-- MAIN CONTENT -->
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;">
+
+        <!-- TOP BAR -->
+        <div style="display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);background:#fff;flex-shrink:0;">
+          <span style="font-size:18px;font-weight:700;">Disposals</span>
+          <span style="display:inline-block;background:var(--primary);color:#fff;border-radius:12px;font-size:12px;font-weight:700;padding:1px 8px;margin-left:8px;">${loads.length}</span>
+        </div>
+
+        <!-- DATE RANGE HEADER -->
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 16px;background:#f5f5f5;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-light);flex-shrink:0;">
+          <span>${dateRangeLabel}</span>
+          <span>${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})} | ${new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZoneName:'short'})}</span>
+        </div>
+
+        <!-- TABLE -->
+        <div style="flex:1;overflow:auto;">
+          ${loads.length === 0 ? `
+            <div class="empty-state">
+              <div class="empty-icon">&#128666;</div>
+              <p>No disposal loads in this date range.</p>
+            </div>
+          ` : `
+            <table class="data-table" style="font-size:13px;width:100%;">
+              <thead>
+                <tr style="background:#f0f0f0;">
+                  <th style="padding:7px 10px;text-align:left;white-space:nowrap;">Record #</th>
+                  <th style="padding:7px 6px;text-align:center;">Type</th>
+                  <th style="padding:7px 10px;text-align:left;">Site Name</th>
+                  <th style="padding:7px 10px;text-align:left;white-space:nowrap;">Del Date</th>
+                  <th style="padding:7px 10px;text-align:left;">Contact Name</th>
+                  <th style="padding:7px 10px;text-align:right;white-space:nowrap;">TT Delivered</th>
+                  <th style="padding:7px 10px;text-align:right;white-space:nowrap;">Pump Vol</th>
+                  <th style="padding:7px 10px;text-align:left;">Waste Type</th>
+                  <th style="padding:7px 10px;text-align:left;">Truck</th>
+                  <th style="padding:7px 10px;text-align:left;">Receipt #</th>
+                </tr>
+                <tr style="background:#e8e8e8;font-weight:700;font-size:12px;">
+                  <td style="padding:5px 10px;" colspan="5">Totals</td>
+                  <td style="padding:5px 10px;text-align:right;">${totalActual.toLocaleString()}</td>
+                  <td style="padding:5px 10px;text-align:right;">${totalPumpVol.toLocaleString()}</td>
+                  <td colspan="3"></td>
+                </tr>
+              </thead>
+              <tbody>
+                ${loads.sort((a,b) => (b.disposal_date||'').localeCompare(a.disposal_date||'')).map(l => {
+                  const wasteType = l.waste_type || 'Septage';
+                  const wasteCode = abbr(wasteType);
+                  const siteName  = l.disposal_site || l.waste_site_name || '';
+                  const custName  = l.customer_names || l.customers?.name || '';
+                  const isYards   = l.volume_unit === 'yards';
+                  const volRaw    = isYards ? (l.volume_yards || 0) : (l.volume_gallons || 0);
+                  const volUnit   = isYards ? ' yd³' : '';
+                  const pumpVol   = volRaw.toLocaleString() + volUnit;
+                  const ttDel     = isYards ? pumpVol : (l.actual_gallons || l.volume_gallons || 0).toLocaleString();
+                  const isComplete = !!(l.manifest_number);
+                  // Source: own truck or outside pumper
+                  let sourceLabel = l.vehicle || '';
+                  if (l.outside_pumper_id) {
+                    const op = _outsidePumpers.find(p => p.id === l.outside_pumper_id);
+                    sourceLabel = op ? (op.company || op.name) : (l.pumper_name || 'Outside Pumper');
+                  }
+                  return `<tr style="cursor:pointer;border-bottom:1px solid #eee;" onclick="openDisposalDetail('${l.id}')" onmouseover="this.style.background='#f9f9f9'" onmouseout="this.style.background=''">
+                    <td style="padding:6px 10px;font-weight:600;color:var(--primary);">${esc(l.disposal_number || l.manifest_number || '—')}</td>
+                    <td style="padding:6px 6px;text-align:center;font-size:11px;font-weight:700;">${esc(wasteCode)}</td>
+                    <td style="padding:6px 10px;">${esc(siteName)}</td>
+                    <td style="padding:6px 10px;white-space:nowrap;">${l.disposal_date || ''}</td>
+                    <td style="padding:6px 10px;">${esc(custName)}</td>
+                    <td style="padding:6px 10px;text-align:right;font-weight:600;">${ttDel}</td>
+                    <td style="padding:6px 10px;text-align:right;">${pumpVol}</td>
+                    <td style="padding:6px 10px;font-size:12px;">${esc(wasteType)}</td>
+                    <td style="padding:6px 10px;font-size:12px;">${esc(sourceLabel)}${l.outside_pumper_id ? '<br><span style="font-size:10px;color:#e65100;font-weight:600;">OUTSIDE PUMPER</span>' : ''}</td>
+                    <td style="padding:6px 10px;font-size:12px;color:var(--text-light);">${esc(l.receipt_number || '')}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          `}
+        </div>
       </div>
     </div>
-
-    ${loads.length === 0 ? `
-      <div class="empty-state">
-        <div class="empty-icon">&#128666;</div>
-        <p>No disposal loads in this date range.</p>
-        <button class="btn btn-primary" onclick="openDisposalModal()">+ Log Disposal</button>
-      </div>
-    ` : `
-      <div class="card" style="padding:0;overflow:hidden;">
-        <table class="data-table">
-          <thead><tr><th>Date</th><th>Manifest #</th><th>Customer</th><th>Pickup Address</th><th>Gallons</th><th>Waste Type</th><th>Disposal Site</th><th>Vehicle</th><th>Driver</th></tr></thead>
-          <tbody>
-            ${loads.map(l => {
-              const hId = l.waste_hauler_id || '';
-              const siteId = l.waste_site_license || '';
-              return `
-              <tr onclick="openDisposalDetail('${l.id}')">
-                <td>${l.disposal_date}</td>
-                <td>${esc(l.manifest_number || '')}</td>
-                <td>${esc(l.customer_names || l.customers?.name || 'N/A')}</td>
-                <td style="font-size:12px;">${esc(l.pickup_address || (l.pickup_addresses ? l.pickup_addresses.map(a => a.address).join('; ') : ''))}</td>
-                <td>${l.volume_gallons?.toLocaleString() || 0}</td>
-                <td>${esc(l.waste_type || '')}</td>
-                <td>${esc(l.disposal_site || '')}${siteId ? '<br><span style="font-size:11px;color:#666;">ID: ' + esc(siteId) + '</span>' : ''}</td>
-                <td>${esc(l.vehicle || '')}${hId ? '<br><span style="font-size:11px;color:#666;">Hauler: ' + esc(hId) + '</span>' : ''}</td>
-                <td>${esc(l.users?.name || '')}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-    `}
   `;
+}
+
+function clearDisposalFilters() {
+  const now = new Date();
+  const defaultFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const defaultTo = formatDate(now);
+  const f = document.getElementById('disposalFilterFrom');
+  const t = document.getElementById('disposalFilterTo');
+  const s = document.getElementById('disposalFilterSite');
+  const tr = document.getElementById('disposalFilterTruck');
+  const w = document.getElementById('disposalFilterWaste');
+  if (f) f.value = defaultFrom;
+  if (t) t.value = defaultTo;
+  if (s) s.value = '';
+  if (tr) tr.value = '';
+  if (w) w.value = '';
+  loadDisposal();
 }
 
 function setDisposalRange(range) {
@@ -7044,6 +7689,11 @@ function setDisposalRange(range) {
   if (range === 'month') {
     from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     to = formatDate(now);
+  } else if (range === 'lastmonth') {
+    const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lmEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    from = formatDate(lm);
+    to = formatDate(lmEnd);
   } else if (range === 'quarter') {
     const qMonth = Math.floor(now.getMonth() / 3) * 3;
     from = `${now.getFullYear()}-${String(qMonth + 1).padStart(2, '0')}-01`;
@@ -7052,76 +7702,83 @@ function setDisposalRange(range) {
     from = `${now.getFullYear()}-01-01`;
     to = formatDate(now);
   }
-  document.getElementById('disposalFilterFrom').value = from;
-  document.getElementById('disposalFilterTo').value = to;
+  const fromEl = document.getElementById('disposalFilterFrom');
+  const toEl   = document.getElementById('disposalFilterTo');
+  if (fromEl) fromEl.value = from;
+  if (toEl)   toEl.value   = to;
   loadDisposal();
 }
 
-function buildDisposalTableHtml(loads, users, vehicles, wasteSites, totalGallons) {
+function buildDisposalTableHtml(loads, users, vehicles, wasteSites, totalGallons, outsidePumpers) {
   const tankTypeToWaste = { 'Septic Tank': 'Septage', 'Septic Tank+Filter': 'Septage', 'Grease Trap': 'Grease Trap', 'Holding Tank': 'Holding Tank', 'Cesspool': 'Septage', 'Portable Toilet': 'Portable Toilet', 'Pump Chamber': 'Septage' };
 
   let rows = '';
   loads.forEach(l => {
     const driverUser = users.find(u => u.id === l.driver);
     const veh = vehicles.find(v => v.id === l.vehicle_id || v.name === l.vehicle);
-    const haulerID = l.waste_hauler_id || veh?.waste_hauler_id || '';
+    const op = (outsidePumpers || []).find(p => p.id === l.outside_pumper_id);
+    const haulerID = l.pumper_hauler_id || l.waste_hauler_id || veh?.waste_hauler_id || op?.hauler_id || '';
     const ws = wasteSites.find(s => s.id === l.waste_site_id);
     const siteLicense = l.waste_site_license || ws?.state_license || '';
-    const driverName = driverUser ? esc(driverUser.name) : '';
+    const techName = driverUser ? esc(driverUser.name) : '';
+    const truckLabel = op ? esc(op.company || op.name) : esc(l.vehicle || '');
+    const recordNum = l.disposal_number || l.manifest_number || '—';
+    const volUnit = l.volume_unit === 'yards' ? ' yd³' : ' gal';
+    const totalVol = l.volume_unit === 'yards' ? (l.volume_yards || 0) : (l.volume_gallons || 0);
 
     if (l.pickup_addresses && l.pickup_addresses.length > 0) {
+      // Per-job breakdown row (from schedule manifests)
       l.pickup_addresses.forEach((pa, idx) => {
         const tankTypes = pa.tank_types || [];
-        const tankDisplay = tankTypes.map(tt => esc(tt.type) + ' (' + (tt.volume || 0).toLocaleString() + ')').join(', ');
-        const wasteDisplay = tankTypes.length > 0 ? [...new Set(tankTypes.map(tt => tankTypeToWaste[tt.type] || 'Septage'))].join(', ') : esc(l.waste_type || '');
+        const tankDisplay = tankTypes.length > 0
+          ? tankTypes.map(tt => esc(tt.type) + ' (' + (tt.volume || 0).toLocaleString() + ' gal)').join('<br>')
+          : '—';
+        const wasteDisplay = tankTypes.length > 0
+          ? [...new Set(tankTypes.map(tt => tankTypeToWaste[tt.type] || 'Septage'))].join(', ')
+          : esc(l.waste_type || '');
         const addrStr = esc(pa.address || '') + (pa.city ? ', ' + esc(pa.city) : '');
         rows += '<tr>';
         rows += '<td>' + (idx === 0 ? l.disposal_date : '') + '</td>';
-        rows += '<td class="manifest-num">' + (idx === 0 ? esc(l.manifest_number || '-') : '') + '</td>';
-        rows += '<td>' + esc(pa.customer || '') + '</td>';
-        rows += '<td>' + addrStr + '</td>';
-        rows += '<td>' + tankDisplay + '</td>';
+        rows += '<td class="record-num">' + (idx === 0 ? esc(recordNum) : '') + '</td>';
+        rows += '<td><strong>' + esc(pa.customer || '') + '</strong><br><span class="addr">' + addrStr + '</span></td>';
         rows += '<td>' + wasteDisplay + '</td>';
         rows += '<td>' + (idx === 0 ? esc(l.disposal_site || '') : '') + '</td>';
-        rows += '<td>' + (idx === 0 ? esc(siteLicense) : '') + '</td>';
-        rows += '<td>' + (idx === 0 ? esc(l.vehicle || '') : '') + '</td>';
+        rows += '<td>' + (idx === 0 ? truckLabel : '') + '</td>';
         rows += '<td>' + (idx === 0 ? esc(haulerID) : '') + '</td>';
-        rows += '<td>' + (idx === 0 ? driverName : '') + '</td>';
-        rows += '<td class="gallons">' + (pa.gallons || 0).toLocaleString() + '</td>';
+        rows += '<td class="gallons">' + (pa.gallons || 0).toLocaleString() + ' gal</td>';
         rows += '</tr>';
       });
-      // Manifest subtotal row
-      rows += '<tr style="background:#f5f7fa;">';
-      rows += '<td colspan="11" style="text-align:right;font-weight:600;font-size:9px;padding-right:8px;">Manifest ' + esc(l.manifest_number || '') + ' Total</td>';
-      rows += '<td class="gallons" style="font-weight:700;">' + (l.volume_gallons || 0).toLocaleString() + '</td>';
+      // Subtotal row
+      rows += '<tr class="subtotal">';
+      rows += '<td colspan="7" style="text-align:right;font-size:9px;">Record ' + esc(recordNum) + ' Total</td>';
+      rows += '<td class="gallons">' + totalVol.toLocaleString() + volUnit + '</td>';
       rows += '</tr>';
     } else {
-      // Fallback for older records without pickup_addresses
+      // Single-entry disposal (logged manually or outside pumper)
+      const genAddr = esc(l.generator_address || l.pickup_address || '');
+      const custName = esc(l.customer_names || l.customers?.name || '');
       rows += '<tr>';
       rows += '<td>' + l.disposal_date + '</td>';
-      rows += '<td class="manifest-num">' + esc(l.manifest_number || '-') + '</td>';
-      rows += '<td>' + esc(l.customer_names || '') + '</td>';
-      rows += '<td></td><td></td>';
+      rows += '<td class="record-num">' + esc(recordNum) + '</td>';
+      rows += '<td>' + (custName ? '<strong>' + custName + '</strong>' + (genAddr ? '<br>' : '') : '') + '<span class="addr">' + genAddr + '</span></td>';
       rows += '<td>' + esc(l.waste_type || '') + '</td>';
       rows += '<td>' + esc(l.disposal_site || '') + '</td>';
-      rows += '<td>' + esc(siteLicense) + '</td>';
-      rows += '<td>' + esc(l.vehicle || '') + '</td>';
+      rows += '<td>' + truckLabel + (op ? '<br><span style="font-size:8px;color:#e65100;font-weight:600;">OUTSIDE PUMPER</span>' : '') + '</td>';
       rows += '<td>' + esc(haulerID) + '</td>';
-      rows += '<td>' + driverName + '</td>';
-      rows += '<td class="gallons">' + (l.volume_gallons || 0).toLocaleString() + '</td>';
+      rows += '<td class="gallons">' + totalVol.toLocaleString() + volUnit + '</td>';
       rows += '</tr>';
     }
   });
 
   return '<table><thead><tr>'
-    + '<th>Date</th><th>Manifest #</th><th>Customer</th><th>Pickup Address</th>'
-    + '<th>Tank Type</th><th>Waste Type</th><th>Disposal Site</th><th>Site ID</th>'
-    + '<th>Vehicle</th><th>Hauler ID</th><th>Driver</th><th style="text-align:right;">Gallons</th>'
+    + '<th>Date</th><th>Record #</th><th>Customer / Generator Address</th>'
+    + '<th>Waste Type</th><th>Disposal Site</th>'
+    + '<th>Vehicle / Hauler</th><th>Hauler ID</th><th style="text-align:right;">Volume</th>'
     + '</tr></thead><tbody>'
     + rows
     + '<tr style="background:#f0f4f8;font-weight:700;">'
-    + '<td colspan="11" style="text-align:right;padding-right:12px;border-top:2px solid #1565c0;">TOTAL</td>'
-    + '<td class="gallons" style="border-top:2px solid #1565c0;">' + totalGallons.toLocaleString() + '</td>'
+    + '<td colspan="7" style="text-align:right;padding-right:12px;border-top:2px solid #1565c0;">TOTAL</td>'
+    + '<td class="gallons" style="border-top:2px solid #1565c0;">' + totalGallons.toLocaleString() + ' gal</td>'
     + '</tr></tbody></table>';
 }
 
@@ -7141,11 +7798,12 @@ async function exportDisposalPdf() {
   const { data: users } = await window.api.getUsers();
   const { data: vehicles } = await window.api.getVehicles();
   const { data: wasteSites } = await window.api.getWasteSites();
+  const { data: outsidePumpers } = await window.api.getOutsidePumpers();
   const companyName = settings?.company_name || 'Interstate Septic Systems';
   const companyAddress = settings?.company_address || '';
   const companyPhone = settings?.company_phone || '';
   const haulerId = settings?.dep_hauler_id || '';
-  const totalGallons = loads.reduce((s, l) => s + (l.volume_gallons || 0), 0);
+  const totalGallons = loads.reduce((s, l) => s + (l.volume_unit === 'yards' ? 0 : (l.volume_gallons || 0)), 0);
 
   // Group by waste type for summary
   const byType = {};
@@ -7175,8 +7833,10 @@ async function exportDisposalPdf() {
       thead th { background: #1565c0; color: white; padding: 6px 8px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
       tbody td { padding: 5px 8px; border-bottom: 1px solid #e0e0e0; font-size: 10px; vertical-align: top; }
       tbody tr:nth-child(even) { background: #fafafa; }
-      .manifest-num { font-weight: 700; color: #1565c0; }
+      .record-num { font-weight: 700; color: #1565c0; }
       .gallons { font-weight: 600; text-align: right; }
+      .addr { font-size: 9px; color: #666; }
+      .subtotal td { background: #f5f7fa; font-weight: 600; font-size: 9px; }
       .footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 9px; color: #999; display: flex; justify-content: space-between; }
       .type-summary { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
       .type-chip { background: #e8f5e9; border: 1px solid #c8e6c9; padding: 4px 10px; border-radius: 4px; font-size: 10px; }
@@ -7217,7 +7877,7 @@ async function exportDisposalPdf() {
       `).join('')}
     </div>
 
-    ${buildDisposalTableHtml(loads, users, vehicles, wasteSites, totalGallons)}
+    ${buildDisposalTableHtml(loads, users, vehicles, wasteSites, totalGallons, outsidePumpers)}
 
     <div class="footer">
       <div>${esc(companyName)} &bull; ${esc(companyAddress)}</div>
@@ -7233,7 +7893,7 @@ async function exportDisposalPdf() {
   });
 
   if (result?.filePath) {
-    const pdfResult = await window.api.generatePdf(html, result.filePath);
+    const pdfResult = await window.api.generatePdf(html, result.filePath, { skipDialog: true, forcePath: result.filePath });
     if (pdfResult.success) {
       showToast('PDF exported successfully!', 'success');
       window.api.openFile(result.filePath);
@@ -7250,74 +7910,201 @@ async function openDisposalModal(load = null) {
   const { data: users } = await window.api.getUsers();
   const { data: wasteSites } = await window.api.getWasteSites();
   const { data: vehicles } = await window.api.getVehicles();
+  const { data: outsidePumpers } = await window.api.getOutsidePumpers();
+
+  // Auto-generate a disposal number for new records
+  let disposalNumber = l.disposal_number || '';
+  if (!isEdit && !disposalNumber) {
+    const { data: nextNum } = await window.api.getNextDisposalNumber();
+    disposalNumber = String(nextNum);
+  }
+
+  // Build per-pumper history: { pumper_id: [{generator_address, customer_id}, ...] }
+  const { data: allLoads } = await window.api.getDisposalLoads();
+  const pumperHistory = {};
+  allLoads.forEach(ld => {
+    if (!ld.outside_pumper_id) return;
+    const addr = ld.generator_address || ld.pickup_address || '';
+    const custName = ld.customer_names || ld.customers?.name || '';
+    if (!pumperHistory[ld.outside_pumper_id]) pumperHistory[ld.outside_pumper_id] = [];
+    const existing = pumperHistory[ld.outside_pumper_id];
+    // Track unique addresses (with associated customer name)
+    if (addr && !existing.find(e => e.address === addr)) {
+      existing.push({ address: addr, customer_name: custName });
+    }
+    // Track unique customer names separately for the customer datalist
+    if (custName && !existing.find(e => e.customer_name === custName && !e.address)) {
+      // Only add standalone name entry if not already covered by an address entry
+    }
+  });
+  // Build a flat unique customer name list per pumper
+  const pumperCustomerNames = {};
+  allLoads.forEach(ld => {
+    if (!ld.outside_pumper_id) return;
+    const custName = ld.customer_names || ld.customers?.name || '';
+    if (!custName) return;
+    if (!pumperCustomerNames[ld.outside_pumper_id]) pumperCustomerNames[ld.outside_pumper_id] = new Set();
+    pumperCustomerNames[ld.outside_pumper_id].add(custName);
+  });
+  // Convert sets to arrays for JSON serialization
+  const pumperCustomerNamesJson = JSON.stringify(
+    Object.fromEntries(Object.entries(pumperCustomerNames).map(([k, v]) => [k, [...v]]))
+  ).replace(/"/g, '&quot;');
+  const pumperHistoryJson = JSON.stringify(pumperHistory).replace(/"/g, '&quot;');
+
+  // Determine if this load was from an outside pumper
+  const hasOutsidePumper = !!l.outside_pumper_id;
+
+  // Build outside pumper data as JSON for the auto-fill function
+  const pumpersJson = JSON.stringify(outsidePumpers).replace(/"/g, '&quot;');
 
   openModal(isEdit ? 'Edit Disposal Load' : 'Log Disposal Load', `
     <input type="hidden" id="disposalId" value="${l.id || ''}">
+    <input type="hidden" id="disposalOutsidePumperId" value="${l.outside_pumper_id || ''}">
+
+    <!-- PUMPER SOURCE TOGGLE -->
+    <div style="display:flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+      <button id="disposalSourceOwn" onclick="setDisposalSource('own')"
+        style="flex:1;padding:9px;font-size:13px;font-weight:600;border:none;cursor:pointer;transition:background .15s;background:${hasOutsidePumper ? '#f5f5f5' : 'var(--primary)'};color:${hasOutsidePumper ? 'var(--text)' : '#fff'};">
+        &#128666; Our Truck
+      </button>
+      <button id="disposalSourceOutside" onclick="setDisposalSource('outside')"
+        style="flex:1;padding:9px;font-size:13px;font-weight:600;border:none;border-left:1px solid var(--border);cursor:pointer;transition:background .15s;background:${hasOutsidePumper ? 'var(--primary)' : '#f5f5f5'};color:${hasOutsidePumper ? '#fff' : 'var(--text)'};">
+        &#128101; Outside Pumper
+      </button>
+    </div>
+
+    <!-- OUR TRUCK FIELDS -->
+    <div id="disposalOwnFields" style="${hasOutsidePumper ? 'display:none;' : ''}">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Vehicle</label>
+          <select id="disposalVehicle">
+            <option value="">-- Select --</option>
+            ${vehicles.map(v => `<option value="${v.name}" ${v.name === l.vehicle ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Driver / Technician</label>
+          <select id="disposalDriver">
+            <option value="">-- Select --</option>
+            ${users.map(u => `<option value="${u.id}" ${u.id === l.driver ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- OUTSIDE PUMPER FIELDS -->
+    <div id="disposalOutsideFields" style="${hasOutsidePumper ? '' : 'display:none;'}">
+      <div class="form-row">
+        <div class="form-group" style="flex:2;">
+          <label>Outside Pumper</label>
+          <select id="disposalPumperSelect" data-pumpers="${pumpersJson}" data-history="${pumperHistoryJson}" data-customer-names="${pumperCustomerNamesJson}" onchange="onDisposalPumperChange()">
+            <option value="">-- Select pumper --</option>
+            ${outsidePumpers.map(p => `<option value="${p.id}" ${p.id === l.outside_pumper_id ? 'selected' : ''}>${esc(p.name)}${p.company ? ' — ' + esc(p.company) : ''}</option>`).join('')}
+            <option value="__manual">Enter manually…</option>
+          </select>
+        </div>
+        <div class="form-group" id="disposalPumperHaulerIdRow" style="flex:1;">
+          <label>Hauler ID</label>
+          <input type="text" id="disposalPumperHaulerId" value="${esc(l.pumper_hauler_id || '')}" placeholder="DEP License #">
+        </div>
+      </div>
+      <!-- Manual entry row (shown when "Enter manually" selected) -->
+      <div id="disposalPumperManualRow" style="display:none;">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Pumper Name / Company</label>
+            <input type="text" id="disposalPumperManualName" value="${esc(l.pumper_name || '')}" placeholder="Company or driver name">
+          </div>
+          <div class="form-group">
+            <label>Hauler ID (manual)</label>
+            <input type="text" id="disposalPumperManualHaulerId" value="${esc(l.pumper_hauler_id || '')}" placeholder="DEP License #">
+          </div>
+        </div>
+      </div>
+      <!-- Pumper info display -->
+      <div id="disposalPumperInfo" style="font-size:12px;color:var(--text-light);margin-bottom:8px;padding:6px 10px;background:#f5f5f5;border-radius:4px;${l.outside_pumper_id ? '' : 'display:none;'}">
+        ${l.outside_pumper_id ? (() => {
+          const op = outsidePumpers.find(p => p.id === l.outside_pumper_id);
+          return op ? `${esc(op.company || op.name)} &bull; ${esc(op.phone || '')} &bull; Default: ${esc(op.default_waste_type || 'Septage')}` : '';
+        })() : ''}
+      </div>
+    </div>
+
+    <!-- SHARED FIELDS -->
     <div class="form-row">
+      <div class="form-group">
+        <label>Record #</label>
+        <div style="font-size:16px;font-weight:700;color:var(--primary);padding:6px 0;">${esc(disposalNumber)}</div>
+        <input type="hidden" id="disposalNumber" value="${esc(disposalNumber)}">
+      </div>
       <div class="form-group">
         <label>Date *</label>
         <input type="date" id="disposalDate" value="${l.disposal_date || formatDate(new Date())}">
       </div>
-      <div class="form-group">
-        <label>Customer</label>
-        <select id="disposalCustomer">
-          <option value="">-- Select --</option>
-          ${customers.map(c => `<option value="${c.id}" ${c.id === l.customer_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-        </select>
-      </div>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>Volume (gallons) *</label>
-        <input type="number" id="disposalVolume" value="${l.volume_gallons || ''}" min="1" placeholder="1000">
+        <label>Volume *</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="number" id="disposalVolume" value="${l.volume_gallons || l.volume_yards || ''}" min="0" step="0.1" placeholder="0" style="flex:1;">
+          <select id="disposalUnit" style="width:100px;" onchange="document.getElementById('disposalVolumeLabel').textContent=this.options[this.selectedIndex].text;">
+            <option value="gallons" ${(l.volume_unit || 'gallons') === 'gallons' ? 'selected' : ''}>Gallons</option>
+            <option value="yards" ${l.volume_unit === 'yards' ? 'selected' : ''}>Cubic Yards</option>
+          </select>
+        </div>
       </div>
       <div class="form-group">
         <label>Waste Type *</label>
-        <select id="disposalWasteType">
-          <option value="">-- Select --</option>
-          <option value="Septage" ${l.waste_type === 'Septage' ? 'selected' : ''}>Septage</option>
-          <option value="Grease Trap" ${l.waste_type === 'Grease Trap' ? 'selected' : ''}>Grease Trap</option>
-          <option value="Holding Tank" ${l.waste_type === 'Holding Tank' ? 'selected' : ''}>Holding Tank</option>
-          <option value="Portable Toilet" ${l.waste_type === 'Portable Toilet' ? 'selected' : ''}>Portable Toilet</option>
-          <option value="Treatment Plant" ${l.waste_type === 'Treatment Plant' ? 'selected' : ''}>Treatment Plant</option>
-          <option value="Other" ${l.waste_type === 'Other' ? 'selected' : ''}>Other</option>
-        </select>
+        ${(() => {
+          const known = ['Septage','Grease Trap','Holding Tank','Portable Toilet','Beer Waste','Treatment Plant','Other'];
+          const isCustom = l.waste_type && !known.includes(l.waste_type);
+          return `<select id="disposalWasteType" onchange="document.getElementById('disposalWasteCustomRow').style.display=this.value==='Other'?'':'none';">
+            <option value="">-- Select --</option>
+            <option value="Septage" ${l.waste_type === 'Septage' ? 'selected' : ''}>Septage</option>
+            <option value="Grease Trap" ${l.waste_type === 'Grease Trap' ? 'selected' : ''}>Grease Trap</option>
+            <option value="Holding Tank" ${l.waste_type === 'Holding Tank' ? 'selected' : ''}>Holding Tank</option>
+            <option value="Portable Toilet" ${l.waste_type === 'Portable Toilet' ? 'selected' : ''}>Portable Toilet</option>
+            <option value="Beer Waste" ${l.waste_type === 'Beer Waste' ? 'selected' : ''}>Beer Waste</option>
+            <option value="Treatment Plant" ${l.waste_type === 'Treatment Plant' ? 'selected' : ''}>Treatment Plant</option>
+            <option value="Other" ${l.waste_type === 'Other' || isCustom ? 'selected' : ''}>Other…</option>
+          </select>
+          <div id="disposalWasteCustomRow" style="margin-top:4px;${l.waste_type === 'Other' || isCustom ? '' : 'display:none;'}">
+            <input type="text" id="disposalWasteCustom" value="${isCustom ? esc(l.waste_type) : ''}" placeholder="Describe the waste type">
+          </div>`;
+        })()}
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Disposal Site *</label>
-        <select id="disposalSiteSelect">
-          <option value="">-- Select --</option>
-          ${wasteSites.map(s => `<option value="${s.id}" data-name="${esc(s.name)}" data-address="${esc(s.address || '')}" ${s.id === l.waste_site_id ? 'selected' : (s.name === l.disposal_site ? 'selected' : '')}>${esc(s.name)}</option>`).join('')}
-          <option value="__custom" ${l.disposal_site && !wasteSites.find(s => s.id === l.waste_site_id || s.name === l.disposal_site) ? 'selected' : ''}>Other (type in)</option>
-        </select>
+        ${(() => {
+          const defaultSite = wasteSites.find(s => s.is_default) || wasteSites[0];
+          const selectedId = l.waste_site_id || (!isEdit && defaultSite ? defaultSite.id : '');
+          const selectedName = l.disposal_site || (!isEdit && defaultSite ? defaultSite.name : '');
+          const isCustom = selectedName && !wasteSites.find(s => s.id === selectedId || s.name === selectedName);
+          return `<select id="disposalSiteSelect">
+            <option value="">-- Select --</option>
+            ${wasteSites.map(s => `<option value="${s.id}" data-name="${esc(s.name)}" data-address="${esc(s.address || '')}" ${s.id === selectedId ? 'selected' : (s.name === selectedName && !selectedId ? 'selected' : '')}>${esc(s.name)}</option>`).join('')}
+            <option value="__custom" ${isCustom ? 'selected' : ''}>Other (type in)</option>
+          </select>`;
+        })()}
         <input type="text" id="disposalSiteCustom" value="${esc(l.disposal_site || '')}" placeholder="Site name" style="margin-top:4px;${l.disposal_site && !wasteSites.find(s => s.id === l.waste_site_id || s.name === l.disposal_site) ? '' : 'display:none;'}">
       </div>
       <div class="form-group">
-        <label>Vehicle</label>
-        <select id="disposalVehicle">
-          <option value="">-- Select --</option>
-          ${vehicles.map(v => `<option value="${v.name}" ${v.name === l.vehicle ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
-        </select>
+        <label>Generator Address</label>
+        <input type="text" id="disposalPickupAddress" list="disposalAddressHistory" value="${esc(l.pickup_address || l.generator_address || '')}" placeholder="Address where waste was generated" autocomplete="off">
+        <datalist id="disposalAddressHistory"></datalist>
       </div>
     </div>
     <div class="form-group">
-      <label>Pickup Address</label>
-      <input type="text" id="disposalPickupAddress" value="${esc(l.pickup_address || '')}" placeholder="Address where waste was collected">
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Driver</label>
-        <select id="disposalDriver">
-          <option value="">-- Select --</option>
-          ${users.map(u => `<option value="${u.id}" ${u.id === l.driver ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Manifest #</label>
-        <input type="text" id="disposalManifest" value="${esc(l.manifest_number || '')}">
-      </div>
+      <label>Customer Name</label>
+      <input type="text" id="disposalCustomer" list="disposalCustomerHistory"
+        value="${esc(l.customer_names || l.customers?.name || '')}"
+        placeholder="Type customer or company name..."
+        autocomplete="off">
+      <datalist id="disposalCustomerHistory"></datalist>
     </div>
     <div class="form-group">
       <label>Notes</label>
@@ -7325,6 +8112,8 @@ async function openDisposalModal(load = null) {
     </div>
   `, `
     ${isEdit ? '<button class="btn btn-danger" onclick="deleteDisposalLoad()">Delete</button>' : ''}
+    ${isEdit ? `<button class="btn btn-secondary" onclick="openDisposalDetail('${l.id}')" style="margin-right:auto;">&#8592; Back</button>` : ''}
+    ${isEdit ? `<button class="btn btn-secondary" onclick="printDisposalRecord('${l.id}')">&#128438; Print</button>` : ''}
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     <button class="btn btn-primary" onclick="saveDisposalLoad()">Save</button>
   `);
@@ -7344,6 +8133,93 @@ async function openDisposalModal(load = null) {
   }
 }
 
+function setDisposalSource(source) {
+  const ownBtn      = document.getElementById('disposalSourceOwn');
+  const outsideBtn  = document.getElementById('disposalSourceOutside');
+  const ownFields   = document.getElementById('disposalOwnFields');
+  const outFields   = document.getElementById('disposalOutsideFields');
+  const isOwn = source === 'own';
+  ownBtn.style.background    = isOwn ? 'var(--primary)' : '#f5f5f5';
+  ownBtn.style.color         = isOwn ? '#fff' : 'var(--text)';
+  outsideBtn.style.background= isOwn ? '#f5f5f5' : 'var(--primary)';
+  outsideBtn.style.color     = isOwn ? 'var(--text)' : '#fff';
+  ownFields.style.display    = isOwn ? '' : 'none';
+  outFields.style.display    = isOwn ? 'none' : '';
+  if (isOwn) document.getElementById('disposalOutsidePumperId').value = '';
+}
+
+function onDisposalPumperChange() {
+  const sel     = document.getElementById('disposalPumperSelect');
+  const val     = sel.value;
+  const manualRow = document.getElementById('disposalPumperManualRow');
+  const infoDiv   = document.getElementById('disposalPumperInfo');
+  const hauleEl   = document.getElementById('disposalPumperHaulerId');
+  const pumperId  = document.getElementById('disposalOutsidePumperId');
+
+  const haulerRow = document.getElementById('disposalPumperHaulerIdRow');
+  if (val === '__manual') {
+    manualRow.style.display = '';
+    infoDiv.style.display   = 'none';
+    if (haulerRow) haulerRow.style.display = 'none';
+    hauleEl.value = '';
+    pumperId.value = '';
+    return;
+  }
+  manualRow.style.display = 'none';
+  if (haulerRow) haulerRow.style.display = '';
+  hauleEl.readOnly = false;
+  hauleEl.style.background = '';
+
+  if (!val) {
+    infoDiv.style.display = 'none';
+    pumperId.value = '';
+    // Clear datalist
+    const dl = document.getElementById('disposalAddressHistory');
+    if (dl) dl.innerHTML = '';
+    return;
+  }
+
+  // Find the pumper from the select's data attribute
+  const allPumpers = JSON.parse(sel.dataset.pumpers.replace(/&quot;/g, '"'));
+  const p = allPumpers.find(x => x.id === val);
+  if (!p) return;
+
+  pumperId.value  = p.id;
+  hauleEl.value   = p.hauler_id || '';
+
+  infoDiv.style.display = '';
+  infoDiv.innerHTML = `${esc(p.company || p.name)}${p.phone ? ' &bull; ' + esc(p.phone) : ''}${p.hauler_id ? ' &bull; Hauler ID: <strong>' + esc(p.hauler_id) + '</strong>' : ''}`;
+
+  // Populate address history datalist for this pumper
+  const history = JSON.parse(sel.dataset.history.replace(/&quot;/g, '"'));
+  const pumperAddrs = history[val] || [];
+  const dl = document.getElementById('disposalAddressHistory');
+  if (dl) {
+    dl.innerHTML = pumperAddrs.map(e => `<option value="${esc(e.address)}">`).join('');
+  }
+
+  // Populate customer name datalist for this pumper
+  const custNames = JSON.parse(sel.dataset.customerNames.replace(/&quot;/g, '"'));
+  const pumperCustList = custNames[val] || [];
+  const custDl = document.getElementById('disposalCustomerHistory');
+  if (custDl) {
+    custDl.innerHTML = pumperCustList.map(n => `<option value="${esc(n)}">`).join('');
+  }
+
+  // When user picks an address from the datalist, auto-fill customer name if we have a match
+  const addrInput = document.getElementById('disposalPickupAddress');
+  if (addrInput && !addrInput._historyWired) {
+    addrInput._historyWired = true;
+    addrInput.addEventListener('change', () => {
+      const matched = pumperAddrs.find(e => e.address === addrInput.value);
+      if (matched?.customer_name) {
+        const custInput = document.getElementById('disposalCustomer');
+        if (custInput && !custInput.value) custInput.value = matched.customer_name;
+      }
+    });
+  }
+}
+
 async function saveDisposalLoad() {
   const siteSelect = document.getElementById('disposalSiteSelect');
   const siteOption = siteSelect?.selectedOptions[0];
@@ -7358,26 +8234,57 @@ async function saveDisposalLoad() {
     siteAddress = siteOption?.dataset?.address || '';
   }
 
+  // Determine pumper source (own truck vs outside pumper)
+  const outsidePumperId = document.getElementById('disposalOutsidePumperId')?.value || '';
+  const pumperSel       = document.getElementById('disposalPumperSelect');
+  const isManualPumper  = pumperSel?.value === '__manual';
+
+  let pumperName     = '';
+  let pumperHaulerId = '';
+  if (outsidePumperId) {
+    pumperHaulerId = document.getElementById('disposalPumperHaulerId')?.value || '';
+  } else if (isManualPumper) {
+    pumperName     = document.getElementById('disposalPumperManualName')?.value.trim() || '';
+    pumperHaulerId = document.getElementById('disposalPumperManualHaulerId')?.value.trim() || '';
+  }
+
+  const unit = document.getElementById('disposalUnit')?.value || 'gallons';
+  const rawVolume = parseFloat(document.getElementById('disposalVolume').value) || 0;
+  const rawWasteType = document.getElementById('disposalWasteType').value;
+  const knownTypes = ['Septage','Grease Trap','Holding Tank','Portable Toilet','Beer Waste','Treatment Plant'];
+  const wasteType = (rawWasteType === 'Other' || !knownTypes.includes(rawWasteType))
+    ? (document.getElementById('disposalWasteCustom')?.value.trim() || rawWasteType || 'Other')
+    : rawWasteType;
+
   const data = {
     disposal_date: document.getElementById('disposalDate').value,
-    customer_id: document.getElementById('disposalCustomer').value,
-    volume_gallons: parseInt(document.getElementById('disposalVolume').value) || 0,
-    waste_type: document.getElementById('disposalWasteType').value,
+    volume_gallons: unit === 'gallons' ? rawVolume : 0,
+    volume_yards: unit === 'yards' ? rawVolume : 0,
+    volume_unit: unit,
+    waste_type: wasteType,
     disposal_site: siteName,
     waste_site_id: siteId,
     waste_site_address: siteAddress,
-    vehicle: document.getElementById('disposalVehicle')?.value || '',
+    disposal_number: document.getElementById('disposalNumber').value,
+    customer_names: document.getElementById('disposalCustomer')?.value?.trim() || '',
+    generator_address: document.getElementById('disposalPickupAddress')?.value?.trim() || '',
     pickup_address: document.getElementById('disposalPickupAddress')?.value?.trim() || '',
-    driver: document.getElementById('disposalDriver').value || null,
-    manifest_number: document.getElementById('disposalManifest').value.trim(),
     notes: document.getElementById('disposalNotes').value.trim(),
+    // Own truck fields (may be empty for outside pumper jobs)
+    vehicle: document.getElementById('disposalVehicle')?.value || '',
+    driver: document.getElementById('disposalDriver')?.value || null,
+    // Outside pumper fields
+    outside_pumper_id: outsidePumperId || null,
+    pumper_name: pumperName,
+    pumper_hauler_id: pumperHaulerId,
   };
 
   const id = document.getElementById('disposalId').value;
   if (id) data.id = id;
 
-  if (!data.disposal_date || !data.volume_gallons || !data.waste_type || !data.disposal_site) {
-    showToast('Date, gallons, waste type, and disposal site are required.', 'error');
+  const totalVolume = data.volume_gallons || data.volume_yards || 0;
+  if (!data.disposal_date || !totalVolume || !data.waste_type || !data.disposal_site) {
+    showToast('Date, volume, waste type, and disposal site are required.', 'error');
     return;
   }
 
@@ -7400,8 +8307,223 @@ async function deleteDisposalLoad() {
 
 async function openDisposalDetail(id) {
   const loads = (await window.api.getDisposalLoads()).data;
-  const load = loads.find(l => l.id === id);
-  if (load) openDisposalModal(load);
+  const l = loads.find(x => x.id === id);
+  if (!l) return;
+
+  const { data: settings } = await window.api.getSettings();
+  const { data: wasteSites } = await window.api.getWasteSites();
+  const { data: users } = await window.api.getUsers();
+  const { data: outsidePumpers } = await window.api.getOutsidePumpers();
+  const { data: allCustomers } = await window.api.getCustomers();
+
+  const site = wasteSites.find(s => s.id === l.waste_site_id);
+  const driver = users.find(u => u.id === l.driver);
+  const pumper = outsidePumpers.find(p => p.id === l.outside_pumper_id);
+  const customer = allCustomers.find(c => c.id === l.customer_id);
+
+  const isOutside = !!l.outside_pumper_id;
+  const recordNum = l.disposal_number || l.manifest_number || '—';
+  const vol = l.volume_unit === 'yards'
+    ? `${(l.volume_yards || 0).toLocaleString()} cu yd`
+    : `${(l.volume_gallons || 0).toLocaleString()} gal`;
+
+  function field(label, value) {
+    return `<div class="dv-field"><div class="dv-label">${label}</div><div class="dv-value">${value || '<span style="color:#bbb;">—</span>'}</div></div>`;
+  }
+
+  const body = `
+    <style>
+      .dv-card { display:flex; flex-direction:column; gap:18px; }
+      .dv-section { background:#f8f9fa; border:1px solid #e5e7eb; border-radius:8px; padding:14px 16px; }
+      .dv-section-title { font-size:10px; font-weight:700; letter-spacing:.6px; text-transform:uppercase; color:#888; margin-bottom:12px; }
+      .dv-row { display:flex; flex-wrap:wrap; gap:12px; }
+      .dv-field { flex:1; min-width:120px; }
+      .dv-label { font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:#999; margin-bottom:3px; }
+      .dv-value { font-size:13px; font-weight:600; color:#1a1a1a; }
+      .dv-badge { display:inline-block; padding:3px 10px; border-radius:10px; font-size:11px; font-weight:700; background:#e3f2fd; color:#1565c0; }
+      .dv-vol { font-size:20px; font-weight:700; color:#1a56a0; }
+    </style>
+    <div class="dv-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #eee;">
+        <div>
+          <div style="font-size:11px;color:#999;text-transform:uppercase;letter-spacing:.5px;">Record</div>
+          <div style="font-size:22px;font-weight:700;color:#1a56a0;">#${esc(recordNum)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:13px;color:#555;">${esc(l.disposal_date || '')}</div>
+          <div style="margin-top:4px;"><span class="dv-badge">${isOutside ? '🚛 Outside Pumper' : '🚚 Our Truck'}</span></div>
+        </div>
+      </div>
+
+      <div class="dv-section">
+        <div class="dv-section-title">${isOutside ? 'Outside Hauler' : 'Hauler / Vehicle'}</div>
+        <div class="dv-row">
+          ${isOutside ? `
+            ${field('Name', esc(pumper?.name || l.pumper_name || ''))}
+            ${field('Company', esc(pumper?.company || ''))}
+            ${field('DEP Hauler ID', esc(pumper?.hauler_id || l.pumper_hauler_id || ''))}
+            ${field('Phone', esc(pumper?.phone || ''))}
+          ` : `
+            ${field('Vehicle', esc(l.vehicle || ''))}
+            ${field('Technician', esc(driver?.name || ''))}
+          `}
+        </div>
+      </div>
+
+      <div class="dv-section">
+        <div class="dv-section-title">Waste Details</div>
+        <div class="dv-row">
+          <div class="dv-field"><div class="dv-label">Volume</div><div class="dv-vol">${esc(vol)}</div></div>
+          ${field('Waste Type', esc(l.waste_type || ''))}
+          ${field('Customer', esc(customer?.name || l.customer_names || ''))}
+        </div>
+        ${l.generator_address || l.pickup_address ? `<div style="margin-top:10px;">${field('Generator Address', esc(l.generator_address || l.pickup_address || ''))}</div>` : ''}
+      </div>
+
+      <div class="dv-section">
+        <div class="dv-section-title">Disposal Site</div>
+        <div class="dv-row">
+          ${field('Facility', esc(l.disposal_site || site?.name || ''))}
+          ${field('Address', esc(site?.address || l.waste_site_address || ''))}
+          ${field('State License', esc(site?.state_license || l.waste_site_license || ''))}
+        </div>
+      </div>
+
+      ${l.notes ? `<div class="dv-section"><div class="dv-section-title">Notes</div><div style="font-size:13px;color:#333;">${esc(l.notes)}</div></div>` : ''}
+    </div>`;
+
+  const footer = `
+    <button class="btn btn-danger" onclick="deleteDisposalFromDetail('${l.id}')" style="margin-right:auto;">Delete</button>
+    <button class="btn btn-secondary" onclick="closeModal();setTimeout(()=>openDisposalModal(window.__disposalDetailLoad),50)">Edit</button>
+    <button class="btn" style="background:#f59e0b;color:#fff;border-color:#f59e0b;" onclick="closeModal();printDisposalRecord('${l.id}')">&#128196; Export PDF</button>
+    <button class="btn btn-secondary" onclick="closeModal()">Close</button>`;
+
+  window.__disposalDetailLoad = l;
+  openModal(`Disposal Record #${recordNum}`, body, footer);
+}
+
+async function deleteDisposalFromDetail(id) {
+  if (!confirm('Delete this disposal record?')) return;
+  await window.api.deleteDisposalLoad(id);
+  closeModal();
+  showToast('Disposal deleted.', 'success');
+  loadDisposal();
+}
+
+async function printDisposalRecord(id) {
+  const loads = (await window.api.getDisposalLoads()).data;
+  const l = loads.find(x => x.id === id);
+  if (!l) return;
+
+  const { data: settings } = await window.api.getSettings();
+  const { data: wasteSites } = await window.api.getWasteSites();
+  const { data: users } = await window.api.getUsers();
+  const { data: outsidePumpers } = await window.api.getOutsidePumpers();
+
+  const company = settings?.company_name || 'Interstate Septic Systems';
+  const compAddr = settings?.company_address || '';
+  const compPhone = settings?.company_phone || '';
+  const haulerId = settings?.dep_hauler_id || '';
+
+  const site = wasteSites.find(s => s.id === l.waste_site_id);
+  const driver = users.find(u => u.id === l.driver);
+  const pumper = outsidePumpers.find(p => p.id === l.outside_pumper_id);
+  const { data: allCustomers } = await window.api.getCustomers();
+  const customer = allCustomers.find(c => c.id === l.customer_id);
+
+  const recordNum = l.disposal_number || l.manifest_number || '—';
+  const isOutside = !!l.outside_pumper_id;
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Disposal Record #${recordNum}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 13px; color: #222; padding: 32px; }
+    h1 { font-size: 22px; margin-bottom: 2px; }
+    h2 { font-size: 14px; font-weight: 600; margin-bottom: 10px; color: #555; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; border-bottom: 2px solid #222; padding-bottom: 16px; }
+    .record-num { font-size: 20px; font-weight: 700; color: #1a56a0; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: #333; border-bottom: 1px solid #bbb; padding-bottom: 4px; margin-bottom: 10px; }
+    .row { display: flex; gap: 24px; margin-bottom: 8px; }
+    .field { flex: 1; }
+    .label { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: #888; margin-bottom: 2px; }
+    .value { font-size: 13px; font-weight: 600; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; background: #e3f2fd; color: #1565c0; }
+    .footer { margin-top: 40px; font-size: 10px; color: #aaa; border-top: 1px solid #eee; padding-top: 8px; }
+    @media print { body { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>${esc(company)}</h1>
+      <div style="font-size:12px;color:#555;">${esc(compAddr)}${compAddr && compPhone ? ' &bull; ' : ''}${esc(compPhone)}</div>
+      ${haulerId ? `<div style="font-size:12px;margin-top:2px;">DEP Hauler ID: <strong>${esc(haulerId)}</strong></div>` : ''}
+    </div>
+    <div style="text-align:right;">
+      <div class="record-num">Record #${esc(recordNum)}</div>
+      <h2 style="margin-top:4px;">Waste Disposal Record</h2>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">${isOutside ? 'Outside Hauler' : 'Hauler'}</div>
+    ${isOutside ? `
+      <div class="row">
+        <div class="field"><div class="label">Company / Name</div><div class="value">${esc([pumper?.name, pumper?.company].filter(Boolean).join(' — ') || l.pumper_name || '—')}</div></div>
+        <div class="field"><div class="label">DEP Hauler ID</div><div class="value">${esc(pumper?.hauler_id || l.pumper_hauler_id || '—')}</div></div>
+        <div class="field"><div class="label">Phone</div><div class="value">${esc(pumper?.phone || '—')}</div></div>
+        <div class="field"><div class="label">Date</div><div class="value">${esc(l.disposal_date || '—')}</div></div>
+      </div>
+    ` : `
+      <div class="row">
+        <div class="field"><div class="label">Vehicle</div><div class="value">${esc(l.vehicle || '—')}</div></div>
+        <div class="field"><div class="label">Technician</div><div class="value">${esc(driver?.name || '—')}</div></div>
+        <div class="field"><div class="label">Our Hauler ID</div><div class="value">${esc(haulerId || '—')}</div></div>
+        <div class="field"><div class="label">Date</div><div class="value">${esc(l.disposal_date || '—')}</div></div>
+      </div>
+    `}
+  </div>
+
+  <div class="section">
+    <div class="section-title">Waste Details</div>
+    <div class="row">
+      <div class="field"><div class="label">Waste Type</div><div class="value">${esc(l.waste_type || '—')}</div></div>
+      <div class="field"><div class="label">Volume</div><div class="value" style="font-size:18px;">${l.volume_unit === 'yards' ? `${(l.volume_yards||0).toLocaleString()} cu yd` : `${(l.volume_gallons||0).toLocaleString()} gal`}</div></div>
+      <div class="field"><div class="label">Customer</div><div class="value">${esc(customer?.name || l.customer_names || '—')}</div></div>
+      <div class="field"><div class="label">Generator Address</div><div class="value">${esc(l.generator_address || l.pickup_address || '—')}</div></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Disposal Site</div>
+    <div class="row">
+      <div class="field"><div class="label">Facility Name</div><div class="value">${esc(l.disposal_site || site?.name || '—')}</div></div>
+      <div class="field"><div class="label">Facility Address</div><div class="value">${esc(site?.address || l.waste_site_address || '—')}</div></div>
+      <div class="field"><div class="label">State License</div><div class="value">${esc(site?.state_license || l.waste_site_license || '—')}</div></div>
+    </div>
+  </div>
+
+  ${l.notes ? `<div class="section"><div class="section-title">Notes</div><div>${esc(l.notes)}</div></div>` : ''}
+
+
+  <div class="footer">
+    Printed ${new Date().toLocaleString()} &bull; ${esc(company)} &bull; Record #${esc(recordNum)}
+  </div>
+
+</body>
+</html>`;
+
+  const filename = `Disposal_Record_${recordNum}_${l.disposal_date || 'undated'}.pdf`;
+  const result = await window.api.generatePdf(html, filename);
+  if (result?.success) {
+    showToast('PDF saved.', 'success');
+    window.api.openFile(result.path);
+  }
 }
 
 // ===== DEP REPORTS =====
@@ -7627,8 +8749,8 @@ async function loadServiceDueNotices() {
               ${notices.map((n, idx) => {
                 const rowNum = startIdx + idx + 1;
                 const rowClass = n.is_overdue ? 'sdn-overdue-row' : (n.days_until_due !== null && n.days_until_due <= 30 && n.days_until_due >= 0 && n.status === 'pending') ? 'sdn-due-soon-row' : '';
-                const statusColors = { pending: '#ff9800', sent: '#2196f3', overdue: '#f44336', completed: '#4caf50', dismissed: '#9e9e9e' };
-                const statusColor = n.is_overdue ? '#f44336' : n.status === 'pending' ? (n.email_enabled !== false ? '#388e3c' : '#9e9e9e') : (statusColors[n.status] || '#999');
+                const statusColors = { pending: '#ff9800', sent: '#2196f3', overdue: '#f44336', completed: '#4caf50', dismissed: '#9e9e9e', confirmed: '#43a047' };
+                const statusColor = n.status === 'confirmed' ? '#43a047' : n.is_overdue ? '#f44336' : n.status === 'pending' ? (n.email_enabled !== false ? '#388e3c' : '#9e9e9e') : (statusColors[n.status] || '#999');
                 const statusText = n.is_overdue ? 'OVERDUE' : n.status === 'pending' ? (n.email_enabled !== false ? 'Email ON' : 'Email OFF') : (n.status || '').toUpperCase();
                 const daysText = n.days_until_due !== null ? (n.days_until_due < 0 ? `${Math.abs(n.days_until_due)}d ago` : n.days_until_due === 0 ? 'Today' : `${n.days_until_due}d`) : '-';
                 const isSelected = selectedSdnIds.has(n.id);
@@ -8230,7 +9352,25 @@ async function loadSettings() {
   const { data: users } = await window.api.getUsers();
   const { data: categories } = await window.api.getServiceCategories();
   const { data: tankTypes } = await window.api.getTankTypes();
+  const { data: outsidePumpers } = await window.api.getOutsidePumpers();
   const s = settings || {};
+
+  // Show auto-start state + confirm server status after render
+  setTimeout(async () => {
+    const autoStartEl = document.getElementById('settingsAutoStart');
+    if (autoStartEl) {
+      const { enabled } = await window.api.getAutoStart();
+      autoStartEl.checked = !!enabled;
+    }
+    const statusEl = document.getElementById('confirmServerStatus');
+    if (!statusEl) return;
+    const srv = await window.api.getConfirmServerStatus();
+    if (srv.running) {
+      statusEl.innerHTML = `<span style="color:#388e3c;font-weight:600;">✓ Running on port ${srv.port}</span> — customers will see: <code>${srv.publicUrl || 'http://YOUR-PUBLIC-IP'}:${srv.port}/confirm?token=...</code>`;
+    } else {
+      statusEl.innerHTML = `<span style="color:#e53935;">✗ Not running</span>`;
+    }
+  }, 100);
 
   page.innerHTML = `
     <div class="card">
@@ -8269,6 +9409,14 @@ async function loadSettings() {
           <input type="text" id="settingsInvoicePrefix" value="${esc(s.invoice_prefix || 'INV')}">
         </div>
       </div>
+      <div class="form-group">
+        <label>Default PDF Save Folder</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="text" id="settingsPdfFolder" value="${esc(s.default_pdf_folder || '')}" placeholder="e.g. C:\\Users\\You\\Documents\\ISM PDFs" style="flex:1;">
+          <button class="btn btn-secondary" type="button" onclick="browsePdfFolder()" style="white-space:nowrap;">Browse...</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-light);margin-top:4px;">When exporting PDFs, the Save dialog will open here by default.</div>
+      </div>
     </div>
 
     <div class="card">
@@ -8293,6 +9441,37 @@ async function loadSettings() {
           <input type="password" id="settingsSmtpPass" value="${esc(s.smtp_pass || '')}">
         </div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>Startup & Background</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">
+        When enabled, the app launches automatically when Windows starts and stays running in the system tray when you close the window — keeping the confirmation server and email reminders active 24/7.
+      </p>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <input type="checkbox" id="settingsAutoStart" style="width:18px;height:18px;">
+        <span style="font-weight:600;">Launch at Windows startup &amp; run in system tray</span>
+      </label>
+      <p style="font-size:12px;color:var(--text-light);margin-top:6px;">To fully quit the app, right-click the tray icon in the taskbar and choose Quit.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>Customer Confirmation Server</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">
+        Enables a green <strong>"Confirm / I'll Schedule My Appointment"</strong> button in reminder emails. When a customer clicks it, the notice is marked confirmed and all further reminders stop automatically.<br>
+        <strong>Requires:</strong> port forwarding on your router (forward this port to this PC) so customers can reach it from the internet.
+      </p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Public URL / IP <span style="font-size:11px;color:var(--text-light);">(what customers see, e.g. http://yourip or http://yourdomain.com)</span></label>
+          <input type="text" id="settingsConfirmPublicUrl" value="${esc(s.confirm_public_url || '')}" placeholder="http://123.456.789.0">
+        </div>
+        <div class="form-group">
+          <label>Server Port <span style="font-size:11px;color:var(--text-light);">(default 3456)</span></label>
+          <input type="text" id="settingsConfirmPort" value="${esc(s.confirm_server_port || '3456')}" style="max-width:120px;">
+        </div>
+      </div>
+      <div id="confirmServerStatus" style="font-size:13px;margin-top:8px;color:var(--text-light);">Checking server status...</div>
     </div>
 
     <button class="btn btn-primary btn-lg" onclick="saveSettingsForm()">Save Settings</button>
@@ -8354,11 +9533,17 @@ async function loadSettings() {
       </div>
       ${users.length === 0 ? '<p style="color:var(--text-light);">No users added yet.</p>' : `
         <table class="data-table">
-          <thead><tr><th>Name</th><th>Username</th><th>Phone</th><th>Role</th><th></th></tr></thead>
+          <thead><tr><th>Color</th><th>Name</th><th>Username</th><th>Phone</th><th>Role</th><th></th></tr></thead>
           <tbody>
             ${users.map(u => `
               <tr>
-                <td>${esc(u.name)}</td>
+                <td style="width:48px;text-align:center;">
+                  <input type="color" value="${u.color || '#1565c0'}"
+                    title="Click to change color"
+                    style="width:32px;height:32px;border:none;border-radius:50%;cursor:pointer;padding:0;background:none;"
+                    onchange="saveUserColor('${u.id}', this.value)">
+                </td>
+                <td><strong style="color:${u.color || '#1565c0'};">${esc(u.name)}</strong></td>
                 <td>${esc(u.username || '(no login)')}</td>
                 <td>${esc(u.phone || '')}</td>
                 <td><span class="badge ${u.role === 'admin' ? 'badge-paid' : 'badge-info'}">${esc(u.role || 'tech')}</span></td>
@@ -8423,6 +9608,47 @@ async function loadSettings() {
           `).join('')}
         </tbody>
       </table>
+    </div>
+
+    <div class="card mt-24">
+      <div class="card-header">
+        <h3>&#128666; Outside Pumpers</h3>
+        <button class="btn btn-primary btn-sm" onclick="openOutsidePumperModal()">+ Add Pumper</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;">Save hauler companies and drivers that dump waste at your facility. Select them when logging a disposal instead of typing their info each time.</p>
+      ${(outsidePumpers || []).length === 0
+        ? '<p style="color:var(--text-light);font-size:13px;padding:8px 0;">No outside pumpers added yet.</p>'
+        : `<table class="data-table" style="font-size:13px;">
+          <thead>
+            <tr>
+              <th>Name / Company</th>
+              <th>Hauler ID</th>
+              <th>Phone</th>
+              <th>Email</th>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(outsidePumpers || []).map(p => `
+              <tr>
+                <td>
+                  <strong>${esc(p.name || '')}</strong>
+                  ${p.company ? `<div style="font-size:11px;color:var(--text-light);">${esc(p.company)}</div>` : ''}
+                </td>
+                <td>${esc(p.hauler_id || '—')}</td>
+                <td>${esc(p.phone || '—')}</td>
+                <td style="font-size:12px;">${esc(p.email || '—')}</td>
+                <td style="font-size:12px;color:var(--text-light);">${esc(p.notes || '')}</td>
+                <td style="text-align:right;">
+                  <button class="btn btn-sm btn-secondary" onclick="openOutsidePumperModal(${JSON.stringify(p).replace(/"/g, '&quot;')})">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="deleteOutsidePumper('${p.id}')">Remove</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`
+      }
     </div>
 
     <div class="card mt-24" style="border-left:4px solid #7c4dff;">
@@ -8506,6 +9732,81 @@ async function deleteTankType(id) {
   loadSettings();
 }
 
+// ===== OUTSIDE PUMPERS =====
+
+function openOutsidePumperModal(p) {
+  p = p || {};
+  const isEdit = !!p.id;
+  openModal(isEdit ? 'Edit Outside Pumper' : 'Add Outside Pumper', `
+    <input type="hidden" id="opId" value="${p.id || ''}">
+    <div class="form-row">
+      <div class="form-group" style="flex:2;">
+        <label>Name / Driver Name *</label>
+        <input type="text" id="opName" value="${esc(p.name || '')}" placeholder="e.g. John Smith or Smith Septic">
+      </div>
+      <div class="form-group" style="flex:2;">
+        <label>Company Name</label>
+        <input type="text" id="opCompany" value="${esc(p.company || '')}" placeholder="e.g. Smith Septic Services LLC">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>DEP Hauler ID</label>
+        <input type="text" id="opHaulerId" value="${esc(p.hauler_id || '')}" placeholder="e.g. ME-WH-12345">
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" id="opPhone" value="${esc(p.phone || '')}" placeholder="(207) 555-0100">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="opEmail" value="${esc(p.email || '')}" placeholder="contact@example.com">
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="opNotes" placeholder="Any additional notes about this hauler...">${esc(p.notes || '')}</textarea>
+    </div>
+  `, `
+    ${isEdit ? `<button class="btn btn-danger" onclick="deleteOutsidePumper('${p.id}', true)">Delete</button>` : ''}
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveOutsidePumperForm()">Save</button>
+  `);
+}
+
+async function saveOutsidePumperForm() {
+  const name = document.getElementById('opName').value.trim();
+  if (!name) { showToast('Name is required.', 'error'); return; }
+  const data = {
+    id: document.getElementById('opId').value || undefined,
+    name,
+    company: document.getElementById('opCompany').value.trim(),
+    hauler_id: document.getElementById('opHaulerId').value.trim(),
+    phone: document.getElementById('opPhone').value.trim(),
+    email: document.getElementById('opEmail').value.trim(),
+    notes: document.getElementById('opNotes').value.trim(),
+  };
+  await window.api.saveOutsidePumper(data);
+  closeModal();
+  showToast('Outside pumper saved.', 'success');
+  loadSettings();
+}
+
+async function deleteOutsidePumper(id, fromModal = false) {
+  if (!confirm('Remove this outside pumper?')) return;
+  await window.api.deleteOutsidePumper(id);
+  if (fromModal) closeModal();
+  showToast('Outside pumper removed.', 'success');
+  loadSettings();
+}
+
+async function browsePdfFolder() {
+  const result = await window.api.selectFolder();
+  if (!result.canceled && result.folderPath) {
+    document.getElementById('settingsPdfFolder').value = result.folderPath;
+  }
+}
+
 async function saveSettingsForm() {
   const data = {
     company_name: document.getElementById('settingsCompanyName').value.trim(),
@@ -8515,16 +9816,33 @@ async function saveSettingsForm() {
     dep_email: document.getElementById('settingsDepEmail').value.trim(),
     default_tax_rate: parseFloat(document.getElementById('settingsTaxRate').value) || 0,
     invoice_prefix: document.getElementById('settingsInvoicePrefix').value.trim() || 'INV',
+    default_pdf_folder: document.getElementById('settingsPdfFolder').value.trim(),
     smtp_host: document.getElementById('settingsSmtpHost').value.trim(),
     smtp_port: document.getElementById('settingsSmtpPort').value.trim(),
     smtp_user: document.getElementById('settingsSmtpUser').value.trim(),
     smtp_pass: document.getElementById('settingsSmtpPass').value.trim(),
+    confirm_public_url: document.getElementById('settingsConfirmPublicUrl').value.trim(),
+    confirm_server_port: document.getElementById('settingsConfirmPort').value.trim() || '3456',
   };
 
   const result = await window.api.saveSettings(data);
   if (result.success) {
+    // Apply auto-start setting
+    const autoStart = document.getElementById('settingsAutoStart')?.checked || false;
+    await window.api.setAutoStart(autoStart);
+
+    // Restart confirm server in case port/url changed
+    const serverResult = await window.api.restartConfirmServer();
+    const statusEl = document.getElementById('confirmServerStatus');
+    if (statusEl) statusEl.innerHTML = `<span style="color:#388e3c;font-weight:600;">✓ Confirmation server running on port ${serverResult.port}</span>`;
+
     showToast('Settings saved.', 'success');
   }
+}
+
+async function saveUserColor(userId, color) {
+  await window.api.saveUser({ id: userId, color });
+  loadSettings();
 }
 
 function openUserModal(user = null) {
@@ -8903,7 +10221,7 @@ async function deleteServiceProduct(id) {
 function esc(str) {
   const div = document.createElement('div');
   div.textContent = str;
-  return div.innerHTML;
+  return div.innerHTML.replace(/"/g, '&quot;');
 }
 
 function formatDate(d) {
