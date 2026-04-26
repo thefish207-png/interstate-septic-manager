@@ -208,6 +208,78 @@ const _CLOUD_TABLES = new Set([
   'service_due_notices', 'users'
 ]);
 
+// Promoted columns: top-level columns defined in our SQL migrations.
+// Anything NOT in this list for a given table goes into the table's
+// `data` jsonb catch-all column, so the renderer can write whatever
+// fields it wants without breaking the upsert.
+const _PROMOTED_COLS = {
+  jobs: new Set(['id','scheduled_date','customer_id','property_id','tank_id','vehicle_id',
+                 'assigned_user_id','assigned_to','scheduled_time','service_type','notes',
+                 'status','line_items','gallons_pumped','completed_at','deleted_at',
+                 'customer_confirmed_at','priority','arrival_window','invoice_id',
+                 'created_at','updated_at','data']),
+  schedule_items: new Set(['id','scheduled_date','customer_id','property_id','tank_id','vehicle_id',
+                           'assigned_user_id','service_type','notes','status','sort_order',
+                           'estimated_gallons','invoice_id','completed_at','completed_by',
+                           'item_type','assigned_to','manifest_number','waste_site','gallons',
+                           'tank_type','time_label','deleted_at','created_at','updated_at','data']),
+  customers: new Set(['id','name','company','phone','phone_home','phone_work','email','address',
+                      'city','state','zip','notes','imported_from','created_at','updated_at']),
+  properties: new Set(['id','customer_id','address','city','state','zip','county','company',
+                       'notes','imported_from','created_at','updated_at']),
+  tanks: new Set(['id','property_id','tank_type','volume_gallons','imported_from','created_at','updated_at']),
+  tank_types: new Set(['id','name','waste_code','disposal_label','pumping_price','disposal_price',
+                       'generates_disposal','sort_order','created_at','updated_at']),
+  vehicles: new Set(['id','name','capacity_gallons','color','default_tech_id','plate','vin',
+                     'waste_hauler_id','date_in_service','sort_order','created_at','updated_at']),
+  truck_day_assignments: new Set(['id','vehicle_id','user_id','date','created_at','updated_at']),
+  invoices: new Set(['id','invoice_number','customer_id','customer_name','billing_company','billing_city',
+                     'property_id','property_company','property_address','property_city','svc_date',
+                     'total','amount_paid','status','payment_status','payment_method','payment_due_date',
+                     'products_services','product_sales','quantity','unit_cost','technician','tech_notes',
+                     'job_notes','job_codes','gallons_pumped_total','truck','tank_type','tank_size',
+                     'waste_manifest','waste_site','disposal_date','check_numbers','complete','waiting_area',
+                     'cancelled','imported_from','job_id','driver_id','vehicle_id','gallons_pumped',
+                     'line_items','subtotal','tax_rate','tax_amount','notes','deleted_at',
+                     'created_at','updated_at']),
+  payments: new Set(['id','customer_id','invoice_id','date','amount','method','reference','notes',
+                     'created_at','updated_at']),
+  disposal_loads: new Set(['id','date','vehicle_id','user_id','waste_site','manifest_number','gallons',
+                           'notes','tank_type','outside_pumper_id','created_at','updated_at','data']),
+  day_notes: new Set(['id','date','note','created_at','updated_at']),
+  reminders: new Set(['id','customer_id','property_id','due_date','message','resolved','assigned_users',
+                      'status','priority','created_at','updated_at','data']),
+  service_due_notices: new Set(['id','customer_id','property_id','tank_id','due_date','status',
+                                'created_at','updated_at','data']),
+  users: new Set(['id','auth_user_id','name','username','phone','role','color','password_hash','email',
+                  'deleted_at','created_at','updated_at'])
+};
+
+function _splitForCloud(collection, item) {
+  const promoted = _PROMOTED_COLS[collection];
+  if (!promoted) return { ...item }; // no schema defined — pass through
+  const top = {};
+  const extras = {};
+  for (const [k, v] of Object.entries(item)) {
+    if (promoted.has(k)) top[k] = v;
+    else extras[k] = v;
+  }
+  if (Object.keys(extras).length) {
+    // Merge extras into existing data jsonb (preserves any existing keys)
+    top.data = { ...(item.data || {}), ...extras };
+  }
+  return top;
+}
+
+// Reverse: take a cloud row and merge data jsonb back into top-level
+function _unpackFromCloud(row) {
+  if (row && row.data && typeof row.data === 'object' && !Array.isArray(row.data)) {
+    const { data, ...rest } = row;
+    return { ...data, ...rest, data };
+  }
+  return row;
+}
+
 function _isCloudTable(collection) {
   return _CLOUD_TABLES.has(collection);
 }
@@ -280,30 +352,21 @@ async function upsertAsync(collection, item) {
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
-      let attempt = { ...row };
-      let { data, error } = await sb.from(collection).upsert(attempt).select().single();
-
-      // If schema rejects unknown columns, strip them into `data` jsonb and retry
-      if (error && /column .* of relation .* does not exist|Could not find the .* column/i.test(error.message)) {
-        const m = error.message.match(/'([^']+)' column/) || error.message.match(/column "?([^"\s]+)"?/);
-        const badCol = m ? m[1] : null;
-        if (badCol && badCol !== 'data') {
-          console.warn('[CLOUD] upsertAsync', collection, '— stripping unknown column:', badCol);
-          attempt.data = { ...(attempt.data || {}), [badCol]: attempt[badCol] };
-          delete attempt[badCol];
-          ({ data, error } = await sb.from(collection).upsert(attempt).select().single());
-        }
-      }
+      // Split into known columns + data jsonb catch-all so unknown fields
+      // (job_type, tech_notes, helpers, etc.) don't break the upsert
+      const cloudPayload = _splitForCloud(collection, row);
+      const { data, error } = await sb.from(collection).upsert(cloudPayload).select().single();
 
       if (error) {
         console.warn('[CLOUD] upsertAsync', collection, 'failed (cache kept):', error.message);
         return items.find(i => i.id === row.id) || row;
       }
-      // Cloud succeeded — replace cache row with authoritative cloud version (gets server defaults)
-      const idx2 = items.findIndex(i => i.id === data.id);
-      if (idx2 >= 0) items[idx2] = data; else items.push(data);
+      // Cloud succeeded — merge authoritative cloud row (with data unpacked) back into cache
+      const merged = { ...row, ..._unpackFromCloud(data) };
+      const idx2 = items.findIndex(i => i.id === merged.id);
+      if (idx2 >= 0) items[idx2] = merged; else items.push(merged);
       _store[collection] = items;
-      return data;
+      return merged;
     } catch (e) {
       console.warn('[CLOUD] upsertAsync', collection, 'exception (cache kept):', e.message);
       return items.find(i => i.id === row.id) || row;
@@ -367,7 +430,8 @@ async function _cloudHydrateStore() {
   for (const collection of _CLOUD_TABLES) {
     try {
       const data = await _cloudReadAll(sb, collection);
-      _store[collection] = data;
+      // Unpack data jsonb back into top-level fields so renderer sees full row
+      _store[collection] = data.map(_unpackFromCloud);
       console.log('[CLOUD]   ✓', collection.padEnd(24), data.length);
     } catch (e) {
       console.warn('[CLOUD]   ✗', collection, e.message);
@@ -444,13 +508,13 @@ function _cloudSubscribeRealtime() {
       const tbl = change.table;
       if (!_RT_TABLES.includes(tbl)) return;
 
-      // Update local cache
+      // Update local cache (unpack data jsonb back into top-level)
       const items = readCollection(tbl);
       if (change.type === 'INSERT' || change.type === 'UPDATE') {
-        const newRow = change.record;
+        const newRow = _unpackFromCloud(change.record);
         if (newRow && newRow.id) {
           const idx = items.findIndex(i => i.id === newRow.id);
-          if (idx >= 0) items[idx] = newRow; else items.push(newRow);
+          if (idx >= 0) items[idx] = { ...items[idx], ...newRow }; else items.push(newRow);
           _store[tbl] = items;
         }
       } else if (change.type === 'DELETE') {
