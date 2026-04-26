@@ -1,6 +1,6 @@
 {
   "name": "interstate-septic-manager",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "All-in-one business management for septic & sewer companies",
   "author": {
     "name": "Interstate Septic",
@@ -25,6 +25,7 @@
       "main.js",
       "preload.js",
       "supabase.js",
+      "seed_data_embedded.js",
       "src/**/*",
       "assets/**/*",
       "node_modules/**/*"
