@@ -1,13 +1,13 @@
 # Morning Notes — What I Did Overnight
 
-**TL;DR:** Audited the entire app, shipped 7 releases (v0.2.5 → v0.2.11), fixed ~30 real bugs, added route-sheet PDF + tablet drag support + cloud status indicator, drafted the phone-app architecture plan. Read this file first, then check `OVERNIGHT_AUDIT.md` for the full bug list and `PWA_PLAN.md` for the phone-app design.
+**TL;DR:** Audited the entire app (5 separate audit reports), shipped 8 releases (v0.2.5 → v0.2.12), fixed ~35 real bugs, added route-sheet PDF + tablet drag support + cloud status indicator, **shipped the Phase 1 PWA for field techs** (`field-pwa/index.html`), drafted the full phone-app architecture plan. Read this file first, then check `OVERNIGHT_AUDIT.md` for the full bug list, `PWA_PLAN.md` for phases 2-3 of the phone app, and `IMPROVEMENTS.md` for UX/aesthetic ideas.
 
 ---
 
-## What's now in production (v0.2.11)
+## What's now in production (v0.2.12)
 
 If your installed ISM hasn't auto-updated yet, force it:
-- Look for the bottom-right banner ("Update v0.2.11 ready") → click it
+- Look for the bottom-right banner ("Update v0.2.12 ready") → click it
 - Or: close ISM, reopen — auto-updater fires within 30s of launch
 - Or: download manually: https://github.com/thefish207-png/interstate-septic-manager/releases/latest
 
@@ -45,9 +45,13 @@ If your installed ISM hasn't auto-updated yet, force it:
 - **Schedule: "Print Routes" button** — generates a PDF with one route sheet per truck for the day (driver, customer, address, phone, tank info, services, signature line). Drivers can take this to the truck for offline backup.
 - **Tablet support: schedule drag now works on touchscreens** (touchstart→mousedown shim — was mouse-only before)
 - Customers list: column sort (Name/Address/Email/Phone/Balance), CSV export, context-aware empty state with CTA
+- **Jobs list: column sort** (Date/Customer/Address/Service/Status/Tech all click-to-sort with arrow indicator)
 - Reports: Export CSV (was a stub "coming soon!" toast)
 - Dashboard: Today's Jobs and Reminders tables fixed (were rendering "undefined" cells)
 - Find-in-page no longer crashes when popup windows open
+
+**Data integrity polish:**
+- save-job: when an invoice is finalized, only operational fields sync — money fields are frozen so AR doesn't silently shift. User gets a toast warning so they know.
 
 ---
 
