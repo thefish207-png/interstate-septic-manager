@@ -4171,30 +4171,41 @@ ipcMain.handle('cloud-login', async (e, username, password) => {
     profile = r.data; profileErr = r.error;
   } catch (e) { profileErr = e; }
   if (!profile) {
-    // Auth row exists but no users row references it yet — find by username and link it.
+    // Auth row exists but no users row references it yet. RLS hides every row from an
+    // unlinked auth user, so a plain SELECT by username returns nothing. Use the
+    // self_link_by_username RPC (SECURITY DEFINER) to bypass RLS for this one path:
+    // it verifies the email prefix matches, finds the row, links auth_user_id, returns the profile.
     try {
-      const r2 = await sb.from('users').select('id, name, role, username, color, phone, auth_user_id').eq('username', u).maybeSingle();
-      if (r2.data) {
-        profile = r2.data;
-        if (!profile.auth_user_id) {
-          // Auto-link: stamp the missing auth_user_id so future logins succeed via the fast path.
-          try {
-            await sb.from('users').update({ auth_user_id: data.user.id }).eq('id', profile.id);
-            profile.auth_user_id = data.user.id;
-            console.log('[CLOUD] auto-linked users.auth_user_id for', u);
-          } catch (linkErr) {
-            console.warn('[CLOUD] could not auto-link auth_user_id:', linkErr.message);
-          }
-        }
+      const { data: rpcData, error: rpcErr } = await sb.rpc('self_link_by_username', { p_username: u });
+      if (rpcErr) {
+        console.warn('[CLOUD] self_link_by_username RPC error:', rpcErr.message);
+      } else if (Array.isArray(rpcData) && rpcData.length) {
+        profile = rpcData[0];
+        console.log('[CLOUD] self-linked users row for', u, 'via RPC');
+      } else if (rpcData && rpcData.id) {
+        profile = rpcData;
       }
     } catch (e) {
-      console.warn('[CLOUD] username fallback lookup failed:', e.message);
+      console.warn('[CLOUD] self_link_by_username RPC threw:', e.message);
     }
+  }
+  if (!profile) {
+    // Try a plain username lookup as last resort (only succeeds if RLS is permissive
+    // or the user is already office/owner via another auth path).
+    try {
+      const r3 = await sb.from('users').select('id, name, role, username, color, phone, auth_user_id').eq('username', u).maybeSingle();
+      if (r3.data) {
+        profile = r3.data;
+        if (!profile.auth_user_id) {
+          try { await sb.from('users').update({ auth_user_id: data.user.id }).eq('id', profile.id); profile.auth_user_id = data.user.id; } catch {}
+        }
+      }
+    } catch (e) { /* ignored */ }
   }
   if (!profile) {
     return {
       success: false,
-      error: 'Sign-in succeeded but no user profile is linked to this account. Ask the owner to re-create or re-link this user in Settings → Cloud Users.'
+      error: 'Sign-in succeeded but no user profile is linked yet. The owner must run migration 0005_self_link_rpc.sql in Supabase, then try again.'
     };
   }
   _currentAppUserId = profile.id;
@@ -4228,18 +4239,15 @@ ipcMain.handle('cloud-restore-session', async () => {
     profile = r.data;
   } catch (e) { /* ignored — fall through to username path */ }
   if (!profile) {
+    // Same RPC fallback as cloud-login (see comment there).
     try {
       const emailUsername = (session.user.email || '').split('@')[0];
       if (emailUsername) {
-        const r2 = await sb.from('users').select('id, name, role, username, color, phone, auth_user_id').eq('username', emailUsername).maybeSingle();
-        if (r2.data) {
-          profile = r2.data;
-          if (!profile.auth_user_id) {
-            try { await sb.from('users').update({ auth_user_id: session.user.id }).eq('id', profile.id); profile.auth_user_id = session.user.id; } catch {}
-          }
-        }
+        const { data: rpcData } = await sb.rpc('self_link_by_username', { p_username: emailUsername });
+        if (Array.isArray(rpcData) && rpcData.length) profile = rpcData[0];
+        else if (rpcData && rpcData.id) profile = rpcData;
       }
-    } catch (e) { /* ignored */ }
+    } catch (e) { /* ignored — fall through */ }
   }
   if (!profile) {
     _clearSbSession();
