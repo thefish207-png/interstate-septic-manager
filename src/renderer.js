@@ -411,6 +411,20 @@ async function doLogin() {
 function enterApp() {
   showScreen('app');
 
+  // Cloud sync warnings — show toast when an optimistic write doesn't reach cloud
+  if (window.api?.onCloudWarning && !window._cloudWarningAttached) {
+    window._cloudWarningAttached = true;
+    let _lastCloudWarn = 0;
+    window.api.onCloudWarning((p) => {
+      const now = Date.now();
+      if (now - _lastCloudWarn < 3000) return; // throttle: at most one toast per 3s
+      _lastCloudWarn = now;
+      try {
+        showToast('⚠ Cloud ' + (p.opType || 'sync') + ' failed for ' + (p.collection || '') + ': ' + (p.message || 'unknown error') + '. Saved locally — will retry on next launch.', 'error', 8000);
+      } catch {}
+    });
+  }
+
   // Wire up auto-update notifications (idempotent — only attaches once)
   if (window.api?.onUpdateAvailable && !window._updateListenersAttached) {
     window._updateListenersAttached = true;
@@ -625,13 +639,34 @@ async function doLogout() {
   showScreen('login');
 }
 
-// Enter key handlers for login/setup
+// Global keyboard handlers
 document.addEventListener('keydown', (e) => {
+  // Login/setup screens
   if (e.key === 'Enter') {
     if (document.getElementById('loginScreen').style.display === 'flex') {
       doLogin();
+      return;
     } else if (document.getElementById('setupScreen').style.display === 'flex') {
       doSetup();
+      return;
+    }
+  }
+
+  // Modal Escape closes; Ctrl+Enter clicks the primary button
+  const modalOpen = document.getElementById('modalOverlay')?.classList.contains('active');
+  if (modalOpen) {
+    if (e.key === 'Escape') {
+      closeModal();
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      // Ctrl+Enter triggers the primary button in the modal footer
+      const primary = document.querySelector('#modalFooter .btn-primary');
+      if (primary) {
+        primary.click();
+        e.preventDefault();
+      }
     }
   }
 });
@@ -985,7 +1020,7 @@ function updatePageActions(page) {
     disposal: '<button class="btn btn-secondary" onclick="exportDisposalPdf()" style="margin-right:6px;">&#128196; Export PDF</button><button class="btn btn-primary" onclick="openDisposalModal()">+ Log Disposal</button>',
     dep: isAdmin() ? '<button class="btn btn-primary" onclick="openDepReportModal()">+ Generate Report</button>' : '',
     reminders: isAdmin() ? '<button class="btn btn-primary" onclick="openReminderModal()">+ New Reminder</button>' : '',
-    reports: '<button class="btn btn-secondary" onclick="exportReportPdf()">&#128196; Export PDF</button>',
+    reports: '<button class="btn btn-secondary" onclick="exportReportPdf()">&#128196; Export CSV</button>',
     sdn: '<button class="btn btn-primary" onclick="openServiceDueNoticeModal()">+ New Service Due Notice</button>',
   };
   container.innerHTML = actions[page] || '';
@@ -1173,20 +1208,23 @@ async function loadDashboard() {
       <table class="data-table">
         <thead><tr><th>Time</th><th>Customer</th><th>Type</th><th>Tech</th><th>Status</th></tr></thead>
         <tbody>
-          ${jobs.map(j => `
+          ${jobs.map(j => {
+            const lineDesc = (j.line_items && j.line_items[0] && j.line_items[0].description) || j.service_type || j.job_codes || '—';
+            return `
             <tr onclick="navigateTo('schedule')">
-              <td>${j.scheduled_time || 'TBD'}</td>
-              <td>${j.customers?.name || 'N/A'}</td>
-              <td>${j.job_type}</td>
-              <td>${j.users?.name || 'Unassigned'}</td>
-              <td><span class="badge badge-${j.status.replace('_','-')}">${formatStatus(j.status)}</span></td>
-            </tr>
-          `).join('')}
+              <td>${esc(j.scheduled_time || 'TBD')}</td>
+              <td>${esc(j.customers?.name || 'N/A')}</td>
+              <td>${esc(lineDesc)}</td>
+              <td>${esc(j.users?.name || 'Unassigned')}</td>
+              <td><span class="badge badge-${(j.status || 'scheduled').replace('_','-')}">${formatStatus(j.status || 'scheduled')}</span></td>
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>`;
   } else {
     document.getElementById('dashboardJobs').innerHTML = `
-      <div class="empty-state"><div class="empty-icon">&#128197;</div><p>No jobs scheduled for today</p></div>`;
+      <div class="empty-state"><div class="empty-icon">&#128197;</div><p>No jobs scheduled for today</p>
+        <button class="btn btn-primary mt-12" onclick="openJobModal()">+ Add a Job</button></div>`;
   }
 
   const { data: unpaid } = await window.api.getInvoices({ status: 'sent' });
@@ -1200,13 +1238,13 @@ async function loadDashboard() {
     const upcoming = reminders.slice(0, 5);
     document.getElementById('dashboardReminders').innerHTML = `
       <table class="data-table">
-        <thead><tr><th>Due</th><th>Customer</th><th>Type</th></tr></thead>
+        <thead><tr><th>Due</th><th>Message</th><th>Assigned</th></tr></thead>
         <tbody>
           ${upcoming.map(r => `
             <tr onclick="navigateTo('reminders')">
-              <td>${r.due_date}</td>
-              <td>${r.customers?.name || 'N/A'}</td>
-              <td>${formatStatus(r.type)}</td>
+              <td>${esc(r.due_date || '')}</td>
+              <td>${esc((r.message || '').slice(0, 80))}${(r.message || '').length > 80 ? '…' : ''}</td>
+              <td>${esc((r.assigned_user_names || []).map(u => u.name).join(', ') || '—')}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -14531,7 +14569,85 @@ function swapCompareRanges() {
 }
 
 async function exportReportPdf() {
-  showToast('PDF export coming soon!', 'info');
+  // Export the current report tab data as a CSV.
+  // PDF export is replaced with CSV — far more useful for accountants/spreadsheet workflows.
+  try {
+    const tab = reportTab || 'revenue';
+    const dateFrom = reportDateFrom || '';
+    const dateTo = reportDateTo || '';
+
+    const { data: invoices } = await window.api.getInvoices({
+      dateFrom, dateTo, cancelled: 'exclude'
+    });
+    if (!invoices || !invoices.length) {
+      showToast('No data in selected date range to export.', 'info');
+      return;
+    }
+
+    let rows = [];
+    let filename = `report-${tab}-${dateFrom}-to-${dateTo}.csv`;
+
+    if (tab === 'revenue' || tab === 'city') {
+      rows.push(['Date', 'Invoice #', 'Customer', 'Property Address', 'City', 'Total', 'Amount Paid', 'Status', 'Tech', 'Truck', 'Service']);
+      for (const inv of invoices) {
+        rows.push([
+          inv.svc_date || '',
+          inv.invoice_number || '',
+          inv.customer_name || inv.customers?.name || '',
+          inv.property_address || '',
+          inv.property_city || '',
+          (inv.total || 0).toFixed(2),
+          (inv.amount_paid || 0).toFixed(2),
+          inv.payment_status || inv.status || '',
+          inv.technician || inv.driver?.name || '',
+          inv.truck || inv.vehicle?.name || '',
+          inv.products_services || inv.job_codes || ''
+        ]);
+      }
+    } else if (tab === 'ar') {
+      // AR aging
+      const { data: ar } = await window.api.getArReport();
+      rows.push(['Customer', 'Phone', 'Email', 'Current', '30 days', '60 days', '90+ days', 'Total Outstanding', 'Oldest Invoice']);
+      for (const r of (ar?.rows || [])) {
+        rows.push([r.name, r.phone || '', r.email || '', (r.current||0).toFixed(2), (r.d30||0).toFixed(2), (r.d60||0).toFixed(2), (r.d90||0).toFixed(2), (r.total||0).toFixed(2), r.oldest || '']);
+      }
+      filename = `ar-aging-${new Date().toISOString().split('T')[0]}.csv`;
+    } else if (tab === 'pl') {
+      const { data: snaps } = await window.api.getExpenseSnapshots();
+      rows.push(['Period', 'Type', 'Period Start', 'Period End', 'Total Income', 'Total Expenses', 'Net Income']);
+      for (const s of (snaps || []).filter(x => !x.deleted_at)) {
+        rows.push([s.period_label || '', s.period_type || '', s.period_start || '', s.period_end || '', (s.total_income || 0).toFixed(2), (s.total_expenses || 0).toFixed(2), (s.net_income || 0).toFixed(2)]);
+      }
+      filename = `pl-snapshots-${new Date().toISOString().split('T')[0]}.csv`;
+    } else {
+      showToast('Export not available for this tab yet.', 'info');
+      return;
+    }
+
+    // Convert to CSV (escape commas/quotes/newlines)
+    const csv = rows.map(row => row.map(cell => {
+      const s = String(cell ?? '');
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }).join(',')).join('\r\n');
+
+    // Trigger download via Blob
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showToast(`Exported ${rows.length - 1} rows to ${filename}`, 'success');
+  } catch (e) {
+    showToast('Export failed: ' + e.message, 'error');
+  }
 }
 
 async function generateStatement(sendEmail = false) {

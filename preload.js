@@ -168,6 +168,9 @@ contextBridge.exposeInMainWorld('api', {
   onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_e, p) => cb(p)),
   onUpdateReady: (cb) => ipcRenderer.on('update-ready', (_e, p) => cb(p)),
 
+  // Cloud sync warnings (when an optimistic write doesn't reach the cloud)
+  onCloudWarning: (cb) => ipcRenderer.on('cloud-warning', (_e, p) => cb(p)),
+
   // Cloud (Supabase) Users
   cloudConfigStatus: () => ipcRenderer.invoke('cloud-config-status'),
   cloudLogin: (username, password) => ipcRenderer.invoke('cloud-login', username, password),

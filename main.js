@@ -176,6 +176,17 @@ function broadcastDataChange(collection) {
   });
 }
 
+// Broadcast a cloud sync warning to all renderers so the user sees a toast.
+// Used when an optimistic write succeeds locally but cloud upsert/delete fails.
+function broadcastCloudWarning(opType, collection, message) {
+  const wins = BrowserWindow.getAllWindows();
+  wins.forEach(w => {
+    if (!w.isDestroyed()) {
+      try { w.webContents.send('cloud-warning', { opType, collection, message }); } catch {}
+    }
+  });
+}
+
 function upsert(collection, item) {
   const items = readCollection(collection);
   if (item.id) {
@@ -386,6 +397,7 @@ async function upsertAsync(collection, item) {
 
       if (error) {
         console.warn('[CLOUD] upsertAsync', collection, 'failed (cache kept):', error.message);
+        broadcastCloudWarning('save', collection, error.message);
         return items.find(i => i.id === row.id) || row;
       }
       // Cloud succeeded — merge authoritative cloud row (with data unpacked) back into cache
@@ -396,6 +408,7 @@ async function upsertAsync(collection, item) {
       return merged;
     } catch (e) {
       console.warn('[CLOUD] upsertAsync', collection, 'exception (cache kept):', e.message);
+      broadcastCloudWarning('save', collection, e.message);
       return items.find(i => i.id === row.id) || row;
     }
   }
@@ -423,9 +436,13 @@ async function removeAsync(collection, id) {
         15000,
         'cloud delete ' + collection
       );
-      if (error) console.warn('[CLOUD] removeAsync', collection, 'failed (cache already removed):', error.message);
+      if (error) {
+        console.warn('[CLOUD] removeAsync', collection, 'failed (cache already removed):', error.message);
+        broadcastCloudWarning('delete', collection, error.message);
+      }
     } catch (e) {
       console.warn('[CLOUD] removeAsync', collection, 'exception:', e.message);
+      broadcastCloudWarning('delete', collection, e.message);
     }
     return true;
   }
@@ -821,15 +838,9 @@ function createWindow() {
     notifyZoom();
   });
 
-  // Built-in find-in-page: the renderer calls window.api.findInPage(text, forward)
-  // and window.api.stopFindInPage() to dismiss.
-  ipcMain.handle('find-in-page', (_e, { text, forward = true, findNext = false }) => {
-    if (!text) return;
-    mainWindow.webContents.findInPage(text, { forward, findNext, matchCase: false });
-  });
-  ipcMain.handle('stop-find-in-page', () => {
-    mainWindow.webContents.stopFindInPage('clearSelection');
-  });
+  // Per-window: hook found-in-page to send result back to that window.
+  // (The find/stop handlers themselves are registered ONCE at module scope below
+  // to avoid 'second handler' crashes when createWindow runs twice.)
   mainWindow.webContents.on('found-in-page', (_e, result) => {
     mainWindow.webContents.send('find-in-page-result', {
       matches: result.matches,
@@ -845,6 +856,23 @@ function createWindow() {
     }
   });
 }
+
+// Find-in-page IPC handlers — registered once at module scope (not per-window)
+// so re-creating windows doesn't throw 'second handler' errors.
+ipcMain.handle('find-in-page', (e, { text, forward = true, findNext = false }) => {
+  if (!text) return;
+  // Apply to whichever BrowserWindow is sending the request
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow;
+  if (win && !win.isDestroyed()) {
+    win.webContents.findInPage(text, { forward, findNext, matchCase: false });
+  }
+});
+ipcMain.handle('stop-find-in-page', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow;
+  if (win && !win.isDestroyed()) {
+    win.webContents.stopFindInPage('clearSelection');
+  }
+});
 
 app.whenReady().then(() => {
   createWindow();
@@ -1106,7 +1134,28 @@ ipcMain.handle('get-customer', async (e, id) => {
 });
 
 ipcMain.handle('save-customer', async (e, data) => {
+  // Detect rename / company change so we can propagate to denormalized invoice fields
+  let prevName = null, prevCompany = null;
+  if (data.id) {
+    const prev = await findByIdAsync('customers', data.id);
+    if (prev) { prevName = prev.name; prevCompany = prev.company; }
+  }
   const saved = await upsertAsync('customers', data);
+
+  // If name or company changed, update the cached billing_company snapshot
+  // on related invoices so statements/reports reflect current customer info
+  const nameChanged = prevName !== null && prevName !== saved.name;
+  const companyChanged = prevCompany !== null && prevCompany !== saved.company;
+  if (nameChanged || companyChanged) {
+    const invoices = await readCollectionAsync('invoices');
+    const linked = invoices.filter(i => i.customer_id === saved.id && !i.deleted_at);
+    const newBillingCompany = saved.company || saved.name || '';
+    for (const inv of linked) {
+      if (inv.billing_company !== newBillingCompany || inv.customer_name !== saved.name) {
+        await upsertAsync('invoices', { ...inv, billing_company: newBillingCompany, customer_name: saved.name });
+      }
+    }
+  }
   return { success: true, data: saved };
 });
 
@@ -1148,7 +1197,24 @@ ipcMain.handle('get-property', async (e, id) => {
 });
 
 ipcMain.handle('save-property', async (e, data) => {
+  let prevAddress = null, prevCity = null;
+  if (data.id) {
+    const prev = await findByIdAsync('properties', data.id);
+    if (prev) { prevAddress = prev.address; prevCity = prev.city; }
+  }
   const saved = await upsertAsync('properties', data);
+
+  // If address/city changed, update cached snapshots on related invoices
+  if ((prevAddress !== null && prevAddress !== saved.address) ||
+      (prevCity !== null && prevCity !== saved.city)) {
+    const invoices = await readCollectionAsync('invoices');
+    const linked = invoices.filter(i => i.property_id === saved.id && !i.deleted_at);
+    for (const inv of linked) {
+      if (inv.property_address !== saved.address || inv.property_city !== saved.city) {
+        await upsertAsync('invoices', { ...inv, property_address: saved.address, property_city: saved.city });
+      }
+    }
+  }
   return { success: true, data: saved };
 });
 
@@ -1682,12 +1748,41 @@ ipcMain.handle('bulk-delete-customers', async (e, ids) => {
 
   const allProperties = await readCollectionAsync('properties');
   const childPropIds = allProperties.filter(p => idSet.has(p.customer_id)).map(p => p.id);
+  const childPropIdSet = new Set(childPropIds);
   const allTanks = await readCollectionAsync('tanks');
-  const childTankIds = allTanks.filter(t => childPropIds.includes(t.property_id)).map(t => t.id);
+  const childTankIds = allTanks.filter(t => childPropIdSet.has(t.property_id)).map(t => t.id);
 
+  // Soft-delete linked invoices, payments, jobs, reminders, AFCs, schedule_items, service_due_notices
+  // (keeps history intact in case user needs to recover) — only invoices/payments/jobs/SDNs/disposal_loads
+  // are cloud tables. Others stay local.
+  const allInvoices = await readCollectionAsync('invoices');
+  const linkedInvoices = allInvoices.filter(i => idSet.has(i.customer_id) && !i.deleted_at);
+  const allReminders = await readCollectionAsync('reminders');
+  const linkedReminders = allReminders.filter(r => idSet.has(r.customer_id));
+  const allSDNs = await readCollectionAsync('service_due_notices');
+  const linkedSDNs = allSDNs.filter(s => idSet.has(s.customer_id) && !s.deleted_at);
+  const allJobs = await readCollectionAsync('jobs');
+  const linkedJobs = allJobs.filter(j => idSet.has(j.customer_id) && !j.deleted_at);
+  const allPayments = await readCollectionAsync('payments');
+  const linkedPayments = allPayments.filter(p => idSet.has(p.customer_id) && !p.deleted_at);
+
+  const now = new Date().toISOString();
   let done = 0;
-  const total = ids.length + childPropIds.length + childTankIds.length;
-  sendProgress({ stage: 'saving', message: 'Deleting tanks…', total, current: 0 });
+  const total = ids.length + childPropIds.length + childTankIds.length +
+                linkedInvoices.length + linkedSDNs.length + linkedJobs.length +
+                linkedPayments.length + linkedReminders.length;
+
+  sendProgress({ stage: 'saving', message: 'Soft-deleting jobs…', total, current: done });
+  for (const j of linkedJobs) { await upsertAsync('jobs', { ...j, deleted_at: now }); sendProgress({ stage: 'saving', total, current: ++done }); }
+  sendProgress({ stage: 'saving', message: 'Soft-deleting invoices…', total, current: done });
+  for (const inv of linkedInvoices) { await upsertAsync('invoices', { ...inv, deleted_at: now }); sendProgress({ stage: 'saving', total, current: ++done }); }
+  sendProgress({ stage: 'saving', message: 'Soft-deleting payments…', total, current: done });
+  for (const p of linkedPayments) { await upsertAsync('payments', { ...p, deleted_at: now }); sendProgress({ stage: 'saving', total, current: ++done }); }
+  sendProgress({ stage: 'saving', message: 'Removing reminders…', total, current: done });
+  for (const r of linkedReminders) { await removeAsync('reminders', r.id); sendProgress({ stage: 'saving', total, current: ++done }); }
+  sendProgress({ stage: 'saving', message: 'Soft-deleting service due notices…', total, current: done });
+  for (const s of linkedSDNs) { await upsertAsync('service_due_notices', { ...s, deleted_at: now }); sendProgress({ stage: 'saving', total, current: ++done }); }
+  sendProgress({ stage: 'saving', message: 'Deleting tanks…', total, current: done });
   for (const tid of childTankIds) { await removeAsync('tanks', tid); sendProgress({ stage: 'saving', total, current: ++done }); }
   sendProgress({ stage: 'saving', message: 'Deleting properties…', total, current: done });
   for (const pid of childPropIds) { await removeAsync('properties', pid); sendProgress({ stage: 'saving', total, current: ++done }); }
@@ -1716,7 +1811,10 @@ ipcMain.handle('bulk-cancel-invoices', async (e, ids, cancel) => {
   const idSet = new Set(ids);
   for (const inv of invoices) {
     if (!idSet.has(inv.id)) continue;
-    await upsertAsync('invoices', { ...inv, cancelled: !!cancel, cancelled_at: cancel ? now : null });
+    const updated = { ...inv, cancelled: !!cancel, cancelled_at: cancel ? now : null };
+    // When cancelling, force payment_status to 'void' so AR aggregates exclude it
+    if (cancel) updated.payment_status = 'void';
+    await upsertAsync('invoices', updated);
   }
   return { success: true, updated: ids.length };
 });
@@ -2139,21 +2237,22 @@ ipcMain.handle('get-payments', async (e, customerId) => {
 });
 
 ipcMain.handle('save-payment', async (e, data) => {
+  // Round payment amount to avoid floating-point drift
+  if (data && data.amount !== undefined) data.amount = _money(data.amount);
   const saved = await upsertAsync('payments', data);
 
   // Update linked invoice amount_paid
   if (data.invoice_id) {
-    const invoices = await readCollectionAsync('invoices');
+    const inv = await findByIdAsync('invoices', data.invoice_id);
     const payments = (await readCollectionAsync('payments')).filter(p => p.invoice_id === data.invoice_id && !p.deleted_at);
-    const totalPaidForInv = payments.reduce((s, p) => {
+    const totalPaidForInv = _money(payments.reduce((s, p) => {
       if (p.type === 'refund') return s - (parseFloat(p.amount) || 0);
       return s + (parseFloat(p.amount) || 0);
-    }, 0);
+    }, 0));
 
-    const inv = invoices.find(i => i.id === data.invoice_id);
     if (inv) {
       const updated = { ...inv, amount_paid: Math.max(0, totalPaidForInv) };
-      const invTotal = parseFloat(inv.total) || 0;
+      const invTotal = _money(inv.total);
       if (updated.amount_paid >= invTotal && invTotal > 0) {
         updated.payment_status = 'paid';
       } else if (updated.amount_paid > 0) {
