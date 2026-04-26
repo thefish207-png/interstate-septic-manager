@@ -2,6 +2,10 @@
   "name": "interstate-septic-manager",
   "version": "0.2.0",
   "description": "All-in-one business management for septic & sewer companies",
+  "author": {
+    "name": "Interstate Septic",
+    "email": "thefish207@gmail.com"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -35,7 +39,8 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico",
-      "publisherName": "Interstate Septic"
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false
     },
     "mac": {
       "target": "dmg"
