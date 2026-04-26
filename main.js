@@ -4048,6 +4048,35 @@ ipcMain.handle('change-password', async (e, userId, newPassword) => {
   if (!userId || !newPassword || typeof newPassword !== 'string') {
     return { success: false, error: 'User ID and new password required.' };
   }
+  // Owner-only gate. Reject when the calling session is anything other than role='owner'.
+  // We look up the role server-side rather than trust the renderer.
+  try {
+    let callerRole = null;
+    if (_currentAppUserId) {
+      // Cloud-mode lookup — read from the cloud users table via the active session.
+      const sb = _getSbClient();
+      if (sb && _sbSession) {
+        const { data: me } = await sb.from('users').select('role').eq('id', _currentAppUserId).maybeSingle();
+        callerRole = me?.role || null;
+      }
+      // Fallback to local cache if RLS or network blocked the cloud read
+      if (!callerRole) {
+        try {
+          const localMe = await findByIdAsync('users', _currentAppUserId);
+          callerRole = localMe?.role || null;
+        } catch {}
+      }
+    } else {
+      // Local-only mode — fall back to scanning local users for the active one.
+      // Conservative: refuse, since we have no reliable identity in pure local mode.
+      return { success: false, error: 'Password changes are restricted to the owner account.' };
+    }
+    if (callerRole !== 'owner' && callerRole !== 'admin') {
+      return { success: false, error: 'Only the owner can change passwords.' };
+    }
+  } catch (gateErr) {
+    return { success: false, error: 'Could not verify caller permissions: ' + (gateErr.message || gateErr) };
+  }
   try {
     const user = await findByIdAsync('users', userId);
     if (!user) return { success: false, error: 'User not found.' };
@@ -4279,6 +4308,9 @@ ipcMain.handle('cloud-users-create', async (e, payload) => {
   if (!payload.username || !payload.name || !payload.role || !payload.password) {
     return { success: false, error: 'Username, name, role, and password are required' };
   }
+  if (!['owner','office','tech','plant'].includes(payload.role)) {
+    return { success: false, error: 'Invalid role (must be owner, office, tech, or plant)' };
+  }
   if (!['owner','office','tech'].includes(payload.role)) {
     return { success: false, error: 'Invalid role' };
   }
@@ -4320,8 +4352,8 @@ ipcMain.handle('cloud-users-update', async (e, userId, updates) => {
   if (updates.name !== undefined) allowed.name = updates.name;
   if (updates.phone !== undefined) allowed.phone = updates.phone;
   if (updates.role !== undefined) {
-    if (!['owner','office','tech'].includes(updates.role)) {
-      return { success: false, error: 'Invalid role' };
+    if (!['owner','office','tech','plant'].includes(updates.role)) {
+      return { success: false, error: 'Invalid role (must be owner, office, tech, or plant)' };
     }
     allowed.role = updates.role;
   }

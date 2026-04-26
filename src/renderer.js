@@ -4280,20 +4280,36 @@ async function buildDayView(vehicles, users, dateStr) {
         <div class="side-panel-section">
           <h4>&#128100; Drivers</h4>
           <div id="drivers-scoreboard-list">
-          ${users.map(u => {
-            return '<div class="driver-scoreboard-item" data-user-id="' + u.id + '">'
-              + '<div class="draggable-chip" style="cursor:grab;border-left: 3px solid ' + (u.color || '#1565c0') + ';"'
-              + ' onmousedown="onChipMouseDown(event, \'driver_change\', \'' + u.id + '\')">'
-              + '<svg class="chip-icon" viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;margin-right:4px;fill:' + (u.color || '#1565c0') + ';"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>' + esc(u.name)
-              + '</div>'
-              + '<div class="driver-revenue-bar" style="margin:-4px 0 6px 0;">'
-              + '<div style="height:5px;background:#e0e0e0;border-radius:3px;overflow:hidden;">'
-              + '<div id="rev-bar-' + u.id + '" style="height:100%;width:0%;background:' + (u.color || '#1565c0') + ';border-radius:3px;transition:width 0.3s;"></div>'
-              + '</div>'
-              + '<div id="rev-amt-' + u.id + '" style="font-size:10px;color:var(--text-light);margin-top:1px;">$0.00</div>'
-              + '</div>'
-              + '</div>';
-          }).join('')}
+          ${(() => {
+            // Effective driver for each truck = explicit per-day override (truck_day_assignments)
+            // if present, else the truck's default_tech_id. Show the union across all trucks
+            // visible in this day-view. Empty only when no truck has any driver at all.
+            const overrideByVehicle = {};
+            (dayAssignments || []).forEach(a => { if (a.vehicle_id && a.user_id) overrideByVehicle[a.vehicle_id] = a.user_id; });
+            const effectiveUserIds = new Set();
+            (vehicles || []).forEach(v => {
+              const uid = overrideByVehicle[v.id] || v.default_tech_id || null;
+              if (uid) effectiveUserIds.add(uid);
+            });
+            const driversForToday = users.filter(u => effectiveUserIds.has(u.id));
+            if (driversForToday.length === 0) {
+              return '<div style="font-size:11px;color:var(--text-light);padding:6px 4px;text-align:center;line-height:1.4;">No drivers assigned to trucks today.<br>Assign a default driver in Vehicles, or set a per-day driver from the truck header.</div>';
+            }
+            return driversForToday.map(u => {
+              return '<div class="driver-scoreboard-item" data-user-id="' + u.id + '">'
+                + '<div class="draggable-chip" style="cursor:grab;border-left: 3px solid ' + (u.color || '#1565c0') + ';"'
+                + ' onmousedown="onChipMouseDown(event, \'driver_change\', \'' + u.id + '\')">'
+                + '<svg class="chip-icon" viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;margin-right:4px;fill:' + (u.color || '#1565c0') + ';"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>' + esc(u.name)
+                + '</div>'
+                + '<div class="driver-revenue-bar" style="margin:-4px 0 6px 0;">'
+                + '<div style="height:5px;background:#e0e0e0;border-radius:3px;overflow:hidden;">'
+                + '<div id="rev-bar-' + u.id + '" style="height:100%;width:0%;background:' + (u.color || '#1565c0') + ';border-radius:3px;transition:width 0.3s;"></div>'
+                + '</div>'
+                + '<div id="rev-amt-' + u.id + '" style="font-size:10px;color:var(--text-light);margin-top:1px;">$0.00</div>'
+                + '</div>'
+                + '</div>';
+            }).join('');
+          })()}
           </div>
           <div style="margin-top:8px;padding:8px;background:#e8f5e9;border-radius:6px;text-align:center;">
             <div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;">Day Total Revenue</div>
@@ -4301,6 +4317,34 @@ async function buildDayView(vehicles, users, dateStr) {
           </div>
           <button class="btn btn-sm" onclick="refreshRevenue();" style="margin-top:8px;width:100%;background:#1565c0;color:#fff;font-weight:600;font-size:11px;padding:6px;">&#x21bb; Refresh Revenue</button>
           <div style="font-size:10px;color:var(--text-light);margin-top:6px;">Drag between jobs to change driver mid-route</div>
+        </div>
+
+        <div class="side-panel-section">
+          <h4 style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;" onclick="toggleHelperPanel()">
+            <span>&#129489; Helpers</span>
+            <span id="helperPanelCaret" style="font-size:11px;color:var(--text-light);">&#9656;</span>
+          </h4>
+          <div id="helperPanelBody" style="display:none;">
+            <div style="font-size:10px;color:var(--text-light);margin-bottom:6px;">Click a job, pick from the dropdown, or drag a chip onto a card. Office/plant users are hidden — only techs are eligible as helpers.</div>
+            <select class="side-panel-select" id="helperQuickAdd" onchange="quickAddHelperToSelectedJob(this)">
+              <option value="">— Add helper to selected job —</option>
+              ${users.filter(u => (u.role || 'tech') === 'tech').map(u => '<option value="' + u.id + '">' + esc(u.name) + '</option>').join('')}
+            </select>
+            <div style="font-size:10px;color:var(--text-light);margin:6px 0 4px;">Or drag a helper chip:</div>
+            <div id="helpers-chip-list">
+            ${users.filter(u => (u.role || 'tech') === 'tech').map(u => {
+              return '<div class="draggable-chip helper-chip" style="cursor:grab;border-left: 3px solid ' + (u.color || '#9c27b0') + ';margin-bottom:4px;"'
+                + ' onmousedown="onChipMouseDown(event, \'helper_add\', \'' + u.id + '\')"'
+                + ' title="Drag onto a job card to add ' + esc(u.name) + ' as a helper">'
+                + '<svg class="chip-icon" viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;margin-right:4px;fill:' + (u.color || '#9c27b0') + ';"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>'
+                + esc(u.name)
+                + '</div>';
+            }).join('')}
+            </div>
+            <div style="font-size:10px;color:var(--text-light);margin-top:6px;text-align:right;">
+              <a href="#" onclick="event.preventDefault();toggleHelperPanel(false)" style="color:var(--accent);text-decoration:none;">Close</a>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -7207,6 +7251,35 @@ document.addEventListener('mouseup', async (e) => {
     showToast(`Driver change to ${user?.name || 'Unknown'} added.`, 'success');
     _scheduleRestoreScroll(); loadSchedule();
 
+  } else if (drag.type === 'helper_add') {
+    // Helper drop: must land directly on a specific job card. Find the job card at cursor.
+    const targetCard = (() => {
+      const cards = dropContainer.querySelectorAll('.truck-job-card[data-job-id]');
+      for (const c of cards) {
+        const r = c.getBoundingClientRect();
+        if (e.clientY >= r.top && e.clientY <= r.bottom && e.clientX >= r.left && e.clientX <= r.right) return c;
+      }
+      return null;
+    })();
+    if (!targetCard) {
+      showToast('Drop a helper directly on a job card.', 'error');
+      return;
+    }
+    const targetJobId = targetCard.dataset.jobId;
+    const { data: helperUsers } = await window.api.getUsers();
+    const helperUser = helperUsers.find(u => u.id === drag.id);
+    const { data: targetJob } = await window.api.getJob(targetJobId);
+    if (!targetJob) { showToast('Job not found.', 'error'); return; }
+    const helpers = Array.isArray(targetJob.helpers) ? targetJob.helpers.slice() : [];
+    if (helpers.includes(drag.id)) {
+      showToast(`${helperUser?.name || 'Helper'} is already on this job.`, 'info');
+      return;
+    }
+    helpers.push(drag.id);
+    await window.api.saveJob({ id: targetJobId, helpers });
+    showToast(`${helperUser?.name || 'Helper'} added to ${targetJob.customers?.name || 'job'}.`, 'success');
+    _scheduleRestoreScroll(); loadSchedule();
+
   } else if (drag.type === 'move_item' && drag.source === 'schedule') {
     await window.api.saveScheduleItem({ id: drag.id, vehicle_id: dropVehicleId, sort_order: sortOrder });
     // If this was a driver_change item being repositioned, re-derive assigned_to for all jobs in the column
@@ -9649,6 +9722,64 @@ async function toggleJobHelper(jobId, userId, add) {
   if (add && !helpers.includes(userId)) helpers.push(userId);
   if (!add) helpers = helpers.filter(h => h !== userId);
   await window.api.saveJob({ id: jobId, helpers });
+}
+
+// Day view side-panel dropdown: pick a helper, drop into the currently "selected"
+// job card (the one most recently clicked/highlighted). If no card is selected, ask
+// the user to click one first.
+window._scheduleSelectedJobId = window._scheduleSelectedJobId || null;
+async function quickAddHelperToSelectedJob(selectEl) {
+  const userId = selectEl.value;
+  selectEl.value = ''; // reset dropdown
+  if (!userId) return;
+  const targetId = window._scheduleSelectedJobId;
+  if (!targetId) {
+    showToast('Click a job card first to select it, then pick a helper from the dropdown.', 'info', 4000);
+    return;
+  }
+  const { data: job } = await window.api.getJob(targetId);
+  if (!job) { showToast('Job no longer exists.', 'error'); return; }
+  const helpers = Array.isArray(job.helpers) ? job.helpers.slice() : [];
+  if (helpers.includes(userId)) {
+    const { data: users } = await window.api.getUsers();
+    const u = users.find(x => x.id === userId);
+    showToast(`${u?.name || 'That helper'} is already on this job.`, 'info');
+    return;
+  }
+  helpers.push(userId);
+  await window.api.saveJob({ id: targetId, helpers });
+  const { data: users } = await window.api.getUsers();
+  const u = users.find(x => x.id === userId);
+  showToast(`${u?.name || 'Helper'} added to ${job.customers?.name || 'job'}.`, 'success');
+  // Auto-collapse the panel after a successful add — user wants it tucked away
+  // unless they're actively assigning helpers.
+  toggleHelperPanel(false);
+  loadSchedule();
+}
+
+// Toggle the collapsible Helpers section in the day-view side panel.
+// Pass true to force-open, false to force-close, or omit to flip state.
+function toggleHelperPanel(forceOpen) {
+  const body = document.getElementById('helperPanelBody');
+  const caret = document.getElementById('helperPanelCaret');
+  if (!body) return;
+  const currentlyOpen = body.style.display !== 'none';
+  const shouldOpen = (forceOpen === true) ? true : (forceOpen === false) ? false : !currentlyOpen;
+  body.style.display = shouldOpen ? '' : 'none';
+  if (caret) caret.innerHTML = shouldOpen ? '&#9662;' : '&#9656;';
+}
+
+// Track clicks on job cards as the "selected" target for the helper dropdown.
+// Wires once, debounced via the flag.
+if (!window._helperSelectionWired) {
+  window._helperSelectionWired = true;
+  document.addEventListener('click', (e) => {
+    const card = e.target.closest && e.target.closest('.truck-job-card[data-job-id]');
+    if (!card) return;
+    document.querySelectorAll('.truck-job-card.helper-target-selected').forEach(c => c.classList.remove('helper-target-selected'));
+    card.classList.add('helper-target-selected');
+    window._scheduleSelectedJobId = card.dataset.jobId;
+  });
 }
 
 async function addLineItem(jobId) {
@@ -16177,6 +16308,7 @@ Our minimum charge is $175, which covers the service call to the property. This 
       <div id="cloudUsersBody" style="padding:8px 0;">Loading…</div>
     </div>
 
+    ${(currentUser && (currentUser.role === 'owner' || currentUser.role === 'admin')) ? `
     <div class="card mt-24">
       <div class="card-header"><h3>My Account</h3></div>
       <div class="form-row">
@@ -16191,6 +16323,7 @@ Our minimum charge is $175, which covers the service call to the property. This 
       </div>
       <button class="btn btn-primary" onclick="changeMyPassword()">Change Password</button>
     </div>
+    ` : ''}
 
     <div class="card mt-24">
       <div class="card-header">
@@ -16409,8 +16542,9 @@ function openCloudUserModal(existing) {
       <div class="form-group">
         <label>Role *</label>
         <select id="cuRole">
-          <option value="tech" ${u.role === 'tech' ? 'selected' : ''}>Tech (read-only field access)</option>
+          <option value="tech" ${u.role === 'tech' ? 'selected' : ''}>Tech (field driver / helper)</option>
           <option value="office" ${u.role === 'office' ? 'selected' : ''}>Office (full operational access)</option>
+          <option value="plant" ${u.role === 'plant' ? 'selected' : ''}>Plant (disposal-site operator)</option>
           <option value="owner" ${u.role === 'owner' ? 'selected' : ''}>Owner (everything including settings)</option>
         </select>
       </div>
