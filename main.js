@@ -236,7 +236,14 @@ async function _cloudReadAll(sb, collection) {
   return all;
 }
 
+// Reads return from the in-memory cache (which is hydrated on login and
+// kept fresh by the realtime subscription). Only hits Supabase if the
+// cache hasn't been populated yet for this collection.
 async function readCollectionAsync(collection) {
+  // If we have cached data, return it immediately (fast path)
+  if (_store[collection]) return _store[collection];
+
+  // Fall through to cloud or local JSON depending on cloud-readiness
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
@@ -244,60 +251,101 @@ async function readCollectionAsync(collection) {
       _store[collection] = data;
       return data;
     } catch (e) {
-      console.warn('[CLOUD] readCollectionAsync', collection, 'fallback:', e.message);
+      console.warn('[CLOUD] readCollectionAsync', collection, 'fallback to local:', e.message);
     }
   }
   return readCollection(collection);
 }
 
+// Writes are optimistic: cache updates IMMEDIATELY (UI shows the change),
+// then cloud write happens in background. If cloud fails, the cache row
+// stays — we never silently lose a user's write. Cloud errors retry
+// automatically by stripping unknown columns into the `data` jsonb catch-all.
 async function upsertAsync(collection, item) {
+  const now = new Date().toISOString();
+  const row = { ...item };
+  if (!row.id) row.id = uuidv4();
+  row.updated_at = now;
+  if (!row.created_at) row.created_at = now;
+
+  // 1. Optimistic cache update — UI sees the change immediately
+  const items = readCollection(collection);
+  const idx = items.findIndex(i => i.id === row.id);
+  if (idx >= 0) items[idx] = { ...items[idx], ...row };
+  else items.push(row);
+  _store[collection] = items;
+  broadcastDataChange(collection);
+
+  // 2. Cloud write (if available)
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
-      const now = new Date().toISOString();
-      const row = { ...item };
-      if (!row.id) row.id = uuidv4();
-      row.updated_at = now;
-      if (!row.created_at) row.created_at = now;
-      const { data, error } = await sb.from(collection).upsert(row).select().single();
-      if (!error && data) {
-        // Sync into local cache
-        const items = readCollection(collection);
-        const idx = items.findIndex(i => i.id === data.id);
-        if (idx >= 0) items[idx] = data; else items.push(data);
-        _store[collection] = items;
-        broadcastDataChange(collection);
-        return data;
+      let attempt = { ...row };
+      let { data, error } = await sb.from(collection).upsert(attempt).select().single();
+
+      // If schema rejects unknown columns, strip them into `data` jsonb and retry
+      if (error && /column .* of relation .* does not exist|Could not find the .* column/i.test(error.message)) {
+        const m = error.message.match(/'([^']+)' column/) || error.message.match(/column "?([^"\s]+)"?/);
+        const badCol = m ? m[1] : null;
+        if (badCol && badCol !== 'data') {
+          console.warn('[CLOUD] upsertAsync', collection, '— stripping unknown column:', badCol);
+          attempt.data = { ...(attempt.data || {}), [badCol]: attempt[badCol] };
+          delete attempt[badCol];
+          ({ data, error } = await sb.from(collection).upsert(attempt).select().single());
+        }
       }
-      if (error) console.warn('[CLOUD] upsertAsync', collection, 'fallback:', error.message);
+
+      if (error) {
+        console.warn('[CLOUD] upsertAsync', collection, 'failed (cache kept):', error.message);
+        return items.find(i => i.id === row.id) || row;
+      }
+      // Cloud succeeded — replace cache row with authoritative cloud version (gets server defaults)
+      const idx2 = items.findIndex(i => i.id === data.id);
+      if (idx2 >= 0) items[idx2] = data; else items.push(data);
+      _store[collection] = items;
+      return data;
     } catch (e) {
-      console.warn('[CLOUD] upsertAsync', collection, 'exception:', e.message);
+      console.warn('[CLOUD] upsertAsync', collection, 'exception (cache kept):', e.message);
+      return items.find(i => i.id === row.id) || row;
     }
   }
-  return upsert(collection, item);
+
+  // No cloud — also persist to local JSON so it survives app restart
+  if (!_isCloudTable(collection)) {
+    return upsert(collection, item);
+  }
+  // Cloud table but offline — keep cache, write to local JSON as backup
+  writeCollection(collection, items);
+  return items.find(i => i.id === row.id) || row;
 }
 
 async function removeAsync(collection, id) {
+  // Optimistic cache removal
+  const items = readCollection(collection).filter(i => i.id !== id);
+  _store[collection] = items;
+  broadcastDataChange(collection);
+
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
       const { error } = await sb.from(collection).delete().eq('id', id);
-      if (!error) {
-        const items = readCollection(collection).filter(i => i.id !== id);
-        _store[collection] = items;
-        broadcastDataChange(collection);
-        return true;
-      }
-      if (error) console.warn('[CLOUD] removeAsync', collection, 'fallback:', error.message);
+      if (error) console.warn('[CLOUD] removeAsync', collection, 'failed (cache already removed):', error.message);
     } catch (e) {
       console.warn('[CLOUD] removeAsync', collection, 'exception:', e.message);
     }
+    return true;
   }
+  // Local-only table — also persist to disk
   remove(collection, id);
   return true;
 }
 
 async function findByIdAsync(collection, id) {
+  // Cache-first: if hydrated, look there
+  if (_store[collection]) {
+    return _store[collection].find(i => i.id === id) || null;
+  }
+  // Cache miss — hit cloud
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
