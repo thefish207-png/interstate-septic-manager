@@ -272,6 +272,27 @@ function installCustomTooltip() {
   });
 }
 
+// Cloud-status sidebar dot. Colors: green=ok, amber=warn, grey=offline.
+function _setCloudDot(state, label) {
+  const dot = document.getElementById('sidebarCloudDot');
+  const lbl = document.getElementById('sidebarCloudLabel');
+  if (!dot || !lbl) return;
+  const colors = { ok: '#43a047', warn: '#ff9800', offline: '#9e9e9e' };
+  dot.style.background = colors[state] || colors.offline;
+  lbl.textContent = label || state;
+}
+
+async function _refreshCloudStatus() {
+  try {
+    const status = await window.api.cloudConfigStatus();
+    if (!status || !status.configured) { _setCloudDot('offline', 'no cloud'); return; }
+    if (status.signedIn) _setCloudDot('ok', 'live');
+    else _setCloudDot('warn', 'signed out');
+  } catch {
+    _setCloudDot('offline', 'error');
+  }
+}
+
 // ===== AUTH (Supabase) =====
 async function checkAuth() {
   // Check if Supabase is configured
@@ -411,18 +432,37 @@ async function doLogin() {
 function enterApp() {
   showScreen('app');
 
-  // Cloud sync warnings — show toast when an optimistic write doesn't reach cloud
+  // Cloud sync warnings — show toast + flip the sidebar dot
   if (window.api?.onCloudWarning && !window._cloudWarningAttached) {
     window._cloudWarningAttached = true;
     let _lastCloudWarn = 0;
     window.api.onCloudWarning((p) => {
       const now = Date.now();
-      if (now - _lastCloudWarn < 3000) return; // throttle: at most one toast per 3s
+      if (now - _lastCloudWarn < 3000) return;
       _lastCloudWarn = now;
       try {
         showToast('⚠ Cloud ' + (p.opType || 'sync') + ' failed for ' + (p.collection || '') + ': ' + (p.message || 'unknown error') + '. Saved locally — will retry on next launch.', 'error', 8000);
       } catch {}
+      // Flip dot to amber for 30s
+      _setCloudDot('warn', 'sync issue');
+      clearTimeout(window._cloudDotTimer);
+      window._cloudDotTimer = setTimeout(() => _setCloudDot('ok', 'live'), 30000);
     });
+  }
+
+  // Initialize the sidebar cloud-status dot
+  _refreshCloudStatus();
+  // Re-check cloud status every 30s
+  if (!window._cloudStatusTimer) {
+    window._cloudStatusTimer = setInterval(_refreshCloudStatus, 30000);
+  }
+
+  // Show real app version in sidebar footer
+  if (window.api?.getAppVersion) {
+    window.api.getAppVersion().then(v => {
+      const el = document.getElementById('sidebarVersion');
+      if (el && v?.version) el.textContent = 'v' + v.version + (v.isPackaged ? '' : ' (dev)');
+    }).catch(() => {});
   }
 
   // Wire up auto-update notifications (idempotent — only attaches once)
@@ -661,12 +701,29 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      // Ctrl+Enter triggers the primary button in the modal footer
       const primary = document.querySelector('#modalFooter .btn-primary');
       if (primary) {
         primary.click();
         e.preventDefault();
       }
+    }
+    return; // don't fire page shortcuts while modal open
+  }
+
+  // Skip shortcuts if user is typing in an input/textarea/select
+  const tag = (e.target && e.target.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  // Schedule page shortcuts: T = today, [/] = prev/next, ←/→ = prev/next
+  if (currentPage === 'schedule' && typeof scheduleDate !== 'undefined') {
+    if (e.key === 't' || e.key === 'T') {
+      scheduleDate = new Date();
+      loadSchedule();
+      e.preventDefault();
+    } else if (e.key === '[' || e.key === 'ArrowLeft') {
+      if (typeof changeScheduleDate === 'function') { changeScheduleDate(-1); e.preventDefault(); }
+    } else if (e.key === ']' || e.key === 'ArrowRight') {
+      if (typeof changeScheduleDate === 'function') { changeScheduleDate(1); e.preventDefault(); }
     }
   }
 });
@@ -3996,10 +4053,12 @@ async function loadSchedule() {
     <div class="schedule-toolbar">
       <div class="schedule-toolbar-left">
         <button class="btn btn-primary" onclick="openJobModal()">+ New Appointment</button>
-        <div class="schedule-nav">
-          <button class="btn btn-secondary btn-sm" onclick="changeScheduleDate(-1)">&#9664;</button>
+        <div class="schedule-nav" style="display:flex;align-items:center;gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="changeScheduleDate(-1)" title="Previous (←)">&#9664;</button>
           <span class="schedule-date-display">${headerDateText}</span>
-          <button class="btn btn-secondary btn-sm" onclick="changeScheduleDate(1)">&#9654;</button>
+          <button class="btn btn-secondary btn-sm" onclick="changeScheduleDate(1)" title="Next (→)">&#9654;</button>
+          <input type="date" id="scheduleDateJump" value="${dateStr}" onchange="jumpScheduleToDate(this.value)" style="padding:4px 6px;font-size:12px;margin-left:6px;" title="Jump to date">
+          <button class="btn btn-secondary btn-sm" onclick="scheduleDate = new Date(); loadSchedule();" title="Today (T)" style="margin-left:4px;">Today</button>
         </div>
       </div>
       <div class="schedule-toolbar-right">
@@ -6518,6 +6577,15 @@ function changeScheduleDate(dir) {
   } else {
     scheduleDate.setMonth(scheduleDate.getMonth() + dir);
   }
+  loadSchedule();
+}
+
+function jumpScheduleToDate(dateStr) {
+  if (!dateStr) return;
+  // Local-time interpretation (avoids UTC date-shift on the schedule date)
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return;
+  scheduleDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 12, 0, 0);
   loadSchedule();
 }
 

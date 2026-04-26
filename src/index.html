@@ -200,8 +200,12 @@
       </div>
       <button class="btn-logout" onclick="doLogout()">Logout</button>
     </div>
-    <div class="sidebar-footer">
-      v0.1.0
+    <div class="sidebar-footer" style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:6px 10px;">
+      <span id="sidebarVersion">v0.1.0</span>
+      <span id="sidebarCloudStatus" title="Cloud sync status" style="display:flex;align-items:center;gap:4px;cursor:default;">
+        <span id="sidebarCloudDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#999;"></span>
+        <span id="sidebarCloudLabel" style="opacity:.7;">offline</span>
+      </span>
     </div>
   </nav>
 

@@ -162,6 +162,9 @@ contextBridge.exposeInMainWorld('api', {
   saveUser: (data) => ipcRenderer.invoke('save-user', data),
   deleteUser: (id) => ipcRenderer.invoke('delete-user', id),
 
+  // App info
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
   // Auto-updater
   installUpdateNow: () => ipcRenderer.invoke('install-update-now'),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_e, p) => cb(p)),

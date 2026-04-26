@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -519,6 +519,7 @@ let _rtHeartbeatTimer = null;
 let _rtReconnectTimer = null;
 let _rtRef = 0;
 let _rtIntentionalClose = false;
+let _rtReconnectAttempt = 0; // for exponential backoff
 
 function _rtSend(msg) {
   if (_rtSocket && _rtSocket.readyState === 1) {
@@ -606,12 +607,25 @@ function _cloudSubscribeRealtime() {
     _rtSocket = null;
     if (_rtIntentionalClose) {
       console.log('[CLOUD-RT] closed (intentional)');
+      _rtReconnectAttempt = 0;
       return;
     }
-    console.log('[CLOUD-RT] closed (code:', code + ') — reconnecting in 5s');
+    // Exponential backoff: 5s, 10s, 30s, 60s, 120s, 300s (cap)
+    const backoffs = [5000, 10000, 30000, 60000, 120000, 300000];
+    const delay = backoffs[Math.min(_rtReconnectAttempt, backoffs.length - 1)] + Math.floor(Math.random() * 2000);
+    _rtReconnectAttempt++;
+    console.log('[CLOUD-RT] closed (code:', code + ') — reconnect attempt #' + _rtReconnectAttempt + ' in ' + Math.round(delay/1000) + 's');
     _rtReconnectTimer = setTimeout(() => {
       if (_cloudReady()) _cloudSubscribeRealtime();
-    }, 5000);
+    }, delay);
+  });
+
+  // On successful subscription reset the backoff counter
+  sock.on('message', (raw) => {
+    try {
+      const m = JSON.parse(raw.toString());
+      if (m.event === 'phx_reply' && m.payload?.status === 'ok') _rtReconnectAttempt = 0;
+    } catch {}
   });
 }
 
@@ -642,22 +656,21 @@ function startConfirmServer() {
   if (confirmServer) return;
   const { port } = getServerSettings();
 
-  confirmServer = http.createServer((req, res) => {
+  confirmServer = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost`);
 
     if (url.pathname === '/confirm') {
       const token = url.searchParams.get('token');
-      const notices = readCollection('service_due_notices');
-      const idx = notices.findIndex(n => n.confirm_token === token);
+      const notices = await readCollectionAsync('service_due_notices');
+      const notice = notices.find(n => n.confirm_token === token);
 
-      if (idx === -1) {
+      if (!notice) {
         res.writeHead(404, { 'Content-Type': 'text/html' });
         res.end(confirmPage('Not Found', 'This confirmation link is invalid or has already been used.', '#e53935'));
         return;
       }
 
-      const notice = notices[idx];
-      const customers = readCollection('customers');
+      const customers = await readCollectionAsync('customers');
       const cust = customers.find(c => c.id === notice.customer_id) || {};
       const serviceType = notice.service_type || 'Septic Service';
 
@@ -667,8 +680,8 @@ function startConfirmServer() {
         return;
       }
 
-      notices[idx] = { ...notice, status: 'confirmed', confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-      writeCollection('service_due_notices', notices);
+      // Cloud-aware update: writes through the optimistic helper, syncs to Supabase
+      await upsertAsync('service_due_notices', { ...notice, status: 'confirmed', confirmed_at: new Date().toISOString() });
 
       // Notify the renderer that a confirmation came in
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -687,21 +700,18 @@ function startConfirmServer() {
     // Job appointment confirmation
     if (url.pathname === '/confirm-job') {
       const jobId = url.searchParams.get('id');
-      const jobs = readCollection('jobs');
-      const idx = jobs.findIndex(j => j.id === jobId);
-      if (idx === -1) {
+      const job = await findByIdAsync('jobs', jobId);
+      if (!job) {
         res.writeHead(404, { 'Content-Type': 'text/html' });
         res.end(confirmPage('Not Found', 'This confirmation link is invalid.', '#e53935'));
         return;
       }
-      const job = jobs[idx];
       if (job.customer_confirmed_at) {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(confirmPage('Already Confirmed', 'Your appointment has already been confirmed. We look forward to seeing you!', '#43a047'));
         return;
       }
-      jobs[idx] = { ...job, customer_confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-      writeCollection('jobs', jobs);
+      await upsertAsync('jobs', { ...job, customer_confirmed_at: new Date().toISOString() });
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('job-confirmed', { id: job.id });
       }
@@ -894,6 +904,24 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   startConfirmServer();
+
+  // Power monitor — when computer wakes from sleep, the realtime websocket
+  // is in a zombie state. Force a reconnect.
+  try {
+    powerMonitor.on('resume', () => {
+      console.log('[APP] system resumed from sleep — reconnecting realtime');
+      if (_cloudReady()) {
+        _cloudUnsubscribeRealtime();
+        setTimeout(() => _cloudSubscribeRealtime(), 1000);
+      }
+    });
+    powerMonitor.on('suspend', () => {
+      console.log('[APP] system suspending — closing realtime cleanly');
+      _cloudUnsubscribeRealtime();
+    });
+  } catch (e) {
+    console.warn('[APP] powerMonitor unavailable:', e.message);
+  }
   // Auto-start on login setting (Windows only)
   try {
     const settings = readCollection('settings')[0] || {};
@@ -954,6 +982,10 @@ function setupAutoUpdater() {
     autoUpdater.checkForUpdates().catch(e => console.warn('[UPDATER] periodic check failed:', e?.message || e));
   }, 6 * 60 * 60 * 1000);
 }
+
+ipcMain.handle('get-app-version', async () => {
+  return { version: app.getVersion(), isPackaged: app.isPackaged };
+});
 
 ipcMain.handle('install-update-now', async () => {
   try {
