@@ -391,43 +391,85 @@ async function doLogin() {
     return;
   }
 
-  // Try Supabase login first
-  const cloudStatus = await window.api.cloudConfigStatus();
-  if (cloudStatus && cloudStatus.configured) {
-    const result = await window.api.cloudLogin(username, password);
-    if (result.success) {
-      currentUser = {
-        id: result.user.id,
-        name: result.user.name,
-        role: result.user.role,
-        username: result.user.username,
-        color: result.user.color,
-        phone: result.user.phone
-      };
-      localStorage.setItem('ism_saved_username', username);
-      // Don't save password to localStorage anymore — session is persisted on disk by main process
-      localStorage.removeItem('ism_saved_password');
-      errorEl.style.display = 'none';
-      enterApp();
+  // Disable login button + show progress so the user knows the click registered.
+  // Cloud hydrate now runs in the background, so this should resolve in ~1 second.
+  const loginBtn = document.querySelector('#loginScreen button.btn-primary');
+  const origLabel = loginBtn ? loginBtn.textContent : null;
+  if (loginBtn) {
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Signing in…';
+    loginBtn.style.opacity = '0.7';
+  }
+  errorEl.textContent = 'Signing in…';
+  errorEl.style.display = 'block';
+  errorEl.style.color = 'var(--text-light)';
+
+  const restoreBtn = (msg, isErr) => {
+    if (loginBtn) {
+      loginBtn.disabled = false;
+      loginBtn.textContent = origLabel || 'Sign In';
+      loginBtn.style.opacity = '';
+    }
+    errorEl.textContent = msg || '';
+    errorEl.style.display = msg ? 'block' : 'none';
+    errorEl.style.color = isErr ? '' : 'var(--text-light)';
+  };
+
+  try {
+    const cloudStatus = await window.api.cloudConfigStatus();
+    if (cloudStatus && cloudStatus.configured) {
+      const result = await window.api.cloudLogin(username, password);
+      if (result.success) {
+        currentUser = {
+          id: result.user.id,
+          name: result.user.name,
+          role: result.user.role,
+          username: result.user.username,
+          color: result.user.color,
+          phone: result.user.phone
+        };
+        localStorage.setItem('ism_saved_username', username);
+        localStorage.removeItem('ism_saved_password');
+        restoreBtn('', false);
+        enterApp();
+        return;
+      }
+      restoreBtn(result.error || 'Login failed.', true);
       return;
     }
-    errorEl.textContent = result.error || 'Login failed.';
-    errorEl.style.display = 'block';
-    return;
-  }
 
-  // Fallback to legacy local auth (only used if Supabase isn't configured)
-  const result = await window.api.authLogin(username, password);
-  if (result.success) {
-    currentUser = result.data;
-    localStorage.setItem('ism_saved_username', username);
-    localStorage.setItem('ism_saved_password', password);
-    enterApp();
-  } else {
-    errorEl.textContent = result.error || 'Login failed.';
-    errorEl.style.display = 'block';
+    // Fallback to legacy local auth (only used if Supabase isn't configured)
+    const result = await window.api.authLogin(username, password);
+    if (result.success) {
+      currentUser = result.data;
+      localStorage.setItem('ism_saved_username', username);
+      localStorage.setItem('ism_saved_password', password);
+      restoreBtn('', false);
+      enterApp();
+    } else {
+      restoreBtn(result.error || 'Login failed.', true);
+    }
+  } catch (e) {
+    restoreBtn('Login error: ' + (e?.message || e), true);
   }
 }
+
+// Wire up Enter-key submit on the login screen so users don't have to mouse over to the button.
+// This runs once when the renderer script loads.
+(function _wireLoginEnterKey() {
+  const attach = () => {
+    const u = document.getElementById('loginUsername');
+    const p = document.getElementById('loginPassword');
+    if (!u || !p) return false;
+    const onKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } };
+    u.addEventListener('keydown', onKey);
+    p.addEventListener('keydown', onKey);
+    return true;
+  };
+  if (!attach()) {
+    document.addEventListener('DOMContentLoaded', attach);
+  }
+})();
 
 function enterApp() {
   showScreen('app');

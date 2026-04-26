@@ -4148,16 +4148,28 @@ ipcMain.handle('cloud-login', async (e, username, password) => {
   if (!sb) return { success: false, error: 'Supabase not configured' };
   const u = _normalizeUsername(username);
   const email = `${u}@${SUPABASE_DOMAIN}`;
-  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  // Cap the auth call so a flaky network can't make Sign In hang forever.
+  let data, error;
+  try {
+    const res = await _withTimeout(
+      sb.auth.signInWithPassword({ email, password }),
+      20000,
+      'cloud sign-in'
+    );
+    data = res.data; error = res.error;
+  } catch (timeoutErr) {
+    return { success: false, error: 'Sign-in timed out — check your internet connection and try again.' };
+  }
   if (error) return { success: false, error: error.message };
   _sbSession = data.session;
   _saveSbSession(data.session);
   // Look up role
   const { data: profile } = await sb.from('users').select('id, name, role, username, color, phone').eq('auth_user_id', data.user.id).single();
   _currentAppUserId = profile?.id || null;
-  // Hydrate local cache BEFORE returning so renderer doesn't read stale data on first paint
-  try { await _cloudHydrateStore(); } catch (e) { console.warn('[CLOUD] hydrate error:', e.message); }
-  // Then subscribe to realtime (also wait briefly for the websocket to settle)
+  // Fire hydrate in background so login returns immediately. The renderer listens for
+  // 'data-changed' (broadcast at end of hydrate) and refreshes its views automatically.
+  // This keeps the Sign In button responsive instead of dead for 5–15 seconds.
+  _cloudHydrateStore().catch(err => console.warn('[CLOUD] hydrate error:', err.message));
   _cloudSubscribeRealtime();
   return { success: true, user: profile, session: { expires_at: data.session.expires_at } };
 });
@@ -4184,8 +4196,8 @@ ipcMain.handle('cloud-restore-session', async () => {
     return { success: false };
   }
   _currentAppUserId = profile.id;
-  // Hydrate before returning — renderer awaits this so first paint has fresh data
-  try { await _cloudHydrateStore(); } catch (e) { console.warn('[CLOUD] hydrate error:', e.message); }
+  // Background hydrate — same rationale as cloud-login: keep restore-session fast.
+  _cloudHydrateStore().catch(err => console.warn('[CLOUD] hydrate error:', err.message));
   _cloudSubscribeRealtime();
   return { success: true, user: profile, session: { expires_at: session.expires_at } };
 });
