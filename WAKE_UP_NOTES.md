@@ -107,15 +107,32 @@ For multi-user verification (now that wife's PC will auto-update to 0.2.10):
 
 ---
 
-## 📱 Phone app (PWA)
+## 📱 Phone app (PWA) — MVP shipped
 
-Plan written in `PWA_PLAN.md`. Recommendation: **Vite + Svelte + TypeScript + Supabase JS + Workbox + Dexie** hosted on **Vercel** at a `field.interstateseptic.com` subdomain.
+**`field-pwa/index.html`** — single-file Progressive Web App, ~600 LOC. Phase 1 MVP is DONE and committed.
 
-**Phase 1 (MVP):** ~30 hours. Login + view today's schedule + mark complete (online only).
-**Phase 2:** ~50 hours. Photos, signatures, offline-first, realtime, install-as-PWA.
-**Phase 3:** ~25 hours. Disposal log, GPS stamping, push notifications.
+**Test it on your phone right now:**
+1. On your Windows PC, open PowerShell in the project folder, run: `cd field-pwa; npx --yes http-server -p 8080`
+2. Find your PC's local IP: `ipconfig` (look for IPv4 like 192.168.1.X)
+3. On your phone (same Wi-Fi), open `http://192.168.1.X:8080/`
+4. Log in as `chris.bissonnette` / `Issi5646` (or any tech account)
+5. Should show today's schedule for that tech, tap a job to see details, mark complete
 
-Total: 85-120 hours over 3 phases. I haven't started any code yet — would want your sign-off on the stack first.
+**To deploy publicly** (recommended next step):
+1. Go to vercel.com, sign in with GitHub
+2. New Project → import `interstate-septic-manager` repo → set Root Directory to `field-pwa` → Deploy
+3. Get a `*.vercel.app` URL; later you can add `field.interstateseptic.com` as a custom domain
+4. Send the URL to techs — they tap "Add to Home Screen" on their phone for full PWA experience
+
+**What works:** Login, view today's schedule (RLS filters to logged-in tech's jobs only), tap a job for full detail (customer info with tap-to-call, property with Open in Maps link, tank specs), mark complete with actual gallons + tech notes. Notes get appended to the job's notes field timestamped, and `actual_gallons` lands in the job's `data` jsonb.
+
+**What's NOT in Phase 1 yet** (per `PWA_PLAN.md`):
+- Photos/signature capture
+- True offline (Service Worker + IndexedDB cache)
+- Disposal log
+- Push notifications
+
+For Phase 2+ (~50 hrs), the audit recommended migrating to Vite + Svelte for maintainability. The single-file MVP is a fast way to get techs using something on real phones today; Phase 2 is when the offline-first machinery + Svelte refactor happens.
 
 ---
 
