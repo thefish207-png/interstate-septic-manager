@@ -151,8 +151,15 @@ function readCollection(collection) {
 function writeCollection(collection, data) {
   _store[collection] = data; // always update memory first
   const p = dbPath(collection);
-  try { fs.writeFileSync(p, JSON.stringify(data, null, 2)); } catch (err) {
+  // Atomic write: write to temp file, then rename. Prevents corrupt JSON from
+  // a force-quit / power loss mid-write (rename is atomic on NTFS/ext4).
+  const tmp = p + '.tmp';
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, p);
+  } catch (err) {
     console.error('[DB] Write failed for ' + collection + ':', err.message);
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
   }
 }
 
@@ -285,6 +292,23 @@ function _isCloudTable(collection) {
   return _CLOUD_TABLES.has(collection);
 }
 
+// Wrap a promise with a timeout — prevents hung cloud calls from blocking
+// the UI thread forever on flaky connections.
+function _withTimeout(promise, ms = 15000, label = 'operation') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms))
+  ]);
+}
+
+// Round to 2 decimals to avoid floating-point money drift
+// e.g. 0.1 + 0.2 → 0.30000000000000004; this gives 0.30
+function _money(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return 0;
+  return Math.round(n * 100) / 100;
+}
+
 function _cloudReady() {
   // We need _sbSession AND a configured client. _sbSession is module-scoped
   // and lives in the cloud-user block we added later. Use lazy-eval via globalThis.
@@ -349,14 +373,16 @@ async function upsertAsync(collection, item) {
   _store[collection] = items;
   broadcastDataChange(collection);
 
-  // 2. Cloud write (if available)
+  // 2. Cloud write (if available) — wrapped with 15s timeout
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
-      // Split into known columns + data jsonb catch-all so unknown fields
-      // (job_type, tech_notes, helpers, etc.) don't break the upsert
       const cloudPayload = _splitForCloud(collection, row);
-      const { data, error } = await sb.from(collection).upsert(cloudPayload).select().single();
+      const { data, error } = await _withTimeout(
+        sb.from(collection).upsert(cloudPayload).select().single(),
+        15000,
+        'cloud upsert ' + collection
+      );
 
       if (error) {
         console.warn('[CLOUD] upsertAsync', collection, 'failed (cache kept):', error.message);
@@ -392,7 +418,11 @@ async function removeAsync(collection, id) {
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
-      const { error } = await sb.from(collection).delete().eq('id', id);
+      const { error } = await _withTimeout(
+        sb.from(collection).delete().eq('id', id),
+        15000,
+        'cloud delete ' + collection
+      );
       if (error) console.warn('[CLOUD] removeAsync', collection, 'failed (cache already removed):', error.message);
     } catch (e) {
       console.warn('[CLOUD] removeAsync', collection, 'exception:', e.message);
@@ -1161,6 +1191,17 @@ ipcMain.handle('save-vehicle', async (e, data) => {
 });
 
 ipcMain.handle('delete-vehicle', async (e, id) => {
+  // Block delete if jobs/schedule_items/assignments still reference this vehicle
+  const jobs = (await readCollectionAsync('jobs')).filter(j => !j.deleted_at && j.vehicle_id === id);
+  const items = (await readCollectionAsync('schedule_items')).filter(i => !i.deleted_at && i.vehicle_id === id);
+  const assigns = (await readCollectionAsync('truck_day_assignments')).filter(a => a.vehicle_id === id);
+  const refs = jobs.length + items.length + assigns.length;
+  if (refs > 0) {
+    return {
+      success: false,
+      error: `Cannot delete: vehicle is still referenced by ${jobs.length} job(s), ${items.length} schedule item(s), and ${assigns.length} day assignment(s). Reassign or delete those first.`
+    };
+  }
   await removeAsync('vehicles', id);
   return { success: true };
 });
@@ -1525,7 +1566,7 @@ ipcMain.handle('save-job', async (e, data) => {
     const property = await findByIdAsync('properties', saved.property_id);
     const totalGal = Object.values(saved.gallons_pumped || {}).reduce((s, g) => s + (parseInt(g) || 0), 0);
     const lineItems = saved.line_items || [];
-    const subtotal = lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0);
+    const subtotal = _money(lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0));
 
     await upsertAsync('invoices', {
       invoice_number: invoiceNumber,
@@ -1597,10 +1638,19 @@ ipcMain.handle('save-job', async (e, data) => {
 });
 
 ipcMain.handle('update-job-status', async (e, id, status) => {
+  const VALID = ['scheduled','in_progress','completed','skipped','cancelled'];
+  if (!VALID.includes(status)) {
+    return { success: false, error: 'Invalid status: ' + status };
+  }
   const job = await findByIdAsync('jobs', id);
   if (!job) return { success: false, error: 'Job not found' };
   const updates = { ...job, status, updated_at: new Date().toISOString() };
-  if (status === 'completed') updates.completed_at = new Date().toISOString();
+  if (status === 'completed') {
+    updates.completed_at = new Date().toISOString();
+  } else if (job.completed_at && status !== 'completed') {
+    // Clear stale completed_at when leaving the completed state
+    updates.completed_at = null;
+  }
   await upsertAsync('jobs', updates);
 
   // Sync complete flag on linked invoice
@@ -1630,88 +1680,82 @@ ipcMain.handle('bulk-delete-customers', async (e, ids) => {
   const idSet = new Set(ids);
   sendProgress({ stage: 'reading', message: 'Loading data…' });
 
-  const customers = readCollection('customers').filter(c => !idSet.has(c.id));
-  const allProperties = readCollection('properties');
-  const removedPropIds = new Set(allProperties.filter(p => idSet.has(p.customer_id)).map(p => p.id));
-  const properties = allProperties.filter(p => !idSet.has(p.customer_id));
-  const tanks = readCollection('tanks').filter(t => !removedPropIds.has(t.property_id));
+  const allProperties = await readCollectionAsync('properties');
+  const childPropIds = allProperties.filter(p => idSet.has(p.customer_id)).map(p => p.id);
+  const allTanks = await readCollectionAsync('tanks');
+  const childTankIds = allTanks.filter(t => childPropIds.includes(t.property_id)).map(t => t.id);
 
-  sendProgress({ stage: 'saving', message: 'Writing to disk…', total: ids.length, current: ids.length });
-  await new Promise(r => setImmediate(r));
-  writeCollection('customers', customers);
-  writeCollection('properties', properties);
-  writeCollection('tanks', tanks);
-  broadcastDataChange('customers');
-  broadcastDataChange('properties');
-  broadcastDataChange('tanks');
+  let done = 0;
+  const total = ids.length + childPropIds.length + childTankIds.length;
+  sendProgress({ stage: 'saving', message: 'Deleting tanks…', total, current: 0 });
+  for (const tid of childTankIds) { await removeAsync('tanks', tid); sendProgress({ stage: 'saving', total, current: ++done }); }
+  sendProgress({ stage: 'saving', message: 'Deleting properties…', total, current: done });
+  for (const pid of childPropIds) { await removeAsync('properties', pid); sendProgress({ stage: 'saving', total, current: ++done }); }
+  sendProgress({ stage: 'saving', message: 'Deleting customers…', total, current: done });
+  for (const cid of ids) { await removeAsync('customers', cid); sendProgress({ stage: 'saving', total, current: ++done }); }
+
   sendProgress({ stage: 'done', deleted: ids.length });
   return { success: true, deleted: ids.length };
 });
 
 ipcMain.handle('bulk-delete-invoices', async (e, ids) => {
   const sendProgress = (p) => { try { e.sender.send('bulk-delete-progress', p); } catch (_) {} };
-  const idSet = new Set(ids);
   sendProgress({ stage: 'reading', message: 'Loading data…' });
-  const invoices = readCollection('invoices').filter(i => !idSet.has(i.id));
-  sendProgress({ stage: 'saving', message: 'Writing to disk…', total: ids.length, current: ids.length });
-  await new Promise(r => setImmediate(r));
-  writeCollection('invoices', invoices);
-  broadcastDataChange('invoices');
+  let done = 0;
+  for (const id of ids) {
+    await removeAsync('invoices', id);
+    sendProgress({ stage: 'saving', total: ids.length, current: ++done });
+  }
   sendProgress({ stage: 'done', deleted: ids.length });
   return { success: true, deleted: ids.length };
 });
 
 ipcMain.handle('bulk-cancel-invoices', async (e, ids, cancel) => {
-  const idSet = new Set(ids);
   const now = new Date().toISOString();
-  const invoices = readCollection('invoices').map(i =>
-    idSet.has(i.id) ? { ...i, cancelled: !!cancel, cancelled_at: cancel ? now : null, updated_at: now } : i
-  );
-  writeCollection('invoices', invoices);
-  broadcastDataChange('invoices');
+  const invoices = await readCollectionAsync('invoices');
+  const idSet = new Set(ids);
+  for (const inv of invoices) {
+    if (!idSet.has(inv.id)) continue;
+    await upsertAsync('invoices', { ...inv, cancelled: !!cancel, cancelled_at: cancel ? now : null });
+  }
   return { success: true, updated: ids.length };
 });
 
 ipcMain.handle('bulk-delete-jobs', async (e, ids) => {
   const sendProgress = (p) => { try { e.sender.send('bulk-delete-progress', p); } catch (_) {} };
-  const idSet = new Set(ids);
   sendProgress({ stage: 'reading', message: 'Loading data…' });
-
-  const jobs = readCollection('jobs').slice();
-  const invoices = readCollection('invoices').slice();
+  const idSet = new Set(ids);
   const now = new Date().toISOString();
 
-  for (let i = 0; i < jobs.length; i++) {
-    if (idSet.has(jobs[i].id)) {
-      jobs[i] = { ...jobs[i], deleted_at: now, updated_at: now };
+  // Soft-delete each job (sets deleted_at) — propagates to cloud
+  const jobs = await readCollectionAsync('jobs');
+  let done = 0;
+  for (const j of jobs) {
+    if (!idSet.has(j.id)) continue;
+    await upsertAsync('jobs', { ...j, deleted_at: now });
+    sendProgress({ stage: 'saving', total: ids.length, current: ++done });
+  }
+  // Soft-delete linked invoices
+  const invoices = await readCollectionAsync('invoices');
+  for (const inv of invoices) {
+    if (idSet.has(inv.job_id) && !inv.deleted_at) {
+      await upsertAsync('invoices', { ...inv, deleted_at: now });
     }
   }
-  for (let i = 0; i < invoices.length; i++) {
-    if (idSet.has(invoices[i].job_id) && !invoices[i].deleted_at) {
-      invoices[i] = { ...invoices[i], deleted_at: now, updated_at: now };
-    }
-  }
-
-  sendProgress({ stage: 'saving', message: 'Writing to disk…', total: ids.length, current: ids.length });
-  await new Promise(r => setImmediate(r));
-  writeCollection('jobs', jobs);
-  writeCollection('invoices', invoices);
-  broadcastDataChange('jobs');
-  broadcastDataChange('invoices');
   sendProgress({ stage: 'done', deleted: ids.length });
   return { success: true, deleted: ids.length };
 });
 
 ipcMain.handle('purge-trash-item', async (e, id, type) => {
   if (type === 'job') {
-    remove('jobs', id);
-    const invoices = readCollection('invoices');
+    await removeAsync('jobs', id);
+    const invoices = await readCollectionAsync('invoices');
     const linked = invoices.find(i => i.job_id === id);
-    if (linked) remove('invoices', linked.id);
+    if (linked) await removeAsync('invoices', linked.id);
   } else if (type === 'manifest') {
-    remove('schedule_items', id);
+    await removeAsync('schedule_items', id);
   } else if (type === 'payment') {
-    remove('payments', id);
+    await removeAsync('payments', id);
   } else if (type === 'invoice') {
     remove('invoices', id);
   } else if (type === 'service_due_notice') {
@@ -1723,64 +1767,56 @@ ipcMain.handle('purge-trash-item', async (e, id, type) => {
 });
 
 ipcMain.handle('restore-trash-item', async (e, id, type) => {
-  if (type === 'job') {
-    const jobs = readCollection('jobs');
-    const job = jobs.find(j => j.id === id);
-    if (job) {
-      upsert('jobs', { ...job, deleted_at: null });
-      // Restore linked invoice if it was soft-deleted with this job
-      const invoices = readCollection('invoices');
-      const linkedInv = invoices.find(i => i.job_id === id && i.deleted_at);
-      if (linkedInv) upsert('invoices', { ...linkedInv, deleted_at: null });
-    }
-  } else if (type === 'manifest') {
-    const items = readCollection('schedule_items');
-    const item = items.find(i => i.id === id);
-    if (item) upsert('schedule_items', { ...item, deleted_at: null });
-  } else if (type === 'payment') {
-    const payments = readCollection('payments');
-    const payment = payments.find(p => p.id === id);
-    if (payment) {
-      upsert('payments', { ...payment, deleted_at: null });
-      // Recalculate invoice with payment restored
-      if (payment.invoice_id) {
-        const allPmts = readCollection('payments').filter(p => p.invoice_id === payment.invoice_id && !p.deleted_at);
-        const totalPaid = allPmts.reduce((s, p) => p.type === 'refund' ? s - (parseFloat(p.amount) || 0) : s + (parseFloat(p.amount) || 0), 0);
-        const invoices = readCollection('invoices');
-        const inv = invoices.find(i => i.id === payment.invoice_id);
-        if (inv) {
-          inv.amount_paid = Math.max(0, totalPaid);
-          const invTotal = parseFloat(inv.total) || 0;
-          inv.payment_status = inv.amount_paid >= invTotal && invTotal > 0 ? 'paid' : inv.amount_paid > 0 ? 'partial' : 'unpaid';
-          writeCollection('invoices', invoices);
+  try {
+    if (type === 'job') {
+      const job = await findByIdAsync('jobs', id);
+      if (job) {
+        await upsertAsync('jobs', { ...job, deleted_at: null });
+        const invoices = await readCollectionAsync('invoices');
+        const linkedInv = invoices.find(i => i.job_id === id && i.deleted_at);
+        if (linkedInv) await upsertAsync('invoices', { ...linkedInv, deleted_at: null });
+      }
+    } else if (type === 'manifest') {
+      const item = await findByIdAsync('schedule_items', id);
+      if (item) await upsertAsync('schedule_items', { ...item, deleted_at: null });
+    } else if (type === 'payment') {
+      const payment = await findByIdAsync('payments', id);
+      if (payment) {
+        await upsertAsync('payments', { ...payment, deleted_at: null });
+        if (payment.invoice_id) {
+          const pmts = (await readCollectionAsync('payments')).filter(p => p.invoice_id === payment.invoice_id && !p.deleted_at);
+          const totalPaid = pmts.reduce((s, p) => p.type === 'refund' ? s - (parseFloat(p.amount) || 0) : s + (parseFloat(p.amount) || 0), 0);
+          const inv = await findByIdAsync('invoices', payment.invoice_id);
+          if (inv) {
+            const updated = { ...inv, amount_paid: Math.max(0, totalPaid) };
+            const invTotal = parseFloat(inv.total) || 0;
+            updated.payment_status = updated.amount_paid >= invTotal && invTotal > 0 ? 'paid' : updated.amount_paid > 0 ? 'partial' : 'unpaid';
+            await upsertAsync('invoices', updated);
+          }
         }
       }
-    }
-  } else if (type === 'invoice') {
-    const invoices = readCollection('invoices');
-    const inv = invoices.find(i => i.id === id);
-    if (inv) {
-      upsert('invoices', { ...inv, deleted_at: null });
-      // Clear invoice_suppressed on the linked job so it doesn't confuse backfill
-      if (inv.job_id) {
-        const jobs = readCollection('jobs');
-        const idx = jobs.findIndex(j => j.id === inv.job_id);
-        if (idx >= 0 && jobs[idx].invoice_suppressed) {
-          jobs[idx] = { ...jobs[idx], invoice_suppressed: false, updated_at: new Date().toISOString() };
-          writeCollection('jobs', jobs);
+    } else if (type === 'invoice') {
+      const inv = await findByIdAsync('invoices', id);
+      if (inv) {
+        await upsertAsync('invoices', { ...inv, deleted_at: null });
+        if (inv.job_id) {
+          const job = await findByIdAsync('jobs', inv.job_id);
+          if (job && job.invoice_suppressed) {
+            await upsertAsync('jobs', { ...job, invoice_suppressed: false });
+          }
         }
       }
+    } else if (type === 'service_due_notice') {
+      const notice = await findByIdAsync('service_due_notices', id);
+      if (notice) await upsertAsync('service_due_notices', { ...notice, deleted_at: null });
+    } else if (type === 'disposal_load') {
+      const load = await findByIdAsync('disposal_loads', id);
+      if (load) await upsertAsync('disposal_loads', { ...load, deleted_at: null });
     }
-  } else if (type === 'service_due_notice') {
-    const notices = readCollection('service_due_notices');
-    const notice = notices.find(n => n.id === id);
-    if (notice) upsert('service_due_notices', { ...notice, deleted_at: null });
-  } else if (type === 'disposal_load') {
-    const loads = readCollection('disposal_loads');
-    const load = loads.find(l => l.id === id);
-    if (load) upsert('disposal_loads', { ...load, deleted_at: null });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
-  return { success: true };
 });
 
 ipcMain.handle('get-trash', async () => {
@@ -2027,62 +2063,60 @@ ipcMain.handle('get-invoice-filter-options', async () => {
 });
 
 ipcMain.handle('backfill-invoices', async () => {
-  // Skip deleted jobs so backfill doesn't recreate invoices for things in the trash
-  const jobs = readCollection('jobs').filter(j => !j.deleted_at);
-  const invoices = readCollection('invoices'); // keep all (incl deleted) so we don't re-link job_ids
-  const customers = readCollection('customers');
-  const properties = readCollection('properties');
-  const linkedJobIds = new Set(invoices.map(i => i.job_id).filter(Boolean));
+  try {
+    const jobs = (await readCollectionAsync('jobs')).filter(j => !j.deleted_at);
+    const invoices = await readCollectionAsync('invoices');
+    const customers = await readCollectionAsync('customers');
+    const properties = await readCollectionAsync('properties');
+    const linkedJobIds = new Set(invoices.map(i => i.job_id).filter(Boolean));
 
-  let created = 0;
-  let nextNum = 1;
-  if (invoices.length > 0) {
-    const nums = invoices.map(i => parseInt((i.invoice_number || '0').replace(/\D/g, '')) || 0);
-    nextNum = Math.max(...nums) + 1;
+    let created = 0;
+    let nextNum = 1;
+    if (invoices.length > 0) {
+      const nums = invoices.map(i => parseInt((i.invoice_number || '0').replace(/\D/g, '')) || 0);
+      nextNum = Math.max(...nums) + 1;
+    }
+
+    for (const job of jobs) {
+      if (linkedJobIds.has(job.id)) continue;
+      if (job.invoice_suppressed) continue;
+      const customer = customers.find(c => c.id === job.customer_id);
+      const property = properties.find(p => p.id === job.property_id);
+      const totalGal = Object.values(job.gallons_pumped || {}).reduce((s, g) => s + (parseInt(g) || 0), 0);
+      const lineItems = job.line_items || [];
+      const subtotal = lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0);
+
+      await upsertAsync('invoices', {
+        invoice_number: String(nextNum++),
+        job_id: job.id,
+        customer_id: job.customer_id,
+        property_id: job.property_id,
+        svc_date: job.scheduled_date || null,
+        vehicle_id: job.vehicle_id || null,
+        driver_id: job.assigned_to || null,
+        gallons_pumped: totalGal,
+        job_codes: job.service_type || '',
+        complete: job.status === 'completed',
+        line_items: lineItems,
+        subtotal, tax_rate: 0, tax_amount: 0, total: subtotal,
+        status: 'draft', payment_status: 'unpaid', payment_method: '', amount_paid: 0,
+        billing_company: customer?.company || customer?.name || '',
+        property_address: property?.address || '',
+        property_city: property?.city || '',
+        notes: '',
+        created_by: _currentAppUserId || null,
+      });
+      created++;
+    }
+    return { created };
+  } catch (err) {
+    return { created: 0, error: err.message };
   }
-
-  for (const job of jobs) {
-    if (linkedJobIds.has(job.id)) continue; // already has invoice
-    if (job.invoice_suppressed) continue; // invoice was manually deleted
-    const customer = customers.find(c => c.id === job.customer_id);
-    const property = properties.find(p => p.id === job.property_id);
-    const totalGal = Object.values(job.gallons_pumped || {}).reduce((s, g) => s + (parseInt(g) || 0), 0);
-    const lineItems = job.line_items || [];
-    const subtotal = lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0);
-
-    upsert('invoices', {
-      invoice_number: String(nextNum++),
-      job_id: job.id,
-      customer_id: job.customer_id,
-      property_id: job.property_id,
-      svc_date: job.scheduled_date || null,
-      vehicle_id: job.vehicle_id || null,
-      driver_id: job.assigned_to || null,
-      gallons_pumped: totalGal,
-      job_codes: job.service_type || '',
-      complete: job.status === 'completed',
-      line_items: lineItems,
-      subtotal,
-      tax_rate: 0,
-      tax_amount: 0,
-      total: subtotal,
-      status: 'draft',
-      payment_status: 'unpaid',
-      payment_method: '',
-      amount_paid: 0,
-      billing_company: customer?.company || customer?.name || '',
-      property_address: property?.address || '',
-      property_city: property?.city || '',
-      notes: '',
-    });
-    created++;
-  }
-  return { created };
 });
 
 // ===== PAYMENTS / ACCOUNTING =====
 ipcMain.handle('get-customer-balance', async (e, customerId) => {
-  const invoices = readCollection('invoices').filter(i => i.customer_id === customerId && !i.deleted_at);
+  const invoices = (await readCollectionAsync('invoices')).filter(i => i.customer_id === customerId && !i.deleted_at);
   const totalInvoiced = invoices.reduce((s, i) => s + (parseFloat(i.total) || 0), 0);
   const totalPaid = invoices.reduce((s, i) => s + (parseFloat(i.amount_paid) || 0), 0);
   const balance = totalInvoiced - totalPaid;
@@ -2433,13 +2467,14 @@ ipcMain.handle('send-service-due-notification', async (e, id, daysBeforeDue) => 
 });
 
 ipcMain.handle('schedule-service-due-notifications', async (e, id, schedule) => {
-  const notices = readCollection('service_due_notices');
-  const notice = notices.find(n => n.id === id);
-  if (!notice) return { success: false, error: 'Notice not found' };
-
-  notice.notification_schedule = schedule || [];
-  writeCollection('service_due_notices', notices);
-  return { success: true, data: notice };
+  try {
+    const notice = await findByIdAsync('service_due_notices', id);
+    if (!notice) return { success: false, error: 'Notice not found' };
+    const updated = await upsertAsync('service_due_notices', { ...notice, notification_schedule: schedule || [] });
+    return { success: true, data: updated };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 // ===== DISPOSAL LOADS =====
@@ -3768,13 +3803,16 @@ ipcMain.handle('delete-service-product', async (e, id) => {
 
 // ===== USERS (TECHS) =====
 ipcMain.handle('get-users', async () => {
-  const users = await readCollectionAsync('users');
+  const users = (await readCollectionAsync('users')).filter(u => !u.deleted_at);
   users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   return { data: users };
 });
 
 ipcMain.handle('delete-user', async (e, id) => {
-  await removeAsync('users', id);
+  // Soft-delete instead of hard delete — preserves attribution on historical jobs/invoices
+  const user = await findByIdAsync('users', id);
+  if (!user) return { success: false, error: 'User not found' };
+  await upsertAsync('users', { ...user, deleted_at: new Date().toISOString() });
   return { success: true };
 });
 
@@ -3787,18 +3825,25 @@ ipcMain.handle('auth-needs-setup', async () => {
 });
 
 ipcMain.handle('auth-setup', async (e, data) => {
-  // First time setup - create admin account
-  const salt = bcrypt.genSaltSync(10);
-  const hash = bcrypt.hashSync(data.password, salt);
-  const user = {
-    name: data.name,
-    phone: data.phone || '',
-    username: data.username.toLowerCase(),
-    password_hash: hash,
-    role: 'admin',
-  };
-  const saved = upsert('users', user);
-  return { success: true, data: { id: saved.id, name: saved.name, role: saved.role, username: saved.username } };
+  // First time setup - create admin account (cloud-aware now)
+  if (!data || !data.password || !data.username || !data.name) {
+    return { success: false, error: 'Name, username, and password are required.' };
+  }
+  try {
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync(data.password, salt);
+    const user = {
+      name: data.name,
+      phone: data.phone || '',
+      username: data.username.toLowerCase(),
+      password_hash: hash,
+      role: 'owner',
+    };
+    const saved = await upsertAsync('users', user);
+    return { success: true, data: { id: saved.id, name: saved.name, role: saved.role, username: saved.username } };
+  } catch (err) {
+    return { success: false, error: err.message || 'Setup failed.' };
+  }
 });
 
 ipcMain.handle('auth-login', async (e, username, password) => {
@@ -3825,26 +3870,34 @@ ipcMain.handle('clear-saved-creds', async () => {
 });
 
 ipcMain.handle('save-user', async (e, data) => {
-  // If password is provided, hash it
-  if (data.password && data.password.trim()) {
-    const salt = bcrypt.genSaltSync(10);
-    data.password_hash = bcrypt.hashSync(data.password, salt);
+  if (!data || typeof data !== 'object') return { success: false, error: 'Invalid user data' };
+  try {
+    if (data.password && data.password.trim()) {
+      const salt = bcrypt.genSaltSync(10);
+      data.password_hash = bcrypt.hashSync(data.password, salt);
+    }
+    delete data.password;
+    const saved = await upsertAsync('users', data);
+    return { success: true, data: saved };
+  } catch (err) {
+    return { success: false, error: err.message || 'Save failed' };
   }
-  delete data.password; // Never store plain password
-  const saved = upsert('users', data);
-  return { success: true, data: saved };
 });
 
 ipcMain.handle('change-password', async (e, userId, newPassword) => {
-  const users = readCollection('users');
-  const idx = users.findIndex(u => u.id === userId);
-  if (idx < 0) return { success: false, error: 'User not found.' };
-
-  const salt = bcrypt.genSaltSync(10);
-  users[idx].password_hash = bcrypt.hashSync(newPassword, salt);
-  users[idx].updated_at = new Date().toISOString();
-  writeCollection('users', users);
-  return { success: true };
+  if (!userId || !newPassword || typeof newPassword !== 'string') {
+    return { success: false, error: 'User ID and new password required.' };
+  }
+  try {
+    const user = await findByIdAsync('users', userId);
+    if (!user) return { success: false, error: 'User not found.' };
+    const salt = bcrypt.genSaltSync(10);
+    const updated = { ...user, password_hash: bcrypt.hashSync(newPassword, salt) };
+    await upsertAsync('users', updated);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message || 'Password change failed' };
+  }
 });
 
 // =====================================================================

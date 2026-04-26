@@ -7525,11 +7525,11 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
   const initTankCount = selPropTanks.length;
   const initTankGal = selPropTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
   const initTankCheckHtml = selPropTanks.map((t, i) => `
-    <label style="display:flex;align-items:baseline;gap:4px;cursor:pointer;padding:2px 0;overflow:hidden;">
+    <label style="display:flex;align-items:baseline;gap:4px;cursor:pointer;padding:2px 0;overflow:hidden;color:var(--text);">
       <input type="checkbox" class="tank-check" data-idx="${i}" checked onchange="onTankCheckChange()">
       <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;">${esc(t.name || t.tank_type || 'Tank')}</span>
-      <span style="color:#999;flex-shrink:0;">&nbsp;(${esc(t.tank_type || '')})</span>
-      <span style="margin-left:auto;flex-shrink:0;color:#555;">&nbsp;${(t.volume_gallons || 0).toLocaleString()}</span>
+      <span style="color:var(--text-muted);flex-shrink:0;">&nbsp;(${esc(t.tank_type || '')})</span>
+      <span style="margin-left:auto;flex-shrink:0;color:var(--text-light);">&nbsp;${(t.volume_gallons || 0).toLocaleString()}</span>
     </label>
   `).join('');
 
@@ -7593,9 +7593,9 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
         </select>
       </div>
     </div>
-    <div id="jobTankSelector" style="${initTankCount > 0 ? 'display:block' : 'display:none'};border:1px solid #e0e0e0;border-radius:6px;padding:12px;margin-bottom:12px;background:#fafafa;">
+    <div id="jobTankSelector" style="${initTankCount > 0 ? 'display:block' : 'display:none'};border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px;background:var(--bg-white);color:var(--text);">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-        <label style="display:flex;align-items:center;gap:5px;font-weight:600;cursor:pointer;margin:0;">
+        <label style="display:flex;align-items:center;gap:5px;font-weight:600;cursor:pointer;margin:0;color:var(--text);">
           <input type="checkbox" id="tankSelectAll" onchange="toggleAllTanks(this.checked)" checked> All
         </label>
         <span id="tankCountBadge" class="badge badge-info" style="font-size:12px;padding:3px 8px;">${initTankCount} Tank${initTankCount !== 1 ? 's' : ''}</span>
@@ -8428,11 +8428,11 @@ async function onJobPropertyChange() {
   // Build tank checkbox grid
   if (gridEl) {
     gridEl.innerHTML = jobPropertyTanks.map((t, i) => `
-      <label style="display:flex;align-items:baseline;gap:4px;cursor:pointer;padding:2px 0;white-space:nowrap;overflow:hidden;">
+      <label style="display:flex;align-items:baseline;gap:4px;cursor:pointer;padding:2px 0;white-space:nowrap;overflow:hidden;color:var(--text);">
         <input type="checkbox" class="tank-check" data-idx="${i}" checked onchange="onTankCheckChange()">
         <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;">${esc(t.name || t.tank_type || 'Tank')}</span>
-        <span style="color:#999;flex-shrink:0;">&nbsp;(${esc(t.tank_type || '')})</span>
-        <span style="margin-left:auto;flex-shrink:0;color:#555;">&nbsp;${(t.volume_gallons || 0).toLocaleString()}</span>
+        <span style="color:var(--text-muted);flex-shrink:0;">&nbsp;(${esc(t.tank_type || '')})</span>
+        <span style="margin-left:auto;flex-shrink:0;color:var(--text-light);">&nbsp;${(t.volume_gallons || 0).toLocaleString()}</span>
       </label>
     `).join('');
   }
