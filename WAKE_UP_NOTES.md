@@ -1,13 +1,13 @@
 # Morning Notes — What I Did Overnight
 
-**TL;DR:** Audited the entire app, shipped 6 releases (v0.2.5 → v0.2.10), fixed ~25 real bugs, drafted the phone-app architecture plan. Read this file first, then check `OVERNIGHT_AUDIT.md` for the full bug list and `PWA_PLAN.md` for the phone-app design.
+**TL;DR:** Audited the entire app, shipped 7 releases (v0.2.5 → v0.2.11), fixed ~30 real bugs, added route-sheet PDF + tablet drag support + cloud status indicator, drafted the phone-app architecture plan. Read this file first, then check `OVERNIGHT_AUDIT.md` for the full bug list and `PWA_PLAN.md` for the phone-app design.
 
 ---
 
-## What's now in production (v0.2.10)
+## What's now in production (v0.2.11)
 
 If your installed ISM hasn't auto-updated yet, force it:
-- Look for the bottom-right banner ("Update v0.2.10 ready") → click it
+- Look for the bottom-right banner ("Update v0.2.11 ready") → click it
 - Or: close ISM, reopen — auto-updater fires within 30s of launch
 - Or: download manually: https://github.com/thefish207-png/interstate-septic-manager/releases/latest
 
@@ -42,6 +42,8 @@ If your installed ISM hasn't auto-updated yet, force it:
 - Dark theme: ~50 inline-style hardcoded white/grey backgrounds now respect dark theme via CSS overrides
 - Modals: Escape closes, Ctrl+Enter triggers primary button
 - Schedule toolbar: native date picker (jump to any date instantly), Today button, keyboard shortcuts (T, [, ], ←, →)
+- **Schedule: "Print Routes" button** — generates a PDF with one route sheet per truck for the day (driver, customer, address, phone, tank info, services, signature line). Drivers can take this to the truck for offline backup.
+- **Tablet support: schedule drag now works on touchscreens** (touchstart→mousedown shim — was mouse-only before)
 - Customers list: column sort (Name/Address/Email/Phone/Balance), CSV export, context-aware empty state with CTA
 - Reports: Export CSV (was a stub "coming soon!" toast)
 - Dashboard: Today's Jobs and Reminders tables fixed (were rendering "undefined" cells)
