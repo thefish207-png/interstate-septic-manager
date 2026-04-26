@@ -4066,6 +4066,7 @@ async function loadSchedule() {
         <button class="btn btn-sm ${scheduleView === 'week' ? 'btn-primary' : 'btn-secondary'}" onclick="setScheduleView('week')">WEEK</button>
         <button class="btn btn-sm ${scheduleView === 'day' ? 'btn-primary' : 'btn-secondary'}" onclick="scheduleDate = new Date(); setScheduleView('day');">DAY</button>
         <button class="btn btn-sm" style="background:#1565c0;color:#fff;" onclick="toggleScheduleMap()">&#128506; Map</button>
+        <button class="btn btn-sm" style="background:#43a047;color:#fff;" onclick="printRouteSheets()" title="Print one route sheet per truck for today">&#128424; Print Routes</button>
         <button class="btn btn-sm" style="background:linear-gradient(135deg,#7c4dff,#448aff);color:#fff;font-weight:700;" onclick="aiOptimizeDay()" title="AI-optimize routes, truck assignments, and dump points for the day">&#9889; AI Optimize</button>
         <button class="btn btn-sm" style="background:#e65100;color:#fff;" onclick="seedTestData()">+ Demo</button>
         <button class="btn btn-sm" style="background:#b71c1c;color:#fff;" onclick="unseedTestData()">- Demo</button>
@@ -6589,6 +6590,111 @@ function jumpScheduleToDate(dateStr) {
   loadSchedule();
 }
 
+// Generate per-truck printable route sheets for the current schedule day.
+// Combined into one PDF (one page per truck, page-break between).
+async function printRouteSheets() {
+  try {
+    const dateStr = formatDate(scheduleDate);
+    const [{ data: jobs }, { data: vehicles }, { data: users }, { data: dayAssigns }, { data: scheduleItems }] = await Promise.all([
+      window.api.getJobs({ date: dateStr }),
+      window.api.getVehicles(),
+      window.api.getUsers(),
+      window.api.getTruckDayAssignments(dateStr),
+      window.api.getScheduleItems(null, dateStr)
+    ]);
+    const dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][scheduleDate.getDay()];
+    const monthName = ['January','February','March','April','May','June','July','August','September','October','November','December'][scheduleDate.getMonth()];
+    const longDate = `${dayName}, ${monthName} ${scheduleDate.getDate()}, ${scheduleDate.getFullYear()}`;
+
+    let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Route Sheets</title>';
+    html += '<style>body{font-family:Arial,sans-serif;color:#000;margin:0;padding:0;font-size:12px;}'
+         + '.page{padding:24px;page-break-after:always;}.page:last-child{page-break-after:auto;}'
+         + 'h1{margin:0 0 4px 0;font-size:24px;}h2{margin:0 0 12px 0;font-size:14px;color:#444;font-weight:normal;}'
+         + 'table{width:100%;border-collapse:collapse;margin-top:8px;}'
+         + 'th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;}'
+         + 'th{background:#1b5e20;color:#fff;font-size:11px;}'
+         + '.stop-num{font-weight:700;font-size:14px;width:28px;text-align:center;}'
+         + '.cust{font-weight:700;}.addr{font-size:11px;color:#333;}'
+         + '.notes{font-size:11px;color:#555;font-style:italic;margin-top:2px;}'
+         + '.gallons{text-align:right;font-weight:700;}'
+         + '.sig{margin-top:30px;border-top:1px solid #000;width:300px;padding-top:4px;font-size:10px;color:#666;}'
+         + '.empty{padding:40px;text-align:center;color:#888;font-style:italic;}'
+         + '</style></head><body>';
+
+    const sortedVehicles = [...(vehicles || [])].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    let pageCount = 0;
+
+    for (const v of sortedVehicles) {
+      const truckJobs = (jobs || []).filter(j => j.vehicle_id === v.id && !j.deleted_at)
+        .sort((a, b) => {
+          const sa = a.sort_order != null ? a.sort_order : 9999;
+          const sb = b.sort_order != null ? b.sort_order : 9999;
+          if (sa !== sb) return sa - sb;
+          return (a.scheduled_time || '').localeCompare(b.scheduled_time || '');
+        });
+      if (!truckJobs.length) continue;
+      pageCount++;
+
+      // Resolve driver
+      const dayAssign = (dayAssigns || []).find(a => a.vehicle_id === v.id);
+      const driverId = dayAssign?.user_id || v.default_tech_id;
+      const driver = (users || []).find(u => u.id === driverId);
+
+      // Compute capacity used
+      const totalGal = truckJobs.reduce((s, j) => {
+        const tanks = j.property?.tanks || [];
+        return s + tanks.reduce((ss, t) => ss + (t.volume_gallons || 0), 0);
+      }, 0);
+
+      html += '<div class="page">';
+      html += `<h1>${esc(v.name || 'Truck')} — Route for ${esc(longDate)}</h1>`;
+      html += `<h2>Driver: <strong>${esc(driver?.name || 'Unassigned')}</strong> &nbsp;·&nbsp; ${truckJobs.length} stop${truckJobs.length === 1 ? '' : 's'} &nbsp;·&nbsp; ~${totalGal.toLocaleString()} gallons of capacity needed (truck holds ${(v.capacity_gallons || 0).toLocaleString()})</h2>`;
+      html += '<table>';
+      html += '<thead><tr><th>#</th><th>Time</th><th>Customer / Property</th><th>Phone</th><th>Tank(s)</th><th>Service</th><th>Done?</th></tr></thead><tbody>';
+      truckJobs.forEach((j, i) => {
+        const cust = j.customers || {};
+        const prop = j.property || {};
+        const tanks = prop.tanks || [];
+        const tankSummary = tanks.length === 0 ? '—' : tanks.map(t => `${t.tank_type || 'Tank'} (${(t.volume_gallons || 0).toLocaleString()} gal)`).join('<br>');
+        const services = (j.line_items || []).map(li => li.description).filter(Boolean).join(', ') || j.service_type || '—';
+        const phone = cust.phone_cell || cust.phone || '—';
+        const addr = [prop.address || '', prop.city || ''].filter(Boolean).join(', ');
+        const directionsNote = prop.directions ? `<div class="notes">📍 ${esc(prop.directions)}</div>` : '';
+        const propNotes = prop.notes ? `<div class="notes">${esc(prop.notes.slice(0, 200))}</div>` : '';
+        const time = j.scheduled_time || '';
+        html += '<tr>';
+        html += `<td class="stop-num">${i + 1}</td>`;
+        html += `<td>${esc(time)}</td>`;
+        html += `<td><div class="cust">${esc(cust.name || cust.company || 'N/A')}</div><div class="addr">${esc(addr)}</div>${directionsNote}${propNotes}</td>`;
+        html += `<td>${esc(phone)}</td>`;
+        html += `<td>${tankSummary}</td>`;
+        html += `<td>${esc(services)}</td>`;
+        html += '<td style="width:60px;text-align:center;">☐</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      html += '<div class="sig">Driver signature / Date completed</div>';
+      html += '</div>';
+    }
+
+    if (pageCount === 0) {
+      showToast('No jobs on the schedule for ' + longDate + '.', 'info');
+      return;
+    }
+
+    html += '</body></html>';
+    const filename = `Route-Sheets-${dateStr}.pdf`;
+    const result = await window.api.generatePdf(html, filename);
+    if (result?.success) {
+      showToast(`Route sheets saved (${pageCount} truck${pageCount === 1 ? '' : 's'}).`, 'success');
+    } else if (!result?.canceled) {
+      showToast('PDF generation failed: ' + (result?.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    showToast('Failed to print routes: ' + e.message, 'error');
+  }
+}
+
 // Old HTML5 drag functions kept as no-ops in case any stray references exist
 function onChipDragStart() {}
 function onScheduleItemDragStart() {}
@@ -6723,6 +6829,43 @@ function _scheduleRestoreScroll() {
 // ===== CUSTOM POINTER-BASED DRAG & DROP (no HTML5 drag API) =====
 let _pDrag = null; // { type, id, source, el, ghost, startY, startX, started }
 let _pDragAutoScroll = null;
+
+// Touch → mouse shim so the existing mouse-only drag handlers also work on
+// tablets / touchscreens. Listens at the document level on capture phase so
+// touchstart on a `.truck-job-card` or `.draggable-chip` fires the equivalent
+// mousedown that the existing onJobMouseDown / onChipMouseDown handlers
+// already wire up via inline attributes.
+(function installTouchShim() {
+  if (window._touchShimInstalled) return;
+  window._touchShimInstalled = true;
+  function fireMouse(type, touchEvt) {
+    const t = touchEvt.touches[0] || touchEvt.changedTouches[0];
+    if (!t) return;
+    const evt = new MouseEvent(type, {
+      bubbles: true, cancelable: true,
+      view: window, button: 0,
+      clientX: t.clientX, clientY: t.clientY,
+      screenX: t.screenX, screenY: t.screenY
+    });
+    (touchEvt.target || document.body).dispatchEvent(evt);
+  }
+  // Only forward touches that started on a draggable element to avoid
+  // breaking native scrolling on regular page content
+  document.addEventListener('touchstart', (e) => {
+    const t = e.target.closest('.truck-job-card, .draggable-chip, .schedule-item');
+    if (!t) return;
+    fireMouse('mousedown', e);
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!_pDrag) return;
+    fireMouse('mousemove', e);
+    e.preventDefault(); // prevent scroll while dragging
+  }, { passive: false });
+  document.addEventListener('touchend', (e) => {
+    if (!_pDrag) return;
+    fireMouse('mouseup', e);
+  }, { passive: true });
+})();
 let _scheduleUndoStack = []; // stack of { jobs: [{id, vehicle_id, assigned_to, sort_order}] }
 
 function _pDragCleanup() {
