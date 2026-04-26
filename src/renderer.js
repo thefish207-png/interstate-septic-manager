@@ -1292,23 +1292,57 @@ let currentCustomerId = null;
 let currentPropertyId = null;
 let lastServiceCategoryId = '';
 
+// Customer list sort state — persisted across loads
+window._custSortBy = window._custSortBy || 'name';
+window._custSortDir = window._custSortDir || 'asc';
+window.setCustSort = function(col) {
+  if (window._custSortBy === col) {
+    window._custSortDir = window._custSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    window._custSortBy = col;
+    window._custSortDir = (col === 'balance') ? 'desc' : 'asc';
+  }
+  loadCustomers(document.getElementById('customerSearch')?.value || '');
+};
+
 async function loadCustomers(search = '') {
   navHistory = []; // reset nav stack on top-level page
   currentCustomerId = null;
   currentPropertyId = null;
   const page = document.getElementById('page-customers');
   const { data: customers } = await window.api.getCustomers(search);
+
+  // Sort
+  const sortKey = window._custSortBy;
+  const sortDir = window._custSortDir === 'desc' ? -1 : 1;
+  customers.sort((a, b) => {
+    let va, vb;
+    if (sortKey === 'name') { va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); }
+    else if (sortKey === 'address') { va = (a.primary_address || '').toLowerCase(); vb = (b.primary_address || '').toLowerCase(); }
+    else if (sortKey === 'email') { va = (a.email || '').toLowerCase(); vb = (b.email || '').toLowerCase(); }
+    else if (sortKey === 'phone') { va = (a.phone_cell || a.phone || '').toLowerCase(); vb = (b.phone_cell || b.phone || '').toLowerCase(); }
+    else if (sortKey === 'balance') { va = a.balance || 0; vb = b.balance || 0; }
+    else { va = (a.name || ''); vb = (b.name || ''); }
+    if (va < vb) return -1 * sortDir;
+    if (va > vb) return  1 * sortDir;
+    return 0;
+  });
+
   allCustomers = customers;
+
+  const arrow = (col) => window._custSortBy === col ? (window._custSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const head = (col, label) => `<th style="cursor:pointer;user-select:none;" onclick="setCustSort('${col}')">${label}${arrow(col)}</th>`;
 
   page.innerHTML = `
     <div class="search-bar" style="display:flex;gap:8px;align-items:center;">
       <input type="text" id="customerSearch" placeholder="Search customers by name, phone, email, or property address..." value="${search}" oninput="debounceCustomerSearch()" style="flex:1;">
+      <button class="btn btn-secondary btn-sm" onclick="exportCustomersCsv()">Export CSV</button>
       <button class="btn btn-danger btn-sm" id="customersBulkDeleteBtn" onclick="bulkDeleteCustomers()" disabled>Delete Selected (0)</button>
     </div>
     ${customers.length === 0 ? `
       <div class="empty-state">
         <div class="empty-icon">&#128101;</div>
-        <p>No customers yet. Add your first customer to get started.</p>
+        <p>No customers ${search ? 'match this search' : 'yet'}.</p>
         <button class="btn btn-primary" onclick="openCustomerModal()">+ Add Customer</button>
       </div>
     ` : `
@@ -1317,7 +1351,11 @@ async function loadCustomers(search = '') {
           <thead>
             <tr>
               <th style="width:36px;"><input type="checkbox" id="customersSelectAll" onclick="_toggleAllCustomerCheckboxes(this.checked)"></th>
-              <th>Name</th><th>Address</th><th>Email</th><th>Phone</th><th>Balance</th>
+              ${head('name', 'Name')}
+              ${head('address', 'Address')}
+              ${head('email', 'Email')}
+              ${head('phone', 'Phone')}
+              ${head('balance', 'Balance')}
             </tr>
           </thead>
           <tbody>
@@ -1352,6 +1390,37 @@ function debounceCustomerSearch() {
   customerSearchTimeout = setTimeout(() => {
     loadCustomers(document.getElementById('customerSearch').value);
   }, 300);
+}
+
+async function exportCustomersCsv() {
+  try {
+    const { data: customers } = await window.api.getCustomers('');
+    if (!customers || !customers.length) { showToast('No customers to export.', 'info'); return; }
+    const rows = [['Name', 'Company', 'Phone (Cell)', 'Phone (Home)', 'Phone (Work)', 'Email', 'Address', 'City', 'State', 'Zip', 'Property Count', 'Balance', 'Notes']];
+    for (const c of customers) {
+      rows.push([
+        c.name || '', c.company || '',
+        c.phone_cell || c.phone || '', c.phone_home || '', c.phone_work || '',
+        c.email || '', c.address || '', c.city || '', c.state || '', c.zip || '',
+        c.property_count || 0, (c.balance || 0).toFixed(2),
+        (c.notes || '').replace(/[\r\n]+/g, ' ')
+      ]);
+    }
+    const csv = rows.map(r => r.map(cell => {
+      const s = String(cell ?? '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',')).join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `customers-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${customers.length} customers.`, 'success');
+  } catch (e) {
+    showToast('Export failed: ' + e.message, 'error');
+  }
 }
 
 function _toggleAllCustomerCheckboxes(checked) {

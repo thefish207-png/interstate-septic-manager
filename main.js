@@ -27,6 +27,22 @@ let mainWindow;
 let userDataPath = app.getPath('userData');
 console.log('[APP] userData path:', userDataPath);
 
+// Persistent log file — rolling up to ~5MB. Critical for remote bug reports.
+// Logs land at C:\Users\<user>\AppData\Roaming\<appName>\logs\main.log
+try {
+  const log = require('electron-log/main');
+  log.initialize();
+  log.transports.file.maxSize = 5 * 1024 * 1024; // 5MB cap
+  log.transports.file.level = 'info';
+  log.transports.console.level = 'debug';
+  // Replace console with electron-log so all existing console.log/warn/error
+  // calls also flow to the log file.
+  Object.assign(console, log.functions);
+  console.log('[APP] electron-log initialized; v=' + app.getVersion());
+} catch (err) {
+  console.warn('[APP] electron-log init failed:', err.message);
+}
+
 // ===== EMBEDDED SEED DATA — GUARANTEES DATA ON STARTUP =====
 // Bypasses the Electron fs.readFileSync bug where files read as empty despite being full on disk.
 // Data is bundled via require() which uses Node's module system (different code path than fs).
@@ -4094,9 +4110,10 @@ ipcMain.handle('cloud-login', async (e, username, password) => {
   // Look up role
   const { data: profile } = await sb.from('users').select('id, name, role, username, color, phone').eq('auth_user_id', data.user.id).single();
   _currentAppUserId = profile?.id || null;
-  // Hydrate local cache and subscribe to realtime — non-blocking
-  _cloudHydrateStore().catch(e => console.warn('[CLOUD] hydrate error:', e.message));
-  setTimeout(() => _cloudSubscribeRealtime(), 100);
+  // Hydrate local cache BEFORE returning so renderer doesn't read stale data on first paint
+  try { await _cloudHydrateStore(); } catch (e) { console.warn('[CLOUD] hydrate error:', e.message); }
+  // Then subscribe to realtime (also wait briefly for the websocket to settle)
+  _cloudSubscribeRealtime();
   return { success: true, user: profile, session: { expires_at: data.session.expires_at } };
 });
 
@@ -4122,9 +4139,9 @@ ipcMain.handle('cloud-restore-session', async () => {
     return { success: false };
   }
   _currentAppUserId = profile.id;
-  // Hydrate local cache and subscribe to realtime
-  _cloudHydrateStore().catch(e => console.warn('[CLOUD] hydrate error:', e.message));
-  setTimeout(() => _cloudSubscribeRealtime(), 100);
+  // Hydrate before returning — renderer awaits this so first paint has fresh data
+  try { await _cloudHydrateStore(); } catch (e) { console.warn('[CLOUD] hydrate error:', e.message); }
+  _cloudSubscribeRealtime();
   return { success: true, user: profile, session: { expires_at: session.expires_at } };
 });
 
@@ -5104,13 +5121,26 @@ ipcMain.handle('import-execute-tanktrack', async (e, filePath, maxCustomers) => 
       }
     }
 
-    sendProgress({ stage: 'saving', message: 'Writing to disk…', current: total, total });
-    writeCollection('customers', customers);
-    writeCollection('properties', properties);
-    writeCollection('tanks', tanks);
-    broadcastDataChange('customers');
-    broadcastDataChange('properties');
-    broadcastDataChange('tanks');
+    // Push to cloud — we use upsertAsync per-row so each one gets the
+    // _splitForCloud treatment (unknown fields like contact_method, address2,
+    // last_appointment_date go into data jsonb) and is replicated cross-PC.
+    sendProgress({ stage: 'saving', message: 'Saving to cloud…', current: 0, total: imported + propsCreated + tanksCreated });
+    let saved = 0;
+    for (const c of customers.slice(-imported)) {
+      await upsertAsync('customers', c);
+      saved++;
+      if (saved % 25 === 0) sendProgress({ stage: 'saving', message: 'Saving customers…', current: saved, total: imported + propsCreated + tanksCreated });
+    }
+    for (const p of properties.slice(-propsCreated)) {
+      await upsertAsync('properties', p);
+      saved++;
+      if (saved % 25 === 0) sendProgress({ stage: 'saving', message: 'Saving properties…', current: saved, total: imported + propsCreated + tanksCreated });
+    }
+    for (const t of tanks.slice(-tanksCreated)) {
+      await upsertAsync('tanks', t);
+      saved++;
+      if (saved % 25 === 0) sendProgress({ stage: 'saving', message: 'Saving tanks…', current: saved, total: imported + propsCreated + tanksCreated });
+    }
 
     sendProgress({ stage: 'done', imported, skipped, propsCreated, tanksCreated });
     return { success: true, imported, skipped, propsCreated, tanksCreated };
@@ -5240,9 +5270,23 @@ ipcMain.handle('import-invoices-tanktrack', async (e, filePath) => {
       }
     }
 
-    sendProgress({ stage: 'saving', message: 'Writing invoices to disk…', current: total, total });
-    writeCollection('invoices', invoices);
-    broadcastDataChange('invoices');
+    // Push to cloud — only the new ones (last `imported`) plus any updated existing
+    sendProgress({ stage: 'saving', message: 'Saving to cloud…', current: 0, total: imported + updated });
+    let saved = 0;
+    // New invoices: last `imported` items in the array
+    for (const inv of invoices.slice(-imported)) {
+      await upsertAsync('invoices', inv);
+      saved++;
+      if (saved % 50 === 0) sendProgress({ stage: 'saving', current: saved, total: imported + updated });
+    }
+    // Updated existing invoices: those whose updated_at === now
+    for (const inv of invoices) {
+      if (inv.updated_at === now && !invoices.slice(-imported).includes(inv)) {
+        await upsertAsync('invoices', inv);
+        saved++;
+        if (saved % 50 === 0) sendProgress({ stage: 'saving', current: saved, total: imported + updated });
+      }
+    }
     sendProgress({ stage: 'done', imported, skipped, updated });
     return { success: true, imported, skipped, updated };
   } catch (err) {
