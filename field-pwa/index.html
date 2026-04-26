@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1b5e20">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ISM Field">
+<link rel="manifest" href="manifest.webmanifest">
+<title>ISM Field</title>
+<style>
+  :root {
+    --primary: #2e7d32;
+    --primary-dark: #1b5e20;
+    --bg: #1a1d23;
+    --surface: #242830;
+    --surface-2: #2d323b;
+    --text: #e4e6eb;
+    --text-light: #a8adb4;
+    --text-muted: #8a8f98;
+    --border: #3a3f4a;
+    --warn: #ff9800;
+    --danger: #e53935;
+    --success: #43a047;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: contain;
+  }
+  body { padding-bottom: env(safe-area-inset-bottom, 0); }
+  button {
+    background: var(--primary);
+    color: white;
+    border: none;
+    padding: 14px 18px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-appearance: none;
+  }
+  button.secondary { background: var(--surface-2); color: var(--text); }
+  button.danger { background: var(--danger); }
+  button:active { transform: scale(0.97); }
+  input, select, textarea {
+    width: 100%;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 12px;
+    font-size: 16px; /* ≥16px prevents iOS zoom */
+    -webkit-appearance: none;
+  }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--primary); border-color: var(--primary); }
+  .topbar {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--primary-dark);
+    color: white;
+    padding: 14px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .topbar h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .topbar .meta { font-size: 12px; opacity: .85; margin-top: 2px; }
+  .icon-btn {
+    background: none; padding: 8px; font-size: 20px;
+    color: white; border-radius: 8px;
+  }
+  .icon-btn:hover, .icon-btn:active { background: rgba(255,255,255,0.1); }
+  .container { padding: 16px; max-width: 720px; margin: 0 auto; }
+  .login {
+    min-height: 100vh; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; padding: 24px;
+  }
+  .login-card { width: 100%; max-width: 400px; }
+  .login h1 { font-size: 28px; margin-bottom: 8px; text-align: center; }
+  .login p { color: var(--text-light); text-align: center; margin: 0 0 24px 0; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; color: var(--text-light); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .err { color: var(--danger); font-size: 14px; text-align: center; margin-top: 10px; min-height: 20px; }
+  .job-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+    display: block;
+    text-decoration: none;
+    color: inherit;
+  }
+  .job-card.done { opacity: 0.55; border-left: 4px solid var(--success); }
+  .job-card .top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+  .job-card .time { font-size: 13px; color: var(--text-muted); font-weight: 600; }
+  .job-card .status {
+    font-size: 11px; text-transform: uppercase; padding: 4px 8px;
+    border-radius: 4px; font-weight: 700; letter-spacing: 0.5px;
+  }
+  .status-scheduled { background: #1565c020; color: #5294e8; }
+  .status-completed { background: #2e7d3220; color: #66bb6a; }
+  .status-in_progress { background: #ff980020; color: #ffb74d; }
+  .job-card .name { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  .job-card .addr { font-size: 14px; color: var(--text-light); }
+  .job-card .meta { font-size: 12px; color: var(--text-muted); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .empty {
+    text-align: center; padding: 60px 20px;
+    color: var(--text-muted);
+  }
+  .empty-icon { font-size: 64px; margin-bottom: 16px; opacity: 0.5; }
+  .loading { text-align: center; padding: 40px; color: var(--text-muted); }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    background: var(--surface-2); font-size: 11px; color: var(--text-light);
+  }
+  .detail-section { background: var(--surface); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .detail-section h3 { margin: 0 0 10px 0; font-size: 13px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; }
+  .detail-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 15px; }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-label { color: var(--text-light); }
+  .detail-value { font-weight: 600; text-align: right; }
+  .actions {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    display: flex; gap: 10px;
+    z-index: 50;
+  }
+  .actions button { flex: 1; }
+  .toast {
+    position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px 16px; border-radius: 8px;
+    font-size: 14px;
+    z-index: 1000;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    max-width: 90%;
+  }
+  .toast.success { border-left: 4px solid var(--success); }
+  .toast.error { border-left: 4px solid var(--danger); }
+  .net-bar {
+    background: var(--warn); color: black;
+    padding: 6px 16px; text-align: center; font-size: 13px; font-weight: 600;
+  }
+  .tap-call { color: #5294e8; text-decoration: none; }
+  .map-link { background: var(--primary); color: white; padding: 6px 10px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; display: inline-block; }
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">Loading…</div></div>
+<div id="netbar"></div>
+<div id="toastHolder"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+// === Configuration ===
+// In production this should be loaded from a config endpoint or env var.
+// For now, baked in (anon key is safe to embed — RLS protects access).
+const SUPABASE_URL = 'https://cnoajzezhpvlhmzlpsha.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNub2FqemV6aHB2bGhtemxwc2hhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxNDk0ODcsImV4cCI6MjA5MjcyNTQ4N30.pi2YpsnxNnkAQVsKeRxI_5s7xr5kArxJLHye0SVnbnI';
+const EMAIL_DOMAIN = 'interstate-septic.app';
+
+const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, storageKey: 'ism-field-session', autoRefreshToken: true }
+});
+
+// === State ===
+let currentUser = null;
+let currentScreen = 'login';
+let currentJob = null;
+
+// === Helpers ===
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+function toast(msg, kind = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = msg;
+  document.getElementById('toastHolder').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+function fmtDateLong(d) {
+  const dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${dn[d.getDay()]}, ${mn[d.getMonth()]} ${d.getDate()}`;
+}
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// === Network indicator ===
+function updateNetBar() {
+  const bar = document.getElementById('netbar');
+  if (!navigator.onLine) {
+    bar.className = 'net-bar';
+    bar.textContent = '⚠ You are offline. Changes will save when you reconnect.';
+  } else { bar.className = ''; bar.textContent = ''; }
+}
+window.addEventListener('online', updateNetBar);
+window.addEventListener('offline', updateNetBar);
+
+// === Auth ===
+async function tryRestoreSession() {
+  const { data } = await sb.auth.getSession();
+  if (data.session) {
+    const { data: profile } = await sb.from('users').select('id, name, role, username').eq('auth_user_id', data.session.user.id).single();
+    if (profile) {
+      currentUser = profile;
+      return true;
+    }
+  }
+  return false;
+}
+
+async function signIn(username, password) {
+  const u = String(username || '').toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9._-]/g, '');
+  const email = `${u}@${EMAIL_DOMAIN}`;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) return { ok: false, error: error.message };
+  const { data: profile } = await sb.from('users').select('id, name, role, username').eq('auth_user_id', data.user.id).single();
+  if (!profile) return { ok: false, error: 'No matching profile.' };
+  currentUser = profile;
+  return { ok: true };
+}
+
+async function signOut() {
+  await sb.auth.signOut();
+  currentUser = null;
+  currentScreen = 'login';
+  render();
+}
+
+// === Data ===
+async function fetchTodayJobs(date) {
+  // Get jobs for today assigned to current user (or all if office/owner)
+  let q = sb.from('jobs').select('*').eq('scheduled_date', date).is('deleted_at', null).order('scheduled_time', { nullsFirst: false }).order('created_at');
+  if (currentUser.role === 'tech') {
+    q = q.or(`assigned_to.eq.${currentUser.id},assigned_user_id.eq.${currentUser.id}`);
+  }
+  const { data, error } = await q;
+  if (error) { toast('Could not load schedule: ' + error.message, 'error'); return []; }
+  return data || [];
+}
+
+async function fetchJobDetail(id) {
+  const { data: job, error } = await sb.from('jobs').select('*').eq('id', id).single();
+  if (error || !job) return null;
+  // Resolve customer + property + tanks (cache-friendly)
+  const promises = [];
+  if (job.customer_id) promises.push(sb.from('customers').select('*').eq('id', job.customer_id).maybeSingle());
+  else promises.push(Promise.resolve({ data: null }));
+  if (job.property_id) promises.push(sb.from('properties').select('*').eq('id', job.property_id).maybeSingle());
+  else promises.push(Promise.resolve({ data: null }));
+  if (job.property_id) promises.push(sb.from('tanks').select('*').eq('property_id', job.property_id));
+  else promises.push(Promise.resolve({ data: [] }));
+  const [c, p, t] = await Promise.all(promises);
+  return { ...job, customer: c.data, property: p.data, tanks: t.data || [] };
+}
+
+async function markJobComplete(jobId, gallons, notes) {
+  const update = {
+    status: 'completed',
+    completed_at: new Date().toISOString()
+  };
+  // Stuff gallons + notes into the jobs.data jsonb
+  const { data: existing } = await sb.from('jobs').select('data, notes').eq('id', jobId).single();
+  const data = { ...(existing?.data || {}), tech_notes: notes || '', actual_gallons: gallons || 0 };
+  update.data = data;
+  if (notes) update.notes = (existing?.notes ? existing.notes + '\n\n' : '') + '[Tech: ' + new Date().toLocaleString() + '] ' + notes;
+  const { error } = await sb.from('jobs').update(update).eq('id', jobId);
+  if (error) { toast('Save failed: ' + error.message, 'error'); return false; }
+  return true;
+}
+
+// === Screens ===
+function renderLogin() {
+  return `
+    <div class="login">
+      <div class="login-card">
+        <h1>🚛 ISM Field</h1>
+        <p>Field tech app — sign in to see your route</p>
+        <div class="field">
+          <label>Username</label>
+          <input id="u" type="text" autocapitalize="none" autocomplete="username" placeholder="e.g. chris.bissonnette">
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input id="p" type="password" autocomplete="current-password">
+        </div>
+        <button id="loginBtn" style="width:100%;margin-top:8px;">Sign in</button>
+        <div class="err" id="err"></div>
+      </div>
+    </div>`;
+}
+
+function renderSchedule(jobs, date) {
+  const dateLabel = fmtDateLong(date);
+  const liveJobs = jobs.filter(j => j.status !== 'completed');
+  const doneJobs = jobs.filter(j => j.status === 'completed');
+  return `
+    <div class="topbar">
+      <div>
+        <h1>Today's Route</h1>
+        <div class="meta">${esc(dateLabel)} · ${esc(currentUser.name)}</div>
+      </div>
+      <button class="icon-btn" onclick="window.fapp.refresh()" title="Refresh">↻</button>
+      <button class="icon-btn" onclick="window.fapp.signOut()" title="Sign out">↪</button>
+    </div>
+    <div class="container">
+      ${jobs.length === 0 ? `
+        <div class="empty">
+          <div class="empty-icon">📅</div>
+          <p>No jobs scheduled for today.</p>
+        </div>
+      ` : ''}
+      ${liveJobs.map(j => renderJobCard(j)).join('')}
+      ${doneJobs.length ? `<h3 style="font-size:13px;color:var(--text-muted);margin:24px 0 8px 4px;text-transform:uppercase;letter-spacing:0.5px;">Completed (${doneJobs.length})</h3>` : ''}
+      ${doneJobs.map(j => renderJobCard(j)).join('')}
+    </div>`;
+}
+
+function renderJobCard(j) {
+  const customerName = j.data?.customer_name || j.customer_name || '—';
+  const address = j.data?.property_address || j.property_address || '';
+  const time = j.scheduled_time || '';
+  const status = j.status || 'scheduled';
+  const tankSize = j.data?.tank_size || j.tank_size || '';
+  return `
+    <a class="job-card ${status}" href="#" onclick="window.fapp.openJob('${j.id}'); return false;">
+      <div class="top">
+        <div class="time">${esc(time || 'TBD')}</div>
+        <div class="status status-${status}">${status.replace('_', ' ')}</div>
+      </div>
+      <div class="name">${esc(customerName)}</div>
+      ${address ? `<div class="addr">${esc(address)}</div>` : ''}
+      ${tankSize ? `<div class="meta"><span class="pill">${esc(tankSize)} gal tank</span></div>` : ''}
+    </a>`;
+}
+
+function renderJobDetail(job) {
+  const c = job.customer || {};
+  const p = job.property || {};
+  const tanks = job.tanks || [];
+  const phone = c.phone_cell || c.phone || c.phone_home || '';
+  const addrLine = [p.address, p.city, p.state].filter(Boolean).join(', ');
+  const mapsUrl = addrLine ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addrLine)}` : '';
+
+  return `
+    <div class="topbar">
+      <div>
+        <h1>${esc(c.name || c.company || 'Job')}</h1>
+        <div class="meta">${esc(job.scheduled_date || '')} ${esc(job.scheduled_time || '')}</div>
+      </div>
+      <button class="icon-btn" onclick="window.fapp.back()">←</button>
+    </div>
+    <div class="container" style="padding-bottom:120px;">
+      ${addrLine ? `
+        <div class="detail-section">
+          <h3>Property</h3>
+          <div style="font-size:17px;font-weight:600;margin-bottom:8px;">${esc(addrLine)}</div>
+          ${mapsUrl ? `<a class="map-link" href="${mapsUrl}" target="_blank">📍 Open in Maps</a>` : ''}
+          ${p.notes ? `<div style="margin-top:12px;font-size:13px;color:var(--text-light);font-style:italic;">${esc(p.notes)}</div>` : ''}
+          ${p.directions ? `<div style="margin-top:8px;font-size:13px;background:var(--surface-2);padding:8px;border-radius:6px;"><strong>Directions:</strong> ${esc(p.directions)}</div>` : ''}
+        </div>` : ''}
+
+      <div class="detail-section">
+        <h3>Customer</h3>
+        <div style="font-size:17px;font-weight:600;margin-bottom:8px;">${esc(c.name || '—')}</div>
+        ${phone ? `<div><a class="tap-call" href="tel:${esc(phone.replace(/\\D/g,''))}">📞 ${esc(phone)}</a></div>` : ''}
+        ${c.email ? `<div style="margin-top:6px;color:var(--text-light);font-size:14px;">${esc(c.email)}</div>` : ''}
+      </div>
+
+      ${tanks.length > 0 ? `
+        <div class="detail-section">
+          <h3>Tanks (${tanks.length})</h3>
+          ${tanks.map(t => `
+            <div class="detail-row">
+              <span class="detail-label">${esc(t.tank_type || 'Tank')}</span>
+              <span class="detail-value">${(t.volume_gallons || 0).toLocaleString()} gal</span>
+            </div>
+          `).join('')}
+        </div>` : ''}
+
+      <div class="detail-section">
+        <h3>Job</h3>
+        <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value">${esc(job.status || 'scheduled')}</span></div>
+        <div class="detail-row"><span class="detail-label">Date</span><span class="detail-value">${esc(job.scheduled_date || '')}</span></div>
+        ${job.scheduled_time ? `<div class="detail-row"><span class="detail-label">Time</span><span class="detail-value">${esc(job.scheduled_time)}</span></div>` : ''}
+        ${job.notes ? `<div style="margin-top:10px;font-size:14px;background:var(--surface-2);padding:10px;border-radius:6px;white-space:pre-wrap;">${esc(job.notes)}</div>` : ''}
+      </div>
+
+      ${job.status !== 'completed' ? `
+        <div class="detail-section">
+          <h3>Complete this job</h3>
+          <div class="field">
+            <label>Actual gallons pumped</label>
+            <input id="completeGallons" type="number" inputmode="numeric" placeholder="0">
+          </div>
+          <div class="field">
+            <label>Notes (visible to office)</label>
+            <textarea id="completeNotes" rows="3" placeholder="Anything notable about the visit..."></textarea>
+          </div>
+        </div>
+      ` : ''}
+    </div>
+
+    ${job.status !== 'completed' ? `
+      <div class="actions">
+        <button class="secondary" onclick="window.fapp.back()">Back</button>
+        <button onclick="window.fapp.complete('${job.id}')">✓ Mark Complete</button>
+      </div>
+    ` : `
+      <div class="actions">
+        <button class="secondary" onclick="window.fapp.back()" style="flex:1;">Back to Schedule</button>
+      </div>
+    `}
+  `;
+}
+
+// === App controller ===
+async function render() {
+  const root = document.getElementById('app');
+  if (currentScreen === 'login') {
+    root.innerHTML = renderLogin();
+    document.getElementById('loginBtn').onclick = async () => {
+      const u = document.getElementById('u').value;
+      const p = document.getElementById('p').value;
+      const err = document.getElementById('err');
+      err.textContent = 'Signing in…';
+      const r = await signIn(u, p);
+      if (!r.ok) { err.textContent = r.error; return; }
+      err.textContent = '';
+      currentScreen = 'schedule';
+      render();
+    };
+    setTimeout(() => document.getElementById('u')?.focus(), 50);
+    return;
+  }
+
+  if (currentScreen === 'schedule') {
+    root.innerHTML = `<div class="topbar"><div><h1>Today's Route</h1></div></div><div class="loading">Loading schedule…</div>`;
+    const date = new Date();
+    const jobs = await fetchTodayJobs(todayStr());
+    root.innerHTML = renderSchedule(jobs, date);
+    return;
+  }
+
+  if (currentScreen === 'job' && currentJob) {
+    root.innerHTML = `<div class="topbar"><div><h1>Loading…</h1></div></div><div class="loading">Loading job…</div>`;
+    const detail = await fetchJobDetail(currentJob);
+    if (!detail) {
+      root.innerHTML = `<div class="empty"><div class="empty-icon">⚠</div><p>Job not found.</p><button onclick="window.fapp.back()">Back</button></div>`;
+      return;
+    }
+    root.innerHTML = renderJobDetail(detail);
+    return;
+  }
+}
+
+// === Public app interface for inline onclick ===
+window.fapp = {
+  openJob(id) { currentJob = id; currentScreen = 'job'; render(); },
+  back() { currentScreen = 'schedule'; currentJob = null; render(); },
+  refresh() { render(); },
+  signOut,
+  async complete(id) {
+    const gallons = parseInt(document.getElementById('completeGallons')?.value, 10) || 0;
+    const notes = document.getElementById('completeNotes')?.value?.trim() || '';
+    const ok = await markJobComplete(id, gallons, notes);
+    if (ok) { toast('Job marked complete', 'success'); currentScreen = 'schedule'; currentJob = null; setTimeout(render, 700); }
+  }
+};
+
+// === Boot ===
+(async () => {
+  updateNetBar();
+  const restored = await tryRestoreSession();
+  currentScreen = restored ? 'schedule' : 'login';
+  render();
+})();
+</script>
+</body>
+</html>
