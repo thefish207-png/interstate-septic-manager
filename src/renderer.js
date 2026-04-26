@@ -8703,6 +8703,26 @@ async function openJobDetail(id) {
 
           ${job.manifest_number ? `<div style="margin-top:4px;"><strong>Manifest #</strong> <span style="color:#1565c0;font-weight:700;">${esc(job.manifest_number)}</span></div>` : ''}
 
+          ${(() => {
+            if (!job.created_by && !job.created_at) return '';
+            const creator = users.find(u => u.id === job.created_by);
+            const creatorName = creator ? creator.name : (job.created_by ? 'Unknown user' : '');
+            let when = '';
+            if (job.created_at) {
+              try {
+                const d = new Date(job.created_at);
+                const dateStr = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                when = `${dateStr} at ${timeStr}`;
+              } catch {}
+            }
+            return `
+              <div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:var(--text-light);">
+                <div><strong style="color:var(--text);">Created${creatorName ? ' by ' + esc(creatorName) : ''}</strong></div>
+                ${when ? `<div>${when}</div>` : ''}
+              </div>`;
+          })()}
+
           <div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee;">
             <strong>PAYMENT STATUS</strong>
             <span class="badge badge-${job.payment_status === 'paid' ? 'paid' : 'pending'}" style="margin-left:8px;">${formatStatus(job.payment_status || 'unpaid')}</span>

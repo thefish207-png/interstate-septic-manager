@@ -217,12 +217,13 @@ const _PROMOTED_COLS = {
                  'assigned_user_id','assigned_to','scheduled_time','service_type','notes',
                  'status','line_items','gallons_pumped','completed_at','deleted_at',
                  'customer_confirmed_at','priority','arrival_window','invoice_id',
-                 'created_at','updated_at','data']),
+                 'created_by','created_at','updated_at','data']),
   schedule_items: new Set(['id','scheduled_date','customer_id','property_id','tank_id','vehicle_id',
                            'assigned_user_id','service_type','notes','status','sort_order',
                            'estimated_gallons','invoice_id','completed_at','completed_by',
                            'item_type','assigned_to','manifest_number','waste_site','gallons',
-                           'tank_type','time_label','deleted_at','created_at','updated_at','data']),
+                           'tank_type','time_label','deleted_at','created_by',
+                           'created_at','updated_at','data']),
   customers: new Set(['id','name','company','phone','phone_home','phone_work','email','address',
                       'city','state','zip','notes','imported_from','created_at','updated_at']),
   properties: new Set(['id','customer_id','address','city','state','zip','county','company',
@@ -241,7 +242,7 @@ const _PROMOTED_COLS = {
                      'waste_manifest','waste_site','disposal_date','check_numbers','complete','waiting_area',
                      'cancelled','imported_from','job_id','driver_id','vehicle_id','gallons_pumped',
                      'line_items','subtotal','tax_rate','tax_amount','notes','deleted_at',
-                     'created_at','updated_at']),
+                     'created_by','created_at','updated_at']),
   payments: new Set(['id','customer_id','invoice_id','date','amount','method','reference','notes',
                      'created_at','updated_at']),
   disposal_loads: new Set(['id','date','vehicle_id','user_id','waste_site','manifest_number','gallons',
@@ -1503,6 +1504,10 @@ ipcMain.handle('send-test-email', async (e, payload) => {
 
 ipcMain.handle('save-job', async (e, data) => {
   const isNew = !data.id;
+  // Stamp the original creator on new jobs only (cloud user)
+  if (isNew && _currentAppUserId && !data.created_by) {
+    data.created_by = _currentAppUserId;
+  }
   const saved = await upsertAsync('jobs', data);
 
   // Auto-create/sync invoice
@@ -1546,6 +1551,7 @@ ipcMain.handle('save-job', async (e, data) => {
       property_address: property?.address || '',
       property_city: property?.city || '',
       notes: '',
+      created_by: _currentAppUserId || null,
     });
 
     // Send appointment confirmation email (new job)
@@ -1969,6 +1975,10 @@ ipcMain.handle('get-invoice', async (e, id) => {
 });
 
 ipcMain.handle('save-invoice', async (e, data) => {
+  const isNew = !data.id;
+  if (isNew && _currentAppUserId && !data.created_by) {
+    data.created_by = _currentAppUserId;
+  }
   const saved = await upsertAsync('invoices', data);
   return { success: true, data: saved };
 });
@@ -2505,6 +2515,10 @@ ipcMain.handle('get-schedule-items', async (e, vehicleId, date) => {
 });
 
 ipcMain.handle('save-schedule-item', async (e, data) => {
+  const isNew = !data.id;
+  if (isNew && _currentAppUserId && !data.created_by) {
+    data.created_by = _currentAppUserId;
+  }
   const saved = await upsertAsync('schedule_items', data);
   return { success: true, data: saved };
 });
@@ -3843,6 +3857,7 @@ const SUPABASE_DOMAIN = 'interstate-septic.app';
 const supabaseConfigPath = path.join(userDataPath, 'supabase-config.json');
 let _sbClient = null;
 let _sbSession = null;
+let _currentAppUserId = null; // public.users.id of currently signed-in cloud user
 
 function _getSbConfig() {
   if (!fs.existsSync(supabaseConfigPath)) return null;
@@ -3926,6 +3941,7 @@ ipcMain.handle('cloud-login', async (e, username, password) => {
   _saveSbSession(data.session);
   // Look up role
   const { data: profile } = await sb.from('users').select('id, name, role, username, color, phone').eq('auth_user_id', data.user.id).single();
+  _currentAppUserId = profile?.id || null;
   // Hydrate local cache and subscribe to realtime — non-blocking
   _cloudHydrateStore().catch(e => console.warn('[CLOUD] hydrate error:', e.message));
   setTimeout(() => _cloudSubscribeRealtime(), 100);
@@ -3937,6 +3953,7 @@ ipcMain.handle('cloud-logout', async () => {
   const sb = _getSbClient();
   if (sb) await sb.auth.signOut();
   _sbSession = null;
+  _currentAppUserId = null;
   _clearSbSession();
   return { success: true };
 });
@@ -3949,8 +3966,10 @@ ipcMain.handle('cloud-restore-session', async () => {
   if (error || !profile) {
     _clearSbSession();
     _sbSession = null;
+    _currentAppUserId = null;
     return { success: false };
   }
+  _currentAppUserId = profile.id;
   // Hydrate local cache and subscribe to realtime
   _cloudHydrateStore().catch(e => console.warn('[CLOUD] hydrate error:', e.message));
   setTimeout(() => _cloudSubscribeRealtime(), 100);
