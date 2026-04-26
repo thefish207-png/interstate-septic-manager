@@ -1570,6 +1570,24 @@ let _jobsListState = {
 let _jobsListCache = null; // last fetched list, reused when only filter changes
 let _jobsListScrollToToday = true; // auto-scroll to today's section on next render
 
+function _jobHeader(col, label, extraStyle = '') {
+  const s = _jobsListState;
+  const active = (s.sortCol || 'date') === col;
+  const arrow = active ? (s.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  return `<th style="cursor:pointer;user-select:none;${extraStyle}" onclick="_setJobsSort('${col}')">${label}${arrow}</th>`;
+}
+
+function _setJobsSort(col) {
+  const s = _jobsListState;
+  if ((s.sortCol || 'date') === col) {
+    s.sortDir = s.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    s.sortCol = col;
+    s.sortDir = (col === 'date' || col === 'customer' || col === 'address') ? 'asc' : 'desc';
+  }
+  _renderJobsList();
+}
+
 async function loadJobsList(forceRefresh = true) {
   const page = document.getElementById('page-jobs');
   if (!page) return;
@@ -1643,12 +1661,46 @@ function _renderJobsList() {
     });
   }
 
-  // Sort
+  // Sort — by date+time (default), or by selected column
+  const sortCol = s.sortCol || 'date';
+  const sortDir = s.sortDir || (s.sort === 'oldest' ? 'asc' : 'desc');
+  const dirMul = sortDir === 'asc' ? 1 : -1;
   rows.sort((a, b) => {
-    const da = (a.scheduled_date || '') + ' ' + (a.scheduled_time || '');
-    const db = (b.scheduled_date || '') + ' ' + (b.scheduled_time || '');
-    return s.sort === 'oldest' ? da.localeCompare(db) : db.localeCompare(da);
+    let va, vb;
+    switch (sortCol) {
+      case 'date':
+        va = (a.scheduled_date || '') + ' ' + (a.scheduled_time || '');
+        vb = (b.scheduled_date || '') + ' ' + (b.scheduled_time || '');
+        break;
+      case 'customer':
+        va = (a.customers?.name || '').toLowerCase();
+        vb = (b.customers?.name || '').toLowerCase();
+        break;
+      case 'address':
+        va = (a.property?.address || '').toLowerCase();
+        vb = (b.property?.address || '').toLowerCase();
+        break;
+      case 'service':
+        va = ((a.line_items || [])[0]?.description || a.service_type || a.job_codes || '').toLowerCase();
+        vb = ((b.line_items || [])[0]?.description || b.service_type || b.job_codes || '').toLowerCase();
+        break;
+      case 'status':
+        va = (a.status || 'scheduled');
+        vb = (b.status || 'scheduled');
+        break;
+      case 'tech':
+        va = (a.users?.name || '').toLowerCase();
+        vb = (b.users?.name || '').toLowerCase();
+        break;
+      default:
+        va = (a.scheduled_date || ''); vb = (b.scheduled_date || '');
+    }
+    if (va < vb) return -1 * dirMul;
+    if (va > vb) return  1 * dirMul;
+    return 0;
   });
+  // Don't auto-scroll-to-today when manually sorting by a non-date column
+  if (sortCol !== 'date') _jobsListScrollToToday = false;
 
   const totalJobs = (_jobsListCache || []).length;
 
@@ -1715,13 +1767,13 @@ function _renderJobsList() {
           <thead>
             <tr>
               <th style="width:36px;"><input type="checkbox" id="jobsSelectAll" onclick="_toggleAllJobCheckboxes(this.checked)"></th>
-              <th style="width:110px;">Date</th>
+              ${_jobHeader('date', 'Date', 'width:110px;')}
               <th style="width:70px;">Time</th>
-              <th>Customer</th>
-              <th>Address</th>
-              <th>Service</th>
-              <th style="width:110px;">Status</th>
-              <th style="width:130px;">Tech</th>
+              ${_jobHeader('customer', 'Customer')}
+              ${_jobHeader('address', 'Address')}
+              ${_jobHeader('service', 'Service')}
+              ${_jobHeader('status', 'Status', 'width:110px;')}
+              ${_jobHeader('tech', 'Tech', 'width:130px;')}
             </tr>
           </thead>
           <tbody>

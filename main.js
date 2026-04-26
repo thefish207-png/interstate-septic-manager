@@ -1712,17 +1712,22 @@ ipcMain.handle('save-job', async (e, data) => {
     // Send appointment confirmation email (new job)
     var emailResult = await sendJobConfirmEmail(saved, customer, property, 'new');
   } else {
-    // Sync existing draft invoice linked to this job
+    // Sync linked invoice — but be careful with FINALIZED invoices.
+    // If the linked invoice is finalized, only sync "operational" fields
+    // (gallons, completion status, snapshot fields) — never overwrite money/status
+    // unless we want to be aggressive. We do NOT touch line_items/subtotal/total
+    // on a finalized invoice because that would silently change AR.
     const invoices = await readCollectionAsync('invoices');
-    const linked = invoices.find(i => i.job_id === saved.id && i.status === 'draft');
+    const linked = invoices.find(i => i.job_id === saved.id && !i.deleted_at);
     const customer = await findByIdAsync('customers', saved.customer_id);
     const property = await findByIdAsync('properties', saved.property_id);
     if (linked) {
       const totalGal = Object.values(saved.gallons_pumped || {}).reduce((s, g) => s + (parseInt(g) || 0), 0);
       const lineItems = saved.line_items || [];
-      const subtotal = lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0);
+      const subtotal = _money(lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0));
+      const isDraft = linked.status === 'draft' || !linked.status;
 
-      await upsertAsync('invoices', {
+      const sync = {
         id: linked.id,
         customer_id: saved.customer_id,
         property_id: saved.property_id,
@@ -1732,13 +1737,21 @@ ipcMain.handle('save-job', async (e, data) => {
         gallons_pumped: totalGal,
         job_codes: saved.service_type || '',
         complete: saved.status === 'completed',
-        line_items: lineItems,
-        subtotal,
-        total: subtotal + (linked.tax_amount || 0),
         billing_company: customer?.company || customer?.name || '',
         property_address: property?.address || '',
         property_city: property?.city || '',
-      });
+      };
+      if (isDraft) {
+        // Draft: full sync including money fields
+        sync.line_items = lineItems;
+        sync.subtotal = subtotal;
+        sync.total = _money(subtotal + (linked.tax_amount || 0));
+      } else {
+        // Finalized invoice — only sync operational/snapshot fields. Money frozen.
+        // Broadcast a warning so the UI can show "invoice frozen — clone to edit"
+        broadcastCloudWarning('save', 'invoices', `Invoice #${linked.invoice_number || linked.id.slice(0,8)} is ${linked.status} — money fields not auto-updated from job edit.`);
+      }
+      await upsertAsync('invoices', sync);
     }
 
     // Send reschedule confirmation if date changed and setting is on
