@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage } = 
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
@@ -35,6 +36,32 @@ const SEED_DATA = require('./seed_data_embedded');
 (function ensureDataDir() {
   const appDir = path.join(userDataPath, 'data');
   if (!fs.existsSync(appDir)) fs.mkdirSync(appDir, { recursive: true });
+})();
+
+// ===== BUNDLED SUPABASE CONFIG (first-run setup) =====
+// In production builds, supabase-config.json is bundled via extraResources.
+// On first launch, if userData doesn't have one yet, copy the bundled one
+// so the app is pre-configured to point at our cloud.
+(function ensureSupabaseConfig() {
+  const userConfigPath = path.join(userDataPath, 'supabase-config.json');
+  if (fs.existsSync(userConfigPath)) return; // already set up
+
+  // Resources path differs between dev (project root) and packaged (resources/)
+  const candidates = [
+    path.join(process.resourcesPath || '', 'build-config', 'supabase-config.json'),
+    path.join(__dirname, 'build-config', 'supabase-config.json'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        fs.copyFileSync(candidate, userConfigPath);
+        console.log('[APP] Bundled supabase-config copied from', candidate);
+        return;
+      }
+    } catch (e) {
+      console.warn('[APP] Could not copy bundled config:', e.message);
+    }
+  }
 })();
 
 // ===== SAVED CREDENTIALS (file-based, survives force-quit) =====
@@ -81,6 +108,28 @@ function dbPath(collection) {
       }
     } catch {}
   });
+
+  // One-time migration: imported TankTrack invoices used {amount,total_paid}.
+  // Canonical fields are {total,amount_paid}. Rename in place so UI, filters, totals work.
+  try {
+    const invPath = path.join(userDataPath, 'data', 'invoices.json');
+    if (fs.existsSync(invPath)) {
+      const invs = _store['invoices'] || [];
+      let migrated = 0;
+      for (const inv of invs) {
+        if (inv.imported_from === 'tanktrack') {
+          if (inv.total == null && inv.amount != null) { inv.total = inv.amount; migrated++; }
+          if (inv.amount_paid == null && inv.total_paid != null) { inv.amount_paid = inv.total_paid; }
+          // Map payment_status from status if missing
+          if (!inv.payment_status && inv.status) inv.payment_status = inv.status;
+        }
+      }
+      if (migrated > 0) {
+        fs.writeFileSync(invPath, JSON.stringify(invs, null, 2));
+        console.log('[MIGRATION] invoices: renamed amount→total / total_paid→amount_paid on ' + migrated + ' rows');
+      }
+    }
+  } catch (err) { console.error('[MIGRATION] invoice rename failed:', err.message); }
 })();
 
 function readCollection(collection) {
@@ -111,6 +160,15 @@ function findById(collection, id) {
   return readCollection(collection).find(item => item.id === id) || null;
 }
 
+function broadcastDataChange(collection) {
+  const wins = BrowserWindow.getAllWindows();
+  wins.forEach(w => {
+    if (!w.isDestroyed()) {
+      try { w.webContents.send('data-changed', { collection }); } catch {}
+    }
+  });
+}
+
 function upsert(collection, item) {
   const items = readCollection(collection);
   if (item.id) {
@@ -118,6 +176,7 @@ function upsert(collection, item) {
     if (idx >= 0) {
       items[idx] = { ...items[idx], ...item, updated_at: new Date().toISOString() };
       writeCollection(collection, items);
+      broadcastDataChange(collection);
       return items[idx];
     }
   }
@@ -126,12 +185,268 @@ function upsert(collection, item) {
   item.updated_at = new Date().toISOString();
   items.push(item);
   writeCollection(collection, items);
+  broadcastDataChange(collection);
   return item;
 }
 
 function remove(collection, id) {
   const items = readCollection(collection).filter(i => i.id !== id);
   writeCollection(collection, items);
+  broadcastDataChange(collection);
+}
+
+// ===================================================================
+// CLOUD-AWARE ASYNC DATA HELPERS
+// These wrap the sync helpers above. When signed into Supabase AND the
+// table is in _CLOUD_TABLES, they hit Supabase and update the local
+// cache. Otherwise they fall through to the local-JSON helpers.
+// ===================================================================
+const _CLOUD_TABLES = new Set([
+  'customers', 'properties', 'tanks', 'tank_types', 'vehicles',
+  'truck_day_assignments', 'jobs', 'schedule_items', 'invoices',
+  'payments', 'disposal_loads', 'day_notes', 'reminders',
+  'service_due_notices', 'users'
+]);
+
+function _isCloudTable(collection) {
+  return _CLOUD_TABLES.has(collection);
+}
+
+function _cloudReady() {
+  // We need _sbSession AND a configured client. _sbSession is module-scoped
+  // and lives in the cloud-user block we added later. Use lazy-eval via globalThis.
+  return typeof _sbSession !== 'undefined' && _sbSession && typeof _getSbClient === 'function' && !!_getSbClient();
+}
+
+// Paginated read — Supabase caps at 1000 rows per query. We page through
+// until we get a partial page back.
+async function _cloudReadAll(sb, collection) {
+  const PAGE = 1000;
+  let all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await sb.from(collection).select('*').range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || !data.length) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+    if (from > 100000) break; // safety stop at 100k rows per table
+  }
+  return all;
+}
+
+async function readCollectionAsync(collection) {
+  if (_cloudReady() && _isCloudTable(collection)) {
+    try {
+      const sb = _getSbClient();
+      const data = await _cloudReadAll(sb, collection);
+      _store[collection] = data;
+      return data;
+    } catch (e) {
+      console.warn('[CLOUD] readCollectionAsync', collection, 'fallback:', e.message);
+    }
+  }
+  return readCollection(collection);
+}
+
+async function upsertAsync(collection, item) {
+  if (_cloudReady() && _isCloudTable(collection)) {
+    try {
+      const sb = _getSbClient();
+      const now = new Date().toISOString();
+      const row = { ...item };
+      if (!row.id) row.id = uuidv4();
+      row.updated_at = now;
+      if (!row.created_at) row.created_at = now;
+      const { data, error } = await sb.from(collection).upsert(row).select().single();
+      if (!error && data) {
+        // Sync into local cache
+        const items = readCollection(collection);
+        const idx = items.findIndex(i => i.id === data.id);
+        if (idx >= 0) items[idx] = data; else items.push(data);
+        _store[collection] = items;
+        broadcastDataChange(collection);
+        return data;
+      }
+      if (error) console.warn('[CLOUD] upsertAsync', collection, 'fallback:', error.message);
+    } catch (e) {
+      console.warn('[CLOUD] upsertAsync', collection, 'exception:', e.message);
+    }
+  }
+  return upsert(collection, item);
+}
+
+async function removeAsync(collection, id) {
+  if (_cloudReady() && _isCloudTable(collection)) {
+    try {
+      const sb = _getSbClient();
+      const { error } = await sb.from(collection).delete().eq('id', id);
+      if (!error) {
+        const items = readCollection(collection).filter(i => i.id !== id);
+        _store[collection] = items;
+        broadcastDataChange(collection);
+        return true;
+      }
+      if (error) console.warn('[CLOUD] removeAsync', collection, 'fallback:', error.message);
+    } catch (e) {
+      console.warn('[CLOUD] removeAsync', collection, 'exception:', e.message);
+    }
+  }
+  remove(collection, id);
+  return true;
+}
+
+async function findByIdAsync(collection, id) {
+  if (_cloudReady() && _isCloudTable(collection)) {
+    try {
+      const sb = _getSbClient();
+      const { data, error } = await sb.from(collection).select('*').eq('id', id).maybeSingle();
+      if (!error) return data || null;
+    } catch (e) {
+      console.warn('[CLOUD] findByIdAsync', collection, 'exception:', e.message);
+    }
+  }
+  return findById(collection, id);
+}
+
+// Pull fresh data for all cloud tables on startup, populating _store.
+// Called once after cloud session is restored.
+async function _cloudHydrateStore() {
+  if (!_cloudReady()) return;
+  console.log('[CLOUD] hydrating local store from cloud…');
+  const sb = _getSbClient();
+  for (const collection of _CLOUD_TABLES) {
+    try {
+      const data = await _cloudReadAll(sb, collection);
+      _store[collection] = data;
+      console.log('[CLOUD]   ✓', collection.padEnd(24), data.length);
+    } catch (e) {
+      console.warn('[CLOUD]   ✗', collection, e.message);
+    }
+  }
+  // Notify renderer that data is fresh
+  broadcastDataChange('*');
+}
+
+// Set up Supabase realtime subscriptions for shared tables.
+// We use a custom raw-websocket client because supabase-js v2.99-2.104
+// has a bug where postgres_changes subscriptions silently TIME_OUT with
+// ES256-signed JWTs (the new asymmetric key format). The Phoenix protocol
+// itself works fine — we just bypass the broken JS wrapper.
+const _RT_TABLES = ['schedule_items', 'jobs', 'customers', 'properties',
+                    'tanks', 'vehicles', 'truck_day_assignments',
+                    'day_notes', 'reminders', 'service_due_notices',
+                    'disposal_loads', 'invoices'];
+let _rtSocket = null;
+let _rtHeartbeatTimer = null;
+let _rtReconnectTimer = null;
+let _rtRef = 0;
+let _rtIntentionalClose = false;
+
+function _rtSend(msg) {
+  if (_rtSocket && _rtSocket.readyState === 1) {
+    _rtSocket.send(JSON.stringify(msg));
+  }
+}
+
+function _cloudSubscribeRealtime() {
+  if (!_cloudReady()) return;
+  _cloudUnsubscribeRealtime(); // clean any prior connection
+
+  const cfg = _getSbConfig();
+  if (!cfg) return;
+
+  const wsLib = require('ws');
+  const url = cfg.url.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + cfg.anonKey + '&vsn=1.0.0';
+  const sock = new wsLib.WebSocket(url);
+  _rtSocket = sock;
+  _rtIntentionalClose = false;
+
+  sock.on('open', () => {
+    console.log('[CLOUD-RT] websocket open, joining channel…');
+    const accessToken = _sbSession?.access_token;
+    _rtSend({
+      topic: 'realtime:ism-shared',
+      event: 'phx_join',
+      payload: {
+        config: {
+          broadcast: { ack: false, self: false },
+          presence: { key: '' },
+          postgres_changes: _RT_TABLES.map(t => ({
+            event: '*', schema: 'public', table: t
+          }))
+        },
+        access_token: accessToken
+      },
+      ref: String(++_rtRef)
+    });
+    // Heartbeat every 25s (server requires <30s)
+    _rtHeartbeatTimer = setInterval(() => {
+      _rtSend({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(++_rtRef) });
+    }, 25000);
+  });
+
+  sock.on('message', (raw) => {
+    let m;
+    try { m = JSON.parse(raw.toString()); } catch { return; }
+
+    if (m.event === 'postgres_changes') {
+      const change = m.payload.data;
+      const tbl = change.table;
+      if (!_RT_TABLES.includes(tbl)) return;
+
+      // Update local cache
+      const items = readCollection(tbl);
+      if (change.type === 'INSERT' || change.type === 'UPDATE') {
+        const newRow = change.record;
+        if (newRow && newRow.id) {
+          const idx = items.findIndex(i => i.id === newRow.id);
+          if (idx >= 0) items[idx] = newRow; else items.push(newRow);
+          _store[tbl] = items;
+        }
+      } else if (change.type === 'DELETE') {
+        const oldRow = change.old_record;
+        if (oldRow && oldRow.id) {
+          _store[tbl] = items.filter(i => i.id !== oldRow.id);
+        }
+      }
+      broadcastDataChange(tbl);
+    } else if (m.event === 'phx_reply' && m.payload?.status === 'ok' && m.payload.response?.postgres_changes) {
+      console.log('[CLOUD-RT] subscribed to', m.payload.response.postgres_changes.length, 'table change streams');
+    } else if (m.event === 'system' && m.payload?.status === 'ok') {
+      console.log('[CLOUD-RT]', m.payload.message);
+    } else if (m.event === 'phx_error' || m.payload?.status === 'error') {
+      console.warn('[CLOUD-RT] error:', JSON.stringify(m.payload).slice(0, 300));
+    }
+  });
+
+  sock.on('error', (e) => {
+    console.warn('[CLOUD-RT] socket error:', e.message);
+  });
+
+  sock.on('close', (code, reason) => {
+    if (_rtHeartbeatTimer) { clearInterval(_rtHeartbeatTimer); _rtHeartbeatTimer = null; }
+    _rtSocket = null;
+    if (_rtIntentionalClose) {
+      console.log('[CLOUD-RT] closed (intentional)');
+      return;
+    }
+    console.log('[CLOUD-RT] closed (code:', code + ') — reconnecting in 5s');
+    _rtReconnectTimer = setTimeout(() => {
+      if (_cloudReady()) _cloudSubscribeRealtime();
+    }, 5000);
+  });
+}
+
+function _cloudUnsubscribeRealtime() {
+  _rtIntentionalClose = true;
+  if (_rtHeartbeatTimer) { clearInterval(_rtHeartbeatTimer); _rtHeartbeatTimer = null; }
+  if (_rtReconnectTimer) { clearTimeout(_rtReconnectTimer); _rtReconnectTimer = null; }
+  if (_rtSocket) {
+    try { _rtSocket.close(); } catch {}
+    _rtSocket = null;
+  }
 }
 
 // ===== CONFIRMATION HTTP SERVER =====
@@ -193,6 +508,32 @@ function startConfirmServer() {
       return;
     }
 
+    // Job appointment confirmation
+    if (url.pathname === '/confirm-job') {
+      const jobId = url.searchParams.get('id');
+      const jobs = readCollection('jobs');
+      const idx = jobs.findIndex(j => j.id === jobId);
+      if (idx === -1) {
+        res.writeHead(404, { 'Content-Type': 'text/html' });
+        res.end(confirmPage('Not Found', 'This confirmation link is invalid.', '#e53935'));
+        return;
+      }
+      const job = jobs[idx];
+      if (job.customer_confirmed_at) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(confirmPage('Already Confirmed', 'Your appointment has already been confirmed. We look forward to seeing you!', '#43a047'));
+        return;
+      }
+      jobs[idx] = { ...job, customer_confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      writeCollection('jobs', jobs);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('job-confirmed', { id: job.id });
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(confirmPage('Appointment Confirmed!', 'Thank you! We\'ve received your confirmation and look forward to seeing you on your scheduled date.', '#2e7d32'));
+      return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(confirmPage('Interstate Septic', 'Customer confirmation portal.', '#2e7d32'));
   });
@@ -207,7 +548,11 @@ function startConfirmServer() {
 }
 
 function stopConfirmServer() {
-  if (confirmServer) { confirmServer.close(); confirmServer = null; }
+  if (confirmServer) {
+    confirmServer.closeAllConnections?.(); // Node 18.2+
+    confirmServer.close();
+    confirmServer = null;
+  }
 }
 
 function restartConfirmServer() {
@@ -291,25 +636,69 @@ function createWindow() {
     height: 900,
     minWidth: 1000,
     minHeight: 700,
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
     },
     title: 'Interstate Septic Manager',
+    autoHideMenuBar: true,
   });
+  mainWindow.setMenuBarVisibility(false);
   mainWindow.loadFile('src/index.html');
 
-  // Closing the window minimizes to tray instead of quitting
+  // Ctrl+= / Ctrl+- / Ctrl+0 and Ctrl+MouseWheel zoom
+  const clampZoom = (lvl) => Math.max(-3, Math.min(5, lvl));
+  const notifyZoom = () => {
+    const wc = mainWindow.webContents;
+    const pct = Math.round(Math.pow(1.2, wc.getZoomLevel()) * 100);
+    wc.send('zoom-changed', { level: wc.getZoomLevel(), percent: pct });
+  };
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (!(input.control || input.meta)) return;
+    const wc = mainWindow.webContents;
+    if (input.key === '=' || input.key === '+') {
+      wc.setZoomLevel(clampZoom(wc.getZoomLevel() + 0.5));
+      notifyZoom();
+    } else if (input.key === '-' || input.key === '_') {
+      wc.setZoomLevel(clampZoom(wc.getZoomLevel() - 0.5));
+      notifyZoom();
+    } else if (input.key === '0') {
+      wc.setZoomLevel(0);
+      notifyZoom();
+    }
+  });
+  mainWindow.webContents.on('zoom-changed', (_e, direction) => {
+    const wc = mainWindow.webContents;
+    const delta = direction === 'in' ? 0.5 : -0.5;
+    wc.setZoomLevel(clampZoom(wc.getZoomLevel() + delta));
+    notifyZoom();
+  });
+
+  // Built-in find-in-page: the renderer calls window.api.findInPage(text, forward)
+  // and window.api.stopFindInPage() to dismiss.
+  ipcMain.handle('find-in-page', (_e, { text, forward = true, findNext = false }) => {
+    if (!text) return;
+    mainWindow.webContents.findInPage(text, { forward, findNext, matchCase: false });
+  });
+  ipcMain.handle('stop-find-in-page', () => {
+    mainWindow.webContents.stopFindInPage('clearSelection');
+  });
+  mainWindow.webContents.on('found-in-page', (_e, result) => {
+    mainWindow.webContents.send('find-in-page-result', {
+      matches: result.matches,
+      activeMatch: result.activeMatchOrdinal,
+    });
+  });
+
+  // Closing the main window quits the app
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {
-      e.preventDefault();
-      mainWindow.hide();
-      tray?.displayBalloon({
-        title: 'Interstate Septic Manager',
-        content: 'Running in the background. Double-click the tray icon to reopen.',
-        iconType: 'info',
-      });
+      app.isQuitting = true;
+      app.quit();
     }
   });
 }
@@ -332,15 +721,158 @@ app.whenReady().then(() => {
   // Check reminder alerts every 60 seconds
   setTimeout(() => { checkReminderAlerts(); }, 5000);
   setInterval(() => { checkReminderAlerts(); }, 60000);
+  // Auto-update check (skipped in dev because there's no GH release to compare against)
+  setTimeout(() => { setupAutoUpdater(); }, 8000);
 });
 
-// Don't quit when all windows close — stay in tray
+// ===== AUTO-UPDATER (electron-updater + GitHub Releases) =====
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    console.log('[UPDATER] dev mode — skipping auto-update check');
+    return;
+  }
+  let autoUpdater;
+  try { autoUpdater = require('electron-updater').autoUpdater; }
+  catch (e) { console.warn('[UPDATER] electron-updater not available:', e.message); return; }
+
+  autoUpdater.logger = console;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => console.log('[UPDATER] checking for update…'));
+  autoUpdater.on('update-available', (info) => {
+    console.log('[UPDATER] update available:', info.version);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-available', { version: info.version, notes: info.releaseNotes || '' });
+    }
+  });
+  autoUpdater.on('update-not-available', () => console.log('[UPDATER] up to date'));
+  autoUpdater.on('error', (err) => console.warn('[UPDATER] error:', err?.message || err));
+  autoUpdater.on('download-progress', (p) => {
+    console.log('[UPDATER] downloading:', Math.round(p.percent) + '%');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-progress', { percent: p.percent, transferred: p.transferred, total: p.total });
+    }
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[UPDATER] update downloaded:', info.version, '— ready to install on next restart');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-ready', { version: info.version });
+    }
+  });
+
+  // Check now, then every 6 hours
+  autoUpdater.checkForUpdates().catch(e => console.warn('[UPDATER] initial check failed:', e?.message || e));
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch(e => console.warn('[UPDATER] periodic check failed:', e?.message || e));
+  }, 6 * 60 * 60 * 1000);
+}
+
+ipcMain.handle('install-update-now', async () => {
+  try {
+    const autoUpdater = require('electron-updater').autoUpdater;
+    autoUpdater.quitAndInstall(false, true);
+    return { success: true };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+// ===== POPUP WINDOWS =====
+ipcMain.handle('open-popup-window', async (e, { page, id, title }) => {
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 820,
+    minWidth: 700,
+    minHeight: 500,
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    title: title || ('ISM — ' + (page || 'Page')),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true,
+    },
+  });
+  const query = { popup: '1', page: page || 'schedule' };
+  if (id) query.id = id;
+  win.loadFile('src/index.html', { query });
+
+  // Drag-to-reattach: detect when popup is dragged near main window's tab bar
+  let _dockTimer = null;
+
+  function clearDockTimer() {
+    if (_dockTimer) { clearTimeout(_dockTimer); _dockTimer = null; }
+  }
+
+  function notifyNear(near) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('popup-near-tabbar', { near, page: page || 'schedule' }); } catch {}
+    }
+  }
+
+  win.on('move', () => {
+    clearDockTimer();
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    const [px, py] = win.getPosition();
+    const [pw] = win.getSize();
+    const [mx, my] = mainWindow.getPosition();
+    const [mw] = mainWindow.getSize();
+
+    // Tab bar is approximately 85px from top of main window (title bar + menu + tab bar)
+    const tabBarY = my + 85;
+    const xOverlap = px < mx + mw && px + pw > mx;
+    // Only dock when popup top edge is within a tight band right at the tab bar
+    const nearTabBar = xOverlap && py >= tabBarY - 10 && py <= tabBarY + 30;
+
+    notifyNear(nearTabBar);
+
+    if (nearTabBar) {
+      _dockTimer = setTimeout(() => {
+        // Auto-dock: open as tab in main, close popup
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('dock-page', page || 'schedule');
+          mainWindow.focus();
+        }
+        win.destroy();
+      }, 800);
+    }
+  });
+
+  win.on('closed', () => {
+    clearDockTimer();
+    notifyNear(false);
+  });
+
+  return { success: true };
+});
+
+// Dock a popup window back as a tab in the main window
+ipcMain.handle('dock-to-main', async (e, page) => {
+  // Find the main window (not a popup)
+  const wins = BrowserWindow.getAllWindows();
+  const mainWin = wins.find(w => !w.isDestroyed() && !w.webContents.getURL().includes('popup=1'));
+  if (mainWin) {
+    mainWin.webContents.send('dock-page', page);
+    mainWin.focus();
+  }
+  // Close the popup that sent this
+  const senderWin = BrowserWindow.fromWebContents(e.sender);
+  if (senderWin && !senderWin.isDestroyed()) senderWin.close();
+  return { success: true };
+});
+
 app.on('window-all-closed', () => {
-  // intentionally empty — tray keeps app alive
+  app.quit();
 });
 
 app.on('before-quit', () => {
   app.isQuitting = true;
+  stopConfirmServer();
+  if (tray) { tray.destroy(); tray = null; }
+});
+
+app.on('quit', () => {
+  process.exit(0);
 });
 
 app.on('activate', () => {
@@ -349,24 +881,35 @@ app.on('activate', () => {
 
 // ===== CUSTOMERS =====
 ipcMain.handle('get-customers', async (e, search) => {
-  let customers = readCollection('customers');
-  const properties = readCollection('properties');
+  let customers = await readCollectionAsync('customers');
+  const properties = await readCollectionAsync('properties');
+
+  // Index properties by customer_id once (O(n)) so the per-customer join is O(1)
+  // instead of O(customers × properties) — the naive nested filter was locking the
+  // UI for 1–2s with 4k customers × 4k properties.
+  const propsByCust = new Map();
+  for (const p of properties) {
+    if (!p.customer_id) continue;
+    const arr = propsByCust.get(p.customer_id);
+    if (arr) arr.push(p); else propsByCust.set(p.customer_id, [p]);
+  }
+
   if (search) {
     const s = search.toLowerCase();
-    // Search customers by name, phone, email, or by property address
-    const propertyCustomerIds = properties
-      .filter(p => (p.address || '').toLowerCase().includes(s))
-      .map(p => p.customer_id);
+    const propertyCustomerIds = new Set(
+      properties.filter(p => (p.address || '').toLowerCase().includes(s)).map(p => p.customer_id)
+    );
     customers = customers.filter(c =>
       (c.name || '').toLowerCase().includes(s) ||
       (c.phone || '').toLowerCase().includes(s) ||
       (c.email || '').toLowerCase().includes(s) ||
-      propertyCustomerIds.includes(c.id)
+      propertyCustomerIds.has(c.id)
     );
   }
-  // Attach property count and balance
+
+  // Attach property count and primary address (O(1) lookup per customer)
   customers = customers.map(c => {
-    const custProps = properties.filter(p => p.customer_id === c.id);
+    const custProps = propsByCust.get(c.id) || [];
     const primary = custProps[0];
     const addr = primary ? `${primary.address || ''}${primary.city ? ', ' + primary.city : ''}${primary.state ? ' ' + primary.state : ''}` : '';
     return { ...c, property_count: custProps.length, primary_address: addr.trim() };
@@ -375,37 +918,74 @@ ipcMain.handle('get-customers', async (e, search) => {
   return { data: customers };
 });
 
+// Lightweight customer list for autocompletes / job-modal search. Returns
+// only the fields the dropdown actually needs, which cuts the IPC payload
+// from ~1.6MB to ~300KB on 4k customers and removes the typing lag.
+ipcMain.handle('get-customers-lite', async () => {
+  const customers = await readCollectionAsync('customers');
+  const properties = await readCollectionAsync('properties');
+  const firstPropByCust = new Map();
+  for (const p of properties) {
+    if (!p.customer_id) continue;
+    if (firstPropByCust.has(p.customer_id)) continue;
+    firstPropByCust.set(p.customer_id, p);
+  }
+  const out = new Array(customers.length);
+  for (let i = 0; i < customers.length; i++) {
+    const c = customers[i];
+    const p = firstPropByCust.get(c.id);
+    let addr = '';
+    if (p) {
+      addr = (p.address || '');
+      if (p.city) addr += (addr ? ', ' : '') + p.city;
+      if (p.state) addr += ' ' + p.state;
+    }
+    out[i] = {
+      id: c.id,
+      name: c.name || '',
+      phone: c.phone || '',
+      phone_cell: c.phone_cell || '',
+      email: c.email || '',
+      primary_address: addr,
+    };
+  }
+  out.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return { data: out };
+});
+
 ipcMain.handle('get-customer', async (e, id) => {
-  const customer = findById('customers', id);
+  const customer = await findByIdAsync('customers', id);
   if (customer) {
-    customer.properties = readCollection('properties').filter(p => p.customer_id === id);
+    const properties = await readCollectionAsync('properties');
+    customer.properties = properties.filter(p => p.customer_id === id);
   }
   return { data: customer };
 });
 
 ipcMain.handle('save-customer', async (e, data) => {
-  const saved = upsert('customers', data);
+  const saved = await upsertAsync('customers', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-customer', async (e, id) => {
-  // Also delete associated properties and tanks
-  const properties = readCollection('properties').filter(p => p.customer_id === id);
-  properties.forEach(p => {
-    const tanks = readCollection('tanks').filter(t => t.property_id !== p.id);
-    writeCollection('tanks', tanks);
-  });
-  const remainingProps = readCollection('properties').filter(p => p.customer_id !== id);
-  writeCollection('properties', remainingProps);
-  remove('customers', id);
+  // Cascade delete: properties + tanks under this customer
+  const properties = await readCollectionAsync('properties');
+  const childProps = properties.filter(p => p.customer_id === id);
+  for (const p of childProps) {
+    const tanks = await readCollectionAsync('tanks');
+    const childTanks = tanks.filter(t => t.property_id === p.id);
+    for (const t of childTanks) await removeAsync('tanks', t.id);
+    await removeAsync('properties', p.id);
+  }
+  await removeAsync('customers', id);
   return { success: true };
 });
 
 // ===== PROPERTIES =====
 ipcMain.handle('get-properties', async (e, customerId) => {
-  let properties = readCollection('properties');
+  let properties = await readCollectionAsync('properties');
   if (customerId) properties = properties.filter(p => p.customer_id === customerId);
-  const tanks = readCollection('tanks');
+  const tanks = await readCollectionAsync('tanks');
   properties = properties.map(p => ({
     ...p,
     tanks: tanks.filter(t => t.property_id === p.id),
@@ -415,87 +995,100 @@ ipcMain.handle('get-properties', async (e, customerId) => {
 });
 
 ipcMain.handle('get-property', async (e, id) => {
-  const property = findById('properties', id);
+  const property = await findByIdAsync('properties', id);
   if (property) {
-    property.tanks = readCollection('tanks').filter(t => t.property_id === id);
-    property.customer = findById('customers', property.customer_id);
+    const tanks = await readCollectionAsync('tanks');
+    property.tanks = tanks.filter(t => t.property_id === id);
+    property.customer = await findByIdAsync('customers', property.customer_id);
   }
   return { data: property };
 });
 
 ipcMain.handle('save-property', async (e, data) => {
-  const saved = upsert('properties', data);
+  const saved = await upsertAsync('properties', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-property', async (e, id) => {
-  // Also delete tanks under this property
-  const remainingTanks = readCollection('tanks').filter(t => t.property_id !== id);
-  writeCollection('tanks', remainingTanks);
-  remove('properties', id);
+  // Cascade: delete child tanks first
+  const tanks = await readCollectionAsync('tanks');
+  const childTanks = tanks.filter(t => t.property_id === id);
+  for (const t of childTanks) await removeAsync('tanks', t.id);
+  await removeAsync('properties', id);
   return { success: true };
 });
 
 // ===== TANKS =====
 ipcMain.handle('get-tanks', async (e, propertyId) => {
-  let tanks = readCollection('tanks');
+  let tanks = await readCollectionAsync('tanks');
   if (propertyId) tanks = tanks.filter(t => t.property_id === propertyId);
   return { data: tanks };
 });
 
 ipcMain.handle('save-tank', async (e, data) => {
-  const saved = upsert('tanks', data);
+  const saved = await upsertAsync('tanks', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-tank', async (e, id) => {
-  remove('tanks', id);
+  await removeAsync('tanks', id);
   return { success: true };
 });
 
 // ===== VEHICLES =====
 ipcMain.handle('get-vehicles', async () => {
-  const vehicles = readCollection('vehicles');
+  const vehicles = await readCollectionAsync('vehicles');
   vehicles.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
   return { data: vehicles };
 });
 
 ipcMain.handle('save-vehicle', async (e, data) => {
-  const saved = upsert('vehicles', data);
+  const saved = await upsertAsync('vehicles', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-vehicle', async (e, id) => {
-  remove('vehicles', id);
+  await removeAsync('vehicles', id);
+  return { success: true };
+});
+
+ipcMain.handle('reorder-vehicles', async (e, orderedIds) => {
+  const items = await readCollectionAsync('vehicles');
+  const byId = Object.fromEntries(items.map(v => [v.id, v]));
+  for (let idx = 0; idx < orderedIds.length; idx++) {
+    const id = orderedIds[idx];
+    if (byId[id] && byId[id].sort_order !== idx) {
+      await upsertAsync('vehicles', { ...byId[id], sort_order: idx });
+    }
+  }
   return { success: true };
 });
 
 // ===== TRUCK DAY ASSIGNMENTS =====
 ipcMain.handle('get-truck-day-assignments', async (e, date) => {
-  const all = readCollection('truck_day_assignments');
+  const all = await readCollectionAsync('truck_day_assignments');
   return { data: date ? all.filter(a => a.date === date) : all };
 });
 
 ipcMain.handle('save-truck-day-assignment', async (e, data) => {
-  // data: { vehicle_id, date, user_id }  — upsert by vehicle_id+date
-  const all = readCollection('truck_day_assignments');
-  const idx = all.findIndex(a => a.vehicle_id === data.vehicle_id && a.date === data.date);
-  if (idx >= 0) {
-    all[idx] = { ...all[idx], user_id: data.user_id, updated_at: new Date().toISOString() };
+  // upsert by vehicle_id+date composite key
+  const all = await readCollectionAsync('truck_day_assignments');
+  const existing = all.find(a => a.vehicle_id === data.vehicle_id && a.date === data.date);
+  if (existing) {
+    await upsertAsync('truck_day_assignments', { ...existing, user_id: data.user_id });
   } else {
-    all.push({ id: require('crypto').randomUUID(), ...data, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    await upsertAsync('truck_day_assignments', { ...data });
   }
-  writeCollection('truck_day_assignments', all);
   return { success: true };
 });
 
 // ===== JOBS =====
 ipcMain.handle('get-jobs', async (e, filters) => {
-  let jobs = readCollection('jobs');
-  const customers = readCollection('customers');
-  const users = readCollection('users');
-  const vehicles = readCollection('vehicles');
-  const properties = readCollection('properties');
+  let jobs = (await readCollectionAsync('jobs')).filter(j => !j.deleted_at);
+  const customers = await readCollectionAsync('customers');
+  const users = await readCollectionAsync('users');
+  const vehicles = await readCollectionAsync('vehicles');
+  const properties = await readCollectionAsync('properties');
 
   if (filters?.date) {
     jobs = jobs.filter(j => j.scheduled_date === filters.date);
@@ -509,7 +1102,7 @@ ipcMain.handle('get-jobs', async (e, filters) => {
   if (filters?.customerId) jobs = jobs.filter(j => j.customer_id === filters.customerId);
   if (filters?.propertyId) jobs = jobs.filter(j => j.property_id === filters.propertyId);
 
-  const tanks = readCollection('tanks');
+  const tanks = await readCollectionAsync('tanks');
   // Join customer, user, vehicle, property, tanks
   jobs = jobs.map(j => {
     const prop = properties.find(p => p.id === j.property_id) || null;
@@ -532,28 +1125,278 @@ ipcMain.handle('get-jobs', async (e, filters) => {
 });
 
 ipcMain.handle('get-job', async (e, id) => {
-  const job = findById('jobs', id);
+  const job = await findByIdAsync('jobs', id);
   if (job) {
-    job.customers = findById('customers', job.customer_id);
-    job.users = findById('users', job.assigned_to);
-    job.vehicle = findById('vehicles', job.vehicle_id);
-    const prop = findById('properties', job.property_id);
+    job.customers = await findByIdAsync('customers', job.customer_id);
+    job.users = await findByIdAsync('users', job.assigned_to);
+    job.vehicle = await findByIdAsync('vehicles', job.vehicle_id);
+    const prop = await findByIdAsync('properties', job.property_id);
     if (prop) {
-      prop.tanks = readCollection('tanks').filter(t => t.property_id === prop.id);
+      const tanks = await readCollectionAsync('tanks');
+      prop.tanks = tanks.filter(t => t.property_id === prop.id);
     }
     job.property = prop;
   }
   return { data: job };
 });
 
+// ===== APPOINTMENT CONFIRMATION EMAIL =====
+// Returns a promise resolving to {status, reason?, to?, error?} so the caller
+// can surface the outcome to the renderer instead of silently failing.
+//   status = 'sent' | 'skipped' | 'failed'
+async function sendJobConfirmEmail(job, customer, property, reason) {
+  if (!job.scheduled_date) return { status: 'skipped', reason: 'Job has no scheduled date' };
+  if (!customer) return { status: 'skipped', reason: 'No customer record' };
+  // Never email demo/test data. Demo jobs, demo customers, and demo
+  // properties are flagged with _test_data=true by the seeder so they
+  // can be cascade-deleted; use that same flag to silence any outbound
+  // mail no matter which path triggered the save.
+  if (job._test_data || customer._test_data || (property && property._test_data)) {
+    console.log(`[MAIL] Skipped job confirm: demo/test data (job ${job.id})`);
+    return { status: 'skipped', reason: 'Demo/test data — no email sent' };
+  }
+  if (!customer.email || !customer.email.trim()) {
+    console.log(`[MAIL] Skipped job confirm: customer "${customer.name}" has no email`);
+    return { status: 'skipped', reason: `Customer "${customer.name || 'Unknown'}" has no email address on file` };
+  }
+
+  try {
+    const settingsPath = path.join(userDataPath, 'settings.json');
+    if (!fs.existsSync(settingsPath)) return { status: 'skipped', reason: 'settings.json not found' };
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (!settings.smtp_host) return { status: 'skipped', reason: 'SMTP not configured (Settings → SMTP Host is empty)' };
+    if (settings.confirm_email_enabled === false) return { status: 'skipped', reason: 'Confirmation emails are disabled in Settings' };
+    if (reason === 'reschedule' && !settings.confirm_email_send_on_reschedule) {
+      return { status: 'skipped', reason: 'Reschedule emails are disabled in Settings' };
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: settings.smtp_host,
+      port: parseInt(settings.smtp_port) || 587,
+      secure: parseInt(settings.smtp_port) === 465,
+      auth: { user: settings.smtp_user, pass: settings.smtp_pass },
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
+    });
+
+    const companyName = settings.company_name || 'Interstate Septic Systems';
+    const fromName = settings.confirm_email_from_name || companyName;
+    const subject = reason === 'reschedule'
+      ? (settings.confirm_email_subject || `Your Appointment Has Been Rescheduled — ${companyName}`).replace(/\{company\}/g, companyName)
+      : (settings.confirm_email_subject || `Your Appointment Confirmation — ${companyName}`).replace(/\{company\}/g, companyName);
+
+    const html = buildJobConfirmEmail(job, customer, property, settings);
+
+    await transporter.sendMail({
+      from: `"${fromName}" <${settings.smtp_user}>`,
+      to: customer.email,
+      subject,
+      html,
+    });
+    console.log(`[MAIL] Job confirm (${reason}) sent to ${customer.email}`);
+    return { status: 'sent', to: customer.email };
+  } catch (err) {
+    console.error('[MAIL ERROR] Job confirmation:', err.message);
+    return { status: 'failed', error: err.message, to: customer.email };
+  }
+}
+
+function buildJobConfirmEmail(job, customer, property, settings) {
+  const companyName = settings.company_name || 'Interstate Septic Systems';
+  const companyAddr = settings.company_address || '';
+  const companyPhone = settings.company_phone || '';
+
+  const firstName = (customer.name || 'Valued Customer').split(/\s+/)[0];
+
+  const propAddr = property
+    ? [property.address, property.city, property.state].filter(Boolean).join(', ')
+    : (job.property_address || 'your property');
+
+  const dateStr = job.scheduled_date
+    ? new Date(job.scheduled_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    : 'TBD';
+
+  let timeStr = '';
+  const timeRaw = (job.scheduled_time || '').trim();
+  if (timeRaw) {
+    const m = timeRaw.match(/^(\d{1,2}):(\d{2})/);
+    if (m) {
+      const h = parseInt(m[1]), mm = m[2];
+      timeStr = ` at ${h > 12 ? h - 12 : h || 12}:${mm} ${h >= 12 ? 'PM' : 'AM'}`;
+    } else {
+      timeStr = ` at ${timeRaw}`;
+    }
+  }
+
+  // Build service list from line items or service_type
+  const lineItems = job.line_items || [];
+  let services = lineItems.map(li => li.description).filter(Boolean);
+  if (!services.length && job.service_type) {
+    services = job.service_type.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  if (!services.length) services = ['Septic Service'];
+
+  // Policy bullets — one non-empty line per bullet
+  const policyLines = (settings.confirm_email_policy || '').split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Footer
+  const footerText = settings.confirm_email_footer || 'Please respond at least 48 hours before your appointment if you need to reschedule or cancel.';
+
+  // Confirm button URL
+  const { publicUrl, port } = getServerSettings();
+  const confirmUrl = publicUrl ? `${publicUrl}:${port}/confirm-job?id=${job.id}` : null;
+  const phoneClean = companyPhone.replace(/\D/g, '');
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;">
+<div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;background:#ffffff;padding:32px 28px;">
+
+  <div style="text-align:center;margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid #e0e0e0;">
+    <h2 style="margin:0 0 6px;font-size:22px;font-weight:bold;color:#111;">${companyName}</h2>
+    ${companyAddr ? `<p style="margin:2px 0;font-size:13px;color:#666;">${companyAddr}</p>` : ''}
+    ${companyPhone ? `<p style="margin:4px 0;"><a href="tel:${phoneClean}" style="color:#1565c0;font-size:14px;">${companyPhone}</a></p>` : ''}
+  </div>
+
+  <p style="margin:0 0 12px;">Dear ${firstName},</p>
+  <p style="margin:0 0 12px;">Your new appointment for service at <strong>${propAddr}</strong> is scheduled on <strong>${dateStr}${timeStr}</strong>.</p>
+  <p style="margin:0 0 20px;">We look forward to seeing you then.</p>
+
+  ${services.length ? `
+  <p style="margin:0 0 8px;">Your scheduled services include:</p>
+  <ul style="margin:0 0 20px;padding-left:22px;color:#1565c0;">
+    ${services.map(s => `<li style="margin-bottom:5px;">${s}</li>`).join('')}
+  </ul>` : ''}
+
+  ${policyLines.length ? `
+  <p style="margin:0 0 8px;font-weight:bold;">Attention: Possible Additional Costs Explained Below</p>
+  <ul style="margin:0 0 20px;padding-left:22px;color:#b71c1c;">
+    ${policyLines.map(l => `<li style="margin-bottom:8px;">${l}</li>`).join('')}
+  </ul>` : ''}
+
+  ${companyPhone ? `<p style="margin:0 0 12px;">If you have any questions, please call us at <a href="tel:${phoneClean}" style="color:#1565c0;">${companyPhone}</a></p>` : ''}
+
+  <p style="margin:0 0 28px;">${footerText}</p>
+
+  <div style="text-align:center;margin-bottom:24px;">
+    ${confirmUrl
+      ? `<a href="${confirmUrl}" style="display:inline-block;background:#2e7d32;color:#fff;padding:14px 36px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:15px;">Agree &amp; Confirm</a>`
+      : (companyPhone ? `<a href="tel:${phoneClean}" style="display:inline-block;background:#2e7d32;color:#fff;padding:14px 36px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:15px;">Call to Confirm: ${companyPhone}</a>` : '')
+    }
+  </div>
+
+  <hr style="border:none;border-top:1px solid #eee;margin:0 0 16px;">
+  <p style="font-size:11px;color:#bbb;text-align:center;margin:0;">This is an automated message from ${companyName}. Please do not reply directly to this email.</p>
+</div>
+</body>
+</html>`;
+}
+
+function shouldSendJobConfirm(settings) {
+  // Send if SMTP is configured AND confirm emails are enabled (default on if not set)
+  return !!(settings.smtp_host && settings.confirm_email_enabled !== false);
+}
+
+// ===== TEST SMTP =====
+// Sends a test email using either live form values (passed from the Settings
+// screen before saving) or the currently saved settings. Renders a realistic
+// sample appointment-confirmation email so the recipient can verify the layout.
+ipcMain.handle('send-test-email', async (e, payload) => {
+  payload = payload || {};
+  const to = (payload.to || 'tyler.interstateseptic@gmail.com').trim();
+
+  // Merge live form overrides over saved settings so we test the exact config
+  // the user is looking at without forcing them to save first.
+  let saved = {};
+  try {
+    const p = path.join(userDataPath, 'settings.json');
+    if (fs.existsSync(p)) saved = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {}
+  const s = { ...saved, ...(payload.settings || {}) };
+
+  if (!s.smtp_host) return { success: false, error: 'SMTP Host is empty. Enter smtp.gmail.com (or your provider) first.' };
+  if (!s.smtp_user) return { success: false, error: 'SMTP User is empty.' };
+  if (!s.smtp_pass) return { success: false, error: 'SMTP Password is empty. For Gmail this must be a 16-character App Password.' };
+
+  const port = parseInt(s.smtp_port) || 587;
+  const secure = port === 465;
+  const companyName = s.company_name || 'Interstate Septic Systems';
+  const fromName = s.confirm_email_from_name || companyName;
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: s.smtp_host,
+      port,
+      secure,
+      auth: { user: s.smtp_user, pass: s.smtp_pass },
+      // Short timeouts so we don't hang the UI for 60s on a bad host
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
+    });
+
+    // Verify reachability/auth first for a clearer error before sendMail
+    try {
+      await transporter.verify();
+    } catch (vErr) {
+      return { success: false, error: `SMTP verify failed: ${vErr.message}` };
+    }
+
+    // Build a realistic sample appointment email so the user sees what a
+    // real confirmation looks like.
+    const sampleJob = {
+      id: 'test-' + Date.now(),
+      scheduled_date: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
+      scheduled_time: '07:30',
+      service_type: 'Septic Pumping, Filter Cleaning',
+      line_items: [
+        { description: 'Septic Tank Pumping (1,000 gal)' },
+        { description: 'Effluent Filter Cleaning' },
+      ],
+      property_address: '123 Sample Rd, Camden, ME',
+    };
+    const sampleCustomer = { name: 'Test Customer', email: to };
+    const sampleProperty = { address: '123 Sample Rd', city: 'Camden', state: 'ME', zip: '04843' };
+
+    const html = `
+      <div style="max-width:620px;margin:0 auto;font-family:Arial,sans-serif;">
+        <div style="background:#1b5e20;color:#fff;padding:12px 20px;border-radius:6px 6px 0 0;font-size:14px;font-weight:bold;">
+          ✅ SMTP TEST — Interstate Septic Manager
+        </div>
+        <div style="border:1px solid #e0e0e0;border-top:none;padding:16px 20px;background:#f9fdf9;font-size:13px;color:#333;border-radius:0 0 6px 6px;margin-bottom:20px;">
+          <p style="margin:0 0 6px;">If you're reading this, your SMTP settings are working and confirmation emails will be delivered to your customers.</p>
+          <p style="margin:0 0 6px;"><strong>Host:</strong> ${s.smtp_host} &nbsp; <strong>Port:</strong> ${port} &nbsp; <strong>User:</strong> ${s.smtp_user}</p>
+          <p style="margin:0;color:#666;">A sample appointment confirmation is shown below, exactly as customers will receive it.</p>
+        </div>
+        ${buildJobConfirmEmail(sampleJob, sampleCustomer, sampleProperty, s)}
+      </div>
+    `;
+
+    const info = await transporter.sendMail({
+      from: `"${fromName}" <${s.smtp_user}>`,
+      to,
+      subject: `[TEST] Appointment Confirmation — ${companyName}`,
+      html,
+    });
+
+    console.log(`[MAIL] Test email sent to ${to}: ${info.messageId}`);
+    return { success: true, messageId: info.messageId, to };
+  } catch (err) {
+    console.error('[MAIL ERROR] test email:', err);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('save-job', async (e, data) => {
   const isNew = !data.id;
-  const saved = upsert('jobs', data);
+  const saved = await upsertAsync('jobs', data);
 
   // Auto-create/sync invoice
   if (isNew) {
     // Generate next invoice number
-    const invoices = readCollection('invoices');
+    const invoices = await readCollectionAsync('invoices');
     let nextNum = 1;
     if (invoices.length > 0) {
       const nums = invoices.map(i => parseInt((i.invoice_number || '0').replace(/\D/g, '')) || 0);
@@ -561,13 +1404,13 @@ ipcMain.handle('save-job', async (e, data) => {
     }
     const invoiceNumber = String(nextNum);
 
-    const customer = findById('customers', saved.customer_id);
-    const property = findById('properties', saved.property_id);
+    const customer = await findByIdAsync('customers', saved.customer_id);
+    const property = await findByIdAsync('properties', saved.property_id);
     const totalGal = Object.values(saved.gallons_pumped || {}).reduce((s, g) => s + (parseInt(g) || 0), 0);
     const lineItems = saved.line_items || [];
     const subtotal = lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0);
 
-    upsert('invoices', {
+    await upsertAsync('invoices', {
       invoice_number: invoiceNumber,
       job_id: saved.id,
       customer_id: saved.customer_id,
@@ -593,70 +1436,20 @@ ipcMain.handle('save-job', async (e, data) => {
       notes: '',
     });
 
-    // Send job confirmation email if scheduled date is set
-    if (saved.scheduled_date && customer?.email) {
-      (async () => {
-        try {
-          const settingsPath = path.join(userDataPath, 'settings.json');
-          if (fs.existsSync(settingsPath)) {
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-            if (settings.smtp_host) {
-              const transporter = nodemailer.createTransport({
-                host: settings.smtp_host,
-                port: parseInt(settings.smtp_port) || 587,
-                secure: parseInt(settings.smtp_port) === 465,
-                auth: { user: settings.smtp_user, pass: settings.smtp_pass },
-              });
-
-              const companyName = settings.company_name || 'Interstate Septic';
-              const companyPhone = settings.company_phone || '';
-              const propAddr = property ? `${property.address || ''}, ${property.city || ''} ${property.state || ''} ${property.zip || ''}`.trim() : 'your property';
-              const scheduledDate = new Date(saved.scheduled_date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
-              const html = `
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-                  <h2 style="color:#1b5e20;">${companyName}</h2>
-                  <p>Dear ${customer.name || 'Valued Customer'},</p>
-                  <p>Your service appointment has been scheduled!</p>
-                  <div style="background:#f0f7ff;padding:16px;border-left:4px solid #2196F3;border-radius:4px;margin:20px 0;">
-                    <p style="margin:8px 0;"><strong>Service Date:</strong> ${scheduledDate}</p>
-                    <p style="margin:8px 0;"><strong>Service Type:</strong> ${saved.service_type || 'Service'}</p>
-                    <p style="margin:8px 0;"><strong>Property:</strong> ${propAddr}</p>
-                    ${saved.notes ? `<p style="margin:8px 0;"><strong>Notes:</strong> ${saved.notes}</p>` : ''}
-                  </div>
-                  <p>If you need to reschedule or have any questions, please contact us.</p>
-                  ${companyPhone ? `<p>Phone: <strong>${companyPhone}</strong></p>` : ''}
-                  <p>Thank you for choosing ${companyName}!</p>
-                  <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
-                  <p style="font-size:12px;color:#999;">This is an automated confirmation from ${companyName}.</p>
-                </div>`;
-
-              await transporter.sendMail({
-                from: settings.smtp_user,
-                to: customer.email,
-                subject: `Service Appointment Confirmation - ${companyName}`,
-                html,
-              });
-              console.log('[MAIL] Job confirmation sent to ' + customer.email);
-            }
-          }
-        } catch (err) {
-          console.error('[MAIL ERROR] Job confirmation:', err.message);
-        }
-      })();
-    }
+    // Send appointment confirmation email (new job)
+    var emailResult = await sendJobConfirmEmail(saved, customer, property, 'new');
   } else {
     // Sync existing draft invoice linked to this job
-    const invoices = readCollection('invoices');
+    const invoices = await readCollectionAsync('invoices');
     const linked = invoices.find(i => i.job_id === saved.id && i.status === 'draft');
+    const customer = await findByIdAsync('customers', saved.customer_id);
+    const property = await findByIdAsync('properties', saved.property_id);
     if (linked) {
-      const customer = findById('customers', saved.customer_id);
-      const property = findById('properties', saved.property_id);
       const totalGal = Object.values(saved.gallons_pumped || {}).reduce((s, g) => s + (parseInt(g) || 0), 0);
       const lineItems = saved.line_items || [];
       const subtotal = lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0);
 
-      upsert('invoices', {
+      await upsertAsync('invoices', {
         id: linked.id,
         customer_id: saved.customer_id,
         property_id: saved.property_id,
@@ -674,50 +1467,304 @@ ipcMain.handle('save-job', async (e, data) => {
         property_city: property?.city || '',
       });
     }
+
+    // Send reschedule confirmation if date changed and setting is on
+    var emailResult = null;
+    if (saved.scheduled_date && saved.scheduled_date !== data._prevScheduledDate) {
+      emailResult = await sendJobConfirmEmail(saved, customer, property, 'reschedule');
+    }
   }
 
-  return { success: true, data: saved };
+  return { success: true, data: saved, email: emailResult || null };
 });
 
 ipcMain.handle('update-job-status', async (e, id, status) => {
-  const jobs = readCollection('jobs');
-  const idx = jobs.findIndex(j => j.id === id);
-  if (idx >= 0) {
-    jobs[idx].status = status;
-    jobs[idx].updated_at = new Date().toISOString();
-    if (status === 'completed') jobs[idx].completed_at = new Date().toISOString();
-    writeCollection('jobs', jobs);
+  const job = await findByIdAsync('jobs', id);
+  if (!job) return { success: false, error: 'Job not found' };
+  const updates = { ...job, status, updated_at: new Date().toISOString() };
+  if (status === 'completed') updates.completed_at = new Date().toISOString();
+  await upsertAsync('jobs', updates);
 
-    // Sync complete flag on linked invoice
-    const invoices = readCollection('invoices');
-    const linked = invoices.find(i => i.job_id === id);
-    if (linked) {
-      linked.complete = (status === 'completed');
-      linked.updated_at = new Date().toISOString();
-      writeCollection('invoices', invoices);
-    }
-
-    return { success: true };
+  // Sync complete flag on linked invoice
+  const invoices = await readCollectionAsync('invoices');
+  const linked = invoices.find(i => i.job_id === id);
+  if (linked) {
+    await upsertAsync('invoices', { ...linked, complete: (status === 'completed') });
   }
-  return { success: false, error: 'Job not found' };
+  return { success: true };
 });
 
 ipcMain.handle('delete-job', async (e, id) => {
-  remove('jobs', id);
-  // Auto-delete linked invoice
-  const invoices = readCollection('invoices');
-  const linked = invoices.find(i => i.job_id === id);
-  if (linked) remove('invoices', linked.id);
+  const job = await findByIdAsync('jobs', id);
+  if (job) {
+    const now = new Date().toISOString();
+    await upsertAsync('jobs', { ...job, deleted_at: now });
+    // Soft-delete linked invoice so it disappears from reports/invoices
+    const invoices = await readCollectionAsync('invoices');
+    const linkedInv = invoices.find(i => i.job_id === id && !i.deleted_at);
+    if (linkedInv) await upsertAsync('invoices', { ...linkedInv, deleted_at: now });
+  }
   return { success: true };
+});
+
+ipcMain.handle('bulk-delete-customers', async (e, ids) => {
+  const sendProgress = (p) => { try { e.sender.send('bulk-delete-progress', p); } catch (_) {} };
+  const idSet = new Set(ids);
+  sendProgress({ stage: 'reading', message: 'Loading data…' });
+
+  const customers = readCollection('customers').filter(c => !idSet.has(c.id));
+  const allProperties = readCollection('properties');
+  const removedPropIds = new Set(allProperties.filter(p => idSet.has(p.customer_id)).map(p => p.id));
+  const properties = allProperties.filter(p => !idSet.has(p.customer_id));
+  const tanks = readCollection('tanks').filter(t => !removedPropIds.has(t.property_id));
+
+  sendProgress({ stage: 'saving', message: 'Writing to disk…', total: ids.length, current: ids.length });
+  await new Promise(r => setImmediate(r));
+  writeCollection('customers', customers);
+  writeCollection('properties', properties);
+  writeCollection('tanks', tanks);
+  broadcastDataChange('customers');
+  broadcastDataChange('properties');
+  broadcastDataChange('tanks');
+  sendProgress({ stage: 'done', deleted: ids.length });
+  return { success: true, deleted: ids.length };
+});
+
+ipcMain.handle('bulk-delete-invoices', async (e, ids) => {
+  const sendProgress = (p) => { try { e.sender.send('bulk-delete-progress', p); } catch (_) {} };
+  const idSet = new Set(ids);
+  sendProgress({ stage: 'reading', message: 'Loading data…' });
+  const invoices = readCollection('invoices').filter(i => !idSet.has(i.id));
+  sendProgress({ stage: 'saving', message: 'Writing to disk…', total: ids.length, current: ids.length });
+  await new Promise(r => setImmediate(r));
+  writeCollection('invoices', invoices);
+  broadcastDataChange('invoices');
+  sendProgress({ stage: 'done', deleted: ids.length });
+  return { success: true, deleted: ids.length };
+});
+
+ipcMain.handle('bulk-cancel-invoices', async (e, ids, cancel) => {
+  const idSet = new Set(ids);
+  const now = new Date().toISOString();
+  const invoices = readCollection('invoices').map(i =>
+    idSet.has(i.id) ? { ...i, cancelled: !!cancel, cancelled_at: cancel ? now : null, updated_at: now } : i
+  );
+  writeCollection('invoices', invoices);
+  broadcastDataChange('invoices');
+  return { success: true, updated: ids.length };
+});
+
+ipcMain.handle('bulk-delete-jobs', async (e, ids) => {
+  const sendProgress = (p) => { try { e.sender.send('bulk-delete-progress', p); } catch (_) {} };
+  const idSet = new Set(ids);
+  sendProgress({ stage: 'reading', message: 'Loading data…' });
+
+  const jobs = readCollection('jobs').slice();
+  const invoices = readCollection('invoices').slice();
+  const now = new Date().toISOString();
+
+  for (let i = 0; i < jobs.length; i++) {
+    if (idSet.has(jobs[i].id)) {
+      jobs[i] = { ...jobs[i], deleted_at: now, updated_at: now };
+    }
+  }
+  for (let i = 0; i < invoices.length; i++) {
+    if (idSet.has(invoices[i].job_id) && !invoices[i].deleted_at) {
+      invoices[i] = { ...invoices[i], deleted_at: now, updated_at: now };
+    }
+  }
+
+  sendProgress({ stage: 'saving', message: 'Writing to disk…', total: ids.length, current: ids.length });
+  await new Promise(r => setImmediate(r));
+  writeCollection('jobs', jobs);
+  writeCollection('invoices', invoices);
+  broadcastDataChange('jobs');
+  broadcastDataChange('invoices');
+  sendProgress({ stage: 'done', deleted: ids.length });
+  return { success: true, deleted: ids.length };
+});
+
+ipcMain.handle('purge-trash-item', async (e, id, type) => {
+  if (type === 'job') {
+    remove('jobs', id);
+    const invoices = readCollection('invoices');
+    const linked = invoices.find(i => i.job_id === id);
+    if (linked) remove('invoices', linked.id);
+  } else if (type === 'manifest') {
+    remove('schedule_items', id);
+  } else if (type === 'payment') {
+    remove('payments', id);
+  } else if (type === 'invoice') {
+    remove('invoices', id);
+  } else if (type === 'service_due_notice') {
+    remove('service_due_notices', id);
+  } else if (type === 'disposal_load') {
+    remove('disposal_loads', id);
+  }
+  return { success: true };
+});
+
+ipcMain.handle('restore-trash-item', async (e, id, type) => {
+  if (type === 'job') {
+    const jobs = readCollection('jobs');
+    const job = jobs.find(j => j.id === id);
+    if (job) {
+      upsert('jobs', { ...job, deleted_at: null });
+      // Restore linked invoice if it was soft-deleted with this job
+      const invoices = readCollection('invoices');
+      const linkedInv = invoices.find(i => i.job_id === id && i.deleted_at);
+      if (linkedInv) upsert('invoices', { ...linkedInv, deleted_at: null });
+    }
+  } else if (type === 'manifest') {
+    const items = readCollection('schedule_items');
+    const item = items.find(i => i.id === id);
+    if (item) upsert('schedule_items', { ...item, deleted_at: null });
+  } else if (type === 'payment') {
+    const payments = readCollection('payments');
+    const payment = payments.find(p => p.id === id);
+    if (payment) {
+      upsert('payments', { ...payment, deleted_at: null });
+      // Recalculate invoice with payment restored
+      if (payment.invoice_id) {
+        const allPmts = readCollection('payments').filter(p => p.invoice_id === payment.invoice_id && !p.deleted_at);
+        const totalPaid = allPmts.reduce((s, p) => p.type === 'refund' ? s - (parseFloat(p.amount) || 0) : s + (parseFloat(p.amount) || 0), 0);
+        const invoices = readCollection('invoices');
+        const inv = invoices.find(i => i.id === payment.invoice_id);
+        if (inv) {
+          inv.amount_paid = Math.max(0, totalPaid);
+          const invTotal = parseFloat(inv.total) || 0;
+          inv.payment_status = inv.amount_paid >= invTotal && invTotal > 0 ? 'paid' : inv.amount_paid > 0 ? 'partial' : 'unpaid';
+          writeCollection('invoices', invoices);
+        }
+      }
+    }
+  } else if (type === 'invoice') {
+    const invoices = readCollection('invoices');
+    const inv = invoices.find(i => i.id === id);
+    if (inv) {
+      upsert('invoices', { ...inv, deleted_at: null });
+      // Clear invoice_suppressed on the linked job so it doesn't confuse backfill
+      if (inv.job_id) {
+        const jobs = readCollection('jobs');
+        const idx = jobs.findIndex(j => j.id === inv.job_id);
+        if (idx >= 0 && jobs[idx].invoice_suppressed) {
+          jobs[idx] = { ...jobs[idx], invoice_suppressed: false, updated_at: new Date().toISOString() };
+          writeCollection('jobs', jobs);
+        }
+      }
+    }
+  } else if (type === 'service_due_notice') {
+    const notices = readCollection('service_due_notices');
+    const notice = notices.find(n => n.id === id);
+    if (notice) upsert('service_due_notices', { ...notice, deleted_at: null });
+  } else if (type === 'disposal_load') {
+    const loads = readCollection('disposal_loads');
+    const load = loads.find(l => l.id === id);
+    if (load) upsert('disposal_loads', { ...load, deleted_at: null });
+  }
+  return { success: true };
+});
+
+ipcMain.handle('get-trash', async () => {
+  const allJobs = readCollection('jobs').filter(j => j.deleted_at);
+  const allItems = readCollection('schedule_items').filter(i => i.deleted_at && i.item_type === 'manifest');
+  const allPayments = readCollection('payments').filter(p => p.deleted_at);
+  const allInvoices = readCollection('invoices').filter(i => i.deleted_at);
+  const allNotices = readCollection('service_due_notices').filter(n => n.deleted_at);
+  const allLoads = readCollection('disposal_loads').filter(l => l.deleted_at);
+  const customers = readCollection('customers');
+  const properties = readCollection('properties');
+  const vehicles = readCollection('vehicles');
+  const invoices = readCollection('invoices');
+
+  const trashJobs = allJobs.map(j => {
+    const customer = customers.find(c => c.id === j.customer_id) || {};
+    const property = properties.find(p => p.id === j.property_id) || {};
+    return {
+      ...j,
+      trash_type: 'job',
+      customer_name: customer.name || '',
+      customer_phone: customer.phone_cell || customer.phone || '',
+      customer_email: customer.email || '',
+      property_address: property.address || '',
+      property_city: property.city || '',
+      property_state: property.state || '',
+    };
+  });
+
+  const trashManifests = allItems.map(i => {
+    const vehicle = vehicles.find(v => v.id === i.vehicle_id) || {};
+    return {
+      ...i,
+      trash_type: 'manifest',
+      vehicle_name: vehicle.name || '',
+      customer_names: i.snapshot_customer_names || '',
+      addresses: i.snapshot_addresses || '',
+    };
+  });
+
+  const trashPayments = allPayments.map(p => {
+    const customer = customers.find(c => c.id === p.customer_id) || {};
+    const invoice = invoices.find(i => i.id === p.invoice_id) || {};
+    return {
+      ...p,
+      trash_type: 'payment',
+      customer_name: customer.name || '',
+      invoice_number: invoice.invoice_number || '',
+    };
+  });
+
+  const trashInvoices = allInvoices.map(inv => {
+    const customer = customers.find(c => c.id === inv.customer_id) || {};
+    const property = properties.find(p => p.id === inv.property_id) || {};
+    return {
+      ...inv,
+      trash_type: 'invoice',
+      customer_name: customer.name || '',
+      customer_phone: customer.phone_cell || customer.phone || '',
+      customer_email: customer.email || '',
+      property_address: property.address || '',
+      property_city: property.city || '',
+      property_state: property.state || '',
+    };
+  });
+
+  const trashNotices = allNotices.map(n => {
+    const customer = customers.find(c => c.id === n.customer_id) || {};
+    const property = properties.find(p => p.id === n.property_id) || {};
+    return {
+      ...n,
+      trash_type: 'service_due_notice',
+      customer_name: customer.name || '',
+      customer_phone: customer.phone_cell || customer.phone || '',
+      customer_email: customer.email || '',
+      property_address: property.address || '',
+      property_city: property.city || '',
+      property_state: property.state || '',
+    };
+  });
+
+  const trashLoads = allLoads.map(l => {
+    const customer = customers.find(c => c.id === l.customer_id) || {};
+    return {
+      ...l,
+      trash_type: 'disposal_load',
+      customer_name: customer.name || '',
+    };
+  });
+
+  const all = [...trashJobs, ...trashManifests, ...trashPayments, ...trashInvoices, ...trashNotices, ...trashLoads]
+    .sort((a, b) => (b.deleted_at || '').localeCompare(a.deleted_at || ''));
+  return { data: all };
 });
 
 // ===== INVOICES =====
 ipcMain.handle('get-invoices', async (e, filters) => {
-  let invoices = readCollection('invoices');
-  const customers = readCollection('customers');
-  const properties = readCollection('properties');
-  const vehicles = readCollection('vehicles');
-  const users = readCollection('users');
+  let invoices = (await readCollectionAsync('invoices')).filter(i => !i.deleted_at);
+  const customers = await readCollectionAsync('customers');
+  const properties = await readCollectionAsync('properties');
+  const vehicles = await readCollectionAsync('vehicles');
+  const users = await readCollectionAsync('users');
 
   // Filtering
   if (filters?.status) invoices = invoices.filter(i => i.status === filters.status);
@@ -735,9 +1782,20 @@ ipcMain.handle('get-invoices', async (e, filters) => {
   if (filters?.complete === false) invoices = invoices.filter(i => !i.complete);
   if (filters?.jobCodes) invoices = invoices.filter(i => (i.job_codes || '').toLowerCase().includes(filters.jobCodes.toLowerCase()));
   if (filters?.wasteSiteId) invoices = invoices.filter(i => i.waste_site_id === filters.wasteSiteId);
+  // Waiting area: derive from empty truck on TankTrack-imported rows missing the flag
+  const isWaiting = (i) => (i.waiting_area === true)
+    || (i.waiting_area == null && i.imported_from === 'tanktrack' && !(i.truck || '').trim());
+  if (filters?.waitingArea === 'only') invoices = invoices.filter(isWaiting);
+  else if (filters?.waitingArea === 'hide') invoices = invoices.filter(i => !isWaiting(i));
+  // Default: include waiting-area invoices (town contracts etc. are real invoices)
 
-  // Join related data
-  const jobs = readCollection('jobs');
+  // Cancelled: hidden by default, matches TankTrack UI behavior
+  if (filters?.cancelled === 'only') invoices = invoices.filter(i => i.cancelled === true);
+  else if (filters?.cancelled === 'include') {} // show all
+  else invoices = invoices.filter(i => i.cancelled !== true);
+
+  // Join related data (exclude soft-deleted jobs from the lookup)
+  const jobs = (await readCollectionAsync('jobs')).filter(j => !j.deleted_at);
   invoices = invoices.map(i => {
     const cust = customers.find(c => c.id === i.customer_id) || null;
     const prop = properties.find(p => p.id === i.property_id) || null;
@@ -777,54 +1835,48 @@ ipcMain.handle('get-invoices', async (e, filters) => {
   // Totals (before pagination)
   const totals = {
     count: invoices.length,
-    invoice_total: invoices.reduce((s, i) => s + (i.total || 0), 0),
-    amount_paid: invoices.reduce((s, i) => s + (i.amount_paid || 0), 0),
+    invoice_total: invoices.reduce((s, i) => s + (Number(i.total) || 0), 0),
+    amount_paid: invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0),
+    gallons_pumped: invoices.reduce((s, i) => s + (Number(i.gallons_pumped_total) || 0), 0),
+    product_sales: invoices.reduce((s, i) => s + (Number(i.product_sales) || 0), 0),
   };
 
-  // Pagination
-  const page = filters?.page || 1;
-  const perPage = filters?.perPage || 25;
   const total = invoices.length;
-  const start = (page - 1) * perPage;
-  const paged = invoices.slice(start, start + perPage);
-
-  return { data: paged, total, page, perPage, totals };
+  return { data: invoices, total, page: 1, perPage: total, totals };
 });
 
 ipcMain.handle('get-invoice', async (e, id) => {
-  const invoice = findById('invoices', id);
+  const invoice = await findByIdAsync('invoices', id);
   if (invoice) {
-    invoice.customers = findById('customers', invoice.customer_id);
-    invoice.property = findById('properties', invoice.property_id);
-    invoice.vehicle = findById('vehicles', invoice.vehicle_id);
-    invoice.driver = findById('users', invoice.driver_id);
+    invoice.customers = await findByIdAsync('customers', invoice.customer_id);
+    invoice.property = await findByIdAsync('properties', invoice.property_id);
+    invoice.vehicle = await findByIdAsync('vehicles', invoice.vehicle_id);
+    invoice.driver = await findByIdAsync('users', invoice.driver_id);
   }
   return { data: invoice };
 });
 
 ipcMain.handle('save-invoice', async (e, data) => {
-  const saved = upsert('invoices', data);
+  const saved = await upsertAsync('invoices', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-invoice', async (e, id) => {
-  const invoices = readCollection('invoices');
+  const invoices = await readCollectionAsync('invoices');
   const inv = invoices.find(i => i.id === id);
+  if (!inv) return { success: true };
   // Stamp the linked job so backfill won't recreate the invoice
-  if (inv?.job_id) {
-    const jobs = readCollection('jobs');
-    const idx = jobs.findIndex(j => j.id === inv.job_id);
-    if (idx >= 0) {
-      jobs[idx] = { ...jobs[idx], invoice_suppressed: true, updated_at: new Date().toISOString() };
-      writeCollection('jobs', jobs);
-    }
+  if (inv.job_id) {
+    const job = await findByIdAsync('jobs', inv.job_id);
+    if (job) await upsertAsync('jobs', { ...job, invoice_suppressed: true });
   }
-  remove('invoices', id);
+  // Soft-delete so it lands in the recycling bin
+  await upsertAsync('invoices', { ...inv, deleted_at: new Date().toISOString() });
   return { success: true };
 });
 
 ipcMain.handle('get-next-invoice-number', async () => {
-  const invoices = readCollection('invoices');
+  const invoices = await readCollectionAsync('invoices');
   if (invoices.length === 0) return { number: '1' };
   const nums = invoices.map(i => parseInt((i.invoice_number || '0').replace(/\D/g, '')) || 0);
   const next = Math.max(...nums) + 1;
@@ -853,8 +1905,9 @@ ipcMain.handle('get-invoice-filter-options', async () => {
 });
 
 ipcMain.handle('backfill-invoices', async () => {
-  const jobs = readCollection('jobs');
-  const invoices = readCollection('invoices');
+  // Skip deleted jobs so backfill doesn't recreate invoices for things in the trash
+  const jobs = readCollection('jobs').filter(j => !j.deleted_at);
+  const invoices = readCollection('invoices'); // keep all (incl deleted) so we don't re-link job_ids
   const customers = readCollection('customers');
   const properties = readCollection('properties');
   const linkedJobIds = new Set(invoices.map(i => i.job_id).filter(Boolean));
@@ -907,7 +1960,7 @@ ipcMain.handle('backfill-invoices', async () => {
 
 // ===== PAYMENTS / ACCOUNTING =====
 ipcMain.handle('get-customer-balance', async (e, customerId) => {
-  const invoices = readCollection('invoices').filter(i => i.customer_id === customerId);
+  const invoices = readCollection('invoices').filter(i => i.customer_id === customerId && !i.deleted_at);
   const totalInvoiced = invoices.reduce((s, i) => s + (parseFloat(i.total) || 0), 0);
   const totalPaid = invoices.reduce((s, i) => s + (parseFloat(i.amount_paid) || 0), 0);
   const balance = totalInvoiced - totalPaid;
@@ -924,18 +1977,18 @@ ipcMain.handle('get-customer-balance', async (e, customerId) => {
 });
 
 ipcMain.handle('get-payments', async (e, customerId) => {
-  const payments = readCollection('payments').filter(p => p.customer_id === customerId);
+  const payments = (await readCollectionAsync('payments')).filter(p => p.customer_id === customerId && !p.deleted_at);
   payments.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   return { data: payments };
 });
 
 ipcMain.handle('save-payment', async (e, data) => {
-  const saved = upsert('payments', data);
+  const saved = await upsertAsync('payments', data);
 
   // Update linked invoice amount_paid
   if (data.invoice_id) {
-    const invoices = readCollection('invoices');
-    const payments = readCollection('payments').filter(p => p.invoice_id === data.invoice_id);
+    const invoices = await readCollectionAsync('invoices');
+    const payments = (await readCollectionAsync('payments')).filter(p => p.invoice_id === data.invoice_id && !p.deleted_at);
     const totalPaidForInv = payments.reduce((s, p) => {
       if (p.type === 'refund') return s - (parseFloat(p.amount) || 0);
       return s + (parseFloat(p.amount) || 0);
@@ -943,16 +1996,16 @@ ipcMain.handle('save-payment', async (e, data) => {
 
     const inv = invoices.find(i => i.id === data.invoice_id);
     if (inv) {
-      inv.amount_paid = Math.max(0, totalPaidForInv);
+      const updated = { ...inv, amount_paid: Math.max(0, totalPaidForInv) };
       const invTotal = parseFloat(inv.total) || 0;
-      if (inv.amount_paid >= invTotal && invTotal > 0) {
-        inv.payment_status = 'paid';
-      } else if (inv.amount_paid > 0) {
-        inv.payment_status = 'partial';
+      if (updated.amount_paid >= invTotal && invTotal > 0) {
+        updated.payment_status = 'paid';
+      } else if (updated.amount_paid > 0) {
+        updated.payment_status = 'partial';
       } else {
-        inv.payment_status = 'unpaid';
+        updated.payment_status = 'unpaid';
       }
-      writeCollection('invoices', invoices);
+      await upsertAsync('invoices', updated);
     }
   }
 
@@ -960,42 +2013,114 @@ ipcMain.handle('save-payment', async (e, data) => {
 });
 
 ipcMain.handle('delete-payment', async (e, id) => {
-  const payments = readCollection('payments');
-  const payment = payments.find(p => p.id === id);
-  const invoiceId = payment?.invoice_id;
-  const filtered = payments.filter(p => p.id !== id);
-  writeCollection('payments', filtered);
+  const payment = await findByIdAsync('payments', id);
+  if (!payment) return { success: true };
+  const invoiceId = payment.invoice_id;
 
-  // Recalculate invoice amount_paid
+  // Soft-delete: stamp deleted_at so it lands in the recycling bin
+  await upsertAsync('payments', { ...payment, deleted_at: new Date().toISOString() });
+
+  // Recalculate invoice amount_paid excluding the now-deleted payment
   if (invoiceId) {
-    const invoices = readCollection('invoices');
-    const remaining = filtered.filter(p => p.invoice_id === invoiceId);
-    const totalPaidForInv = remaining.reduce((s, p) => {
-      if (p.type === 'refund') return s - (parseFloat(p.amount) || 0);
-      return s + (parseFloat(p.amount) || 0);
-    }, 0);
-    const inv = invoices.find(i => i.id === invoiceId);
+    const allPayments = (await readCollectionAsync('payments')).filter(p => p.invoice_id === invoiceId && !p.deleted_at);
+    const totalPaid = allPayments.reduce((s, p) => p.type === 'refund' ? s - (parseFloat(p.amount) || 0) : s + (parseFloat(p.amount) || 0), 0);
+    const inv = await findByIdAsync('invoices', invoiceId);
     if (inv) {
-      inv.amount_paid = Math.max(0, totalPaidForInv);
+      const updated = { ...inv, amount_paid: Math.max(0, totalPaid) };
       const invTotal = parseFloat(inv.total) || 0;
-      if (inv.amount_paid >= invTotal && invTotal > 0) {
-        inv.payment_status = 'paid';
-      } else if (inv.amount_paid > 0) {
-        inv.payment_status = 'partial';
-      } else {
-        inv.payment_status = 'unpaid';
-      }
-      writeCollection('invoices', invoices);
+      updated.payment_status = updated.amount_paid >= invTotal && invTotal > 0 ? 'paid' : updated.amount_paid > 0 ? 'partial' : 'unpaid';
+      await upsertAsync('invoices', updated);
     }
   }
 
   return { success: true };
 });
 
+// ===== AUTOMATIC FILTER CLEANINGS (AFC) =====
+
+// ensure-filter-lead: create a lead if none exists for this job yet
+ipcMain.handle('ensure-filter-lead', async (e, data) => {
+  const leads = readCollection('filter_leads');
+  const exists = leads.find(l => l.job_id === data.job_id);
+  if (!exists) {
+    const customers = readCollection('customers');
+    const properties = readCollection('properties');
+    const cust = customers.find(c => c.id === data.customer_id) || {};
+    const prop = properties.find(p => p.id === data.property_id) || {};
+    // Check if this customer already has an active AFC
+    const afcs = readCollection('afcs');
+    const hasAfc = afcs.some(a => a.customer_id === data.customer_id && a.property_id === data.property_id && a.status === 'active');
+    upsert('filter_leads', {
+      job_id: data.job_id,
+      customer_id: data.customer_id,
+      property_id: data.property_id,
+      scheduled_date: data.scheduled_date,
+      customer_name: cust.name || '',
+      property_address: prop.address || '',
+      property_city: prop.city || '',
+      has_afc: hasAfc,
+      status: 'pending', // pending | approved | declined | no_answer
+      notes: '',
+    });
+  }
+  return { success: true };
+});
+
+ipcMain.handle('get-filter-leads', async (e, filters) => {
+  let leads = readCollection('filter_leads');
+  const customers = readCollection('customers');
+  const properties = readCollection('properties');
+  const jobs = readCollection('jobs').filter(j => !j.deleted_at);
+  if (filters?.status) leads = leads.filter(l => l.status === filters.status);
+  leads = leads.map(l => {
+    const customer = customers.find(c => c.id === l.customer_id) || {};
+    const property = properties.find(p => p.id === l.property_id) || {};
+    const job = jobs.find(j => j.id === l.job_id) || {};
+    return { ...l, customer, property, job };
+  });
+  leads.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  return { data: leads };
+});
+
+ipcMain.handle('save-filter-lead', async (e, data) => {
+  const saved = upsert('filter_leads', data);
+  return { success: true, data: saved };
+});
+
+ipcMain.handle('delete-filter-lead', async (e, id) => {
+  remove('filter_leads', id);
+  return { success: true };
+});
+
+ipcMain.handle('get-afcs', async (e, filters) => {
+  let afcs = readCollection('afcs');
+  const customers = readCollection('customers');
+  const properties = readCollection('properties');
+  if (filters?.status) afcs = afcs.filter(a => a.status === filters.status);
+  if (filters?.customerId) afcs = afcs.filter(a => a.customer_id === filters.customerId);
+  afcs = afcs.map(a => {
+    const customer = customers.find(c => c.id === a.customer_id) || {};
+    const property = properties.find(p => p.id === a.property_id) || {};
+    return { ...a, customer, property };
+  });
+  afcs.sort((a, b) => (a.next_service_date || '').localeCompare(b.next_service_date || ''));
+  return { data: afcs };
+});
+
+ipcMain.handle('save-afc', async (e, data) => {
+  const saved = upsert('afcs', data);
+  return { success: true, data: saved };
+});
+
+ipcMain.handle('delete-afc', async (e, id) => {
+  remove('afcs', id);
+  return { success: true };
+});
+
 // ===== REMINDERS =====
 ipcMain.handle('get-reminders', async (e, filters) => {
-  let reminders = readCollection('reminders');
-  const users = readCollection('users');
+  let reminders = await readCollectionAsync('reminders');
+  const users = await readCollectionAsync('users');
 
   if (filters?.status) reminders = reminders.filter(r => r.status === filters.status);
   if (filters?.userId) reminders = reminders.filter(r => (r.assigned_users || []).includes(filters.userId));
@@ -1018,26 +2143,22 @@ ipcMain.handle('get-reminders', async (e, filters) => {
 });
 
 ipcMain.handle('save-reminder', async (e, data) => {
-  const saved = upsert('reminders', data);
+  const saved = await upsertAsync('reminders', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-reminder', async (e, id) => {
-  remove('reminders', id);
+  await removeAsync('reminders', id);
   return { success: true };
 });
 
 ipcMain.handle('update-reminder-status', async (e, id, status) => {
-  const reminders = readCollection('reminders');
-  const idx = reminders.findIndex(r => r.id === id);
-  if (idx >= 0) {
-    reminders[idx].status = status;
-    reminders[idx].updated_at = new Date().toISOString();
-    if (status === 'done') reminders[idx].completed_at = new Date().toISOString();
-    writeCollection('reminders', reminders);
-    return { success: true };
-  }
-  return { success: false, error: 'Reminder not found' };
+  const r = await findByIdAsync('reminders', id);
+  if (!r) return { success: false, error: 'Reminder not found' };
+  const updated = { ...r, status };
+  if (status === 'done') updated.completed_at = new Date().toISOString();
+  await upsertAsync('reminders', updated);
+  return { success: true };
 });
 
 // ===== SERVICE CONTRACTS =====
@@ -1069,10 +2190,10 @@ ipcMain.handle('delete-service-contract', async (e, id) => {
 
 // ===== SERVICE DUE NOTICES =====
 ipcMain.handle('get-service-due-notices', async (e, filters) => {
-  let notices = readCollection('service_due_notices');
-  const customers = readCollection('customers');
-  const properties = readCollection('properties');
-  const jobs = readCollection('jobs');
+  let notices = (await readCollectionAsync('service_due_notices')).filter(n => !n.deleted_at);
+  const customers = await readCollectionAsync('customers');
+  const properties = await readCollectionAsync('properties');
+  const jobs = (await readCollectionAsync('jobs')).filter(j => !j.deleted_at);
   const today = new Date().toISOString().split('T')[0];
 
   if (filters?.id) notices = notices.filter(n => n.id === filters.id);
@@ -1085,6 +2206,7 @@ ipcMain.handle('get-service-due-notices', async (e, filters) => {
       notices = notices.filter(n => n.status === filters.status);
     }
   }
+  if (filters?.serviceType) notices = notices.filter(n => n.service_type === filters.serviceType);
   if (filters?.dueDateFrom) notices = notices.filter(n => n.due_date >= filters.dueDateFrom);
   if (filters?.dueDateTo) notices = notices.filter(n => n.due_date <= filters.dueDateTo);
   if (filters?.search) {
@@ -1118,12 +2240,15 @@ ipcMain.handle('get-service-due-notices', async (e, filters) => {
 });
 
 ipcMain.handle('save-service-due-notice', async (e, data) => {
-  const saved = upsert('service_due_notices', data);
+  const saved = await upsertAsync('service_due_notices', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-service-due-notice', async (e, id) => {
-  remove('service_due_notices', id);
+  const notice = await findByIdAsync('service_due_notices', id);
+  if (!notice) return { success: true };
+  // Soft-delete so it lands in the recycling bin
+  await upsertAsync('service_due_notices', { ...notice, deleted_at: new Date().toISOString() });
   return { success: true };
 });
 
@@ -1197,9 +2322,9 @@ ipcMain.handle('schedule-service-due-notifications', async (e, id, schedule) => 
 
 // ===== DISPOSAL LOADS =====
 ipcMain.handle('get-disposal-loads', async (e, filters) => {
-  let loads = readCollection('disposal_loads');
-  const customers = readCollection('customers');
-  const users = readCollection('users');
+  let loads = (await readCollectionAsync('disposal_loads')).filter(l => !l.deleted_at);
+  const customers = await readCollectionAsync('customers');
+  const users = await readCollectionAsync('users');
 
   if (filters?.dateFrom && filters?.dateTo) {
     loads = loads.filter(l => l.disposal_date >= filters.dateFrom && l.disposal_date <= filters.dateTo);
@@ -1216,7 +2341,7 @@ ipcMain.handle('get-disposal-loads', async (e, filters) => {
 });
 
 ipcMain.handle('get-next-disposal-number', async () => {
-  const loads = readCollection('disposal_loads');
+  const loads = await readCollectionAsync('disposal_loads');
   const nums = loads
     .map(l => parseInt((l.disposal_number || '').toString().replace(/\D/g, '')) || 0)
     .filter(n => n > 0);
@@ -1225,27 +2350,27 @@ ipcMain.handle('get-next-disposal-number', async () => {
 });
 
 ipcMain.handle('save-disposal-load', async (e, data) => {
-  // Auto-assign a disposal number if this is a new record without one
   if (!data.id && !data.disposal_number) {
-    const loads = readCollection('disposal_loads');
+    const loads = await readCollectionAsync('disposal_loads');
     const nums = loads
       .map(l => parseInt((l.disposal_number || '').toString().replace(/\D/g, '')) || 0)
       .filter(n => n > 0);
     const highest = nums.length > 0 ? Math.max(...nums) : 999;
     data.disposal_number = String(Math.max(highest + 1, 1000));
   }
-  const saved = upsert('disposal_loads', data);
+  const saved = await upsertAsync('disposal_loads', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-disposal-load', async (e, id) => {
-  remove('disposal_loads', id);
+  const load = await findByIdAsync('disposal_loads', id);
+  if (load) await upsertAsync('disposal_loads', { ...load, deleted_at: new Date().toISOString() });
   return { success: true };
 });
 
 ipcMain.handle('get-disposal-summary', async (e, period) => {
-  let loads = readCollection('disposal_loads');
-  const customers = readCollection('customers');
+  let loads = (await readCollectionAsync('disposal_loads')).filter(l => !l.deleted_at);
+  const customers = await readCollectionAsync('customers');
 
   loads = loads.filter(l => l.disposal_date >= period.from && l.disposal_date <= period.to);
   loads = loads.map(l => ({
@@ -1260,7 +2385,7 @@ ipcMain.handle('get-disposal-summary', async (e, period) => {
 
 // ===== SCHEDULE ITEMS (manifests & driver changes on schedule) =====
 ipcMain.handle('get-schedule-items', async (e, vehicleId, date) => {
-  let items = readCollection('schedule_items');
+  let items = (await readCollectionAsync('schedule_items')).filter(i => !i.deleted_at);
   if (vehicleId) items = items.filter(i => i.vehicle_id === vehicleId);
   if (date) items = items.filter(i => i.scheduled_date === date);
   items.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
@@ -1268,17 +2393,63 @@ ipcMain.handle('get-schedule-items', async (e, vehicleId, date) => {
 });
 
 ipcMain.handle('save-schedule-item', async (e, data) => {
-  const saved = upsert('schedule_items', data);
+  const saved = await upsertAsync('schedule_items', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-schedule-item', async (e, id) => {
-  remove('schedule_items', id);
+  const items = await readCollectionAsync('schedule_items');
+  const item = items.find(i => i.id === id);
+  if (item && item.item_type === 'manifest') {
+    const customers = await readCollectionAsync('customers');
+    const properties = await readCollectionAsync('properties');
+    const jobs = await readCollectionAsync('jobs');
+    const stampedJobs = jobs.filter(j => j.manifest_number && String(j.manifest_number) === String(item.manifest_number));
+    const custNames = [...new Set(stampedJobs.map(j => customers.find(c => c.id === j.customer_id)?.name || '').filter(Boolean))];
+    const addrs = [...new Set(stampedJobs.map(j => {
+      const p = properties.find(p => p.id === j.property_id) || {};
+      return [p.address, p.city, p.state].filter(Boolean).join(', ');
+    }).filter(Boolean))];
+    await upsertAsync('schedule_items', {
+      ...item,
+      deleted_at: new Date().toISOString(),
+      snapshot_customer_names: custNames.join(', '),
+      snapshot_addresses: addrs.join(' | '),
+    });
+  } else if (item) {
+    await removeAsync('schedule_items', id);
+  }
+  return { success: true };
+});
+
+// ===== DAY NOTES =====
+ipcMain.handle('get-day-note', async (e, date) => {
+  const notes = await readCollectionAsync('day_notes');
+  const note = notes.find(n => n.date === date) || null;
+  return { data: note };
+});
+
+ipcMain.handle('save-day-note', async (e, data) => {
+  // Upsert by date — one note per day
+  const notes = await readCollectionAsync('day_notes');
+  const existing = notes.find(n => n.date === data.date);
+  if (existing) {
+    await upsertAsync('day_notes', { ...existing, ...data });
+  } else {
+    await upsertAsync('day_notes', data);
+  }
+  return { success: true };
+});
+
+ipcMain.handle('delete-day-note', async (e, date) => {
+  const notes = await readCollectionAsync('day_notes');
+  const existing = notes.find(n => n.date === date);
+  if (existing) await removeAsync('day_notes', existing.id);
   return { success: true };
 });
 
 ipcMain.handle('get-next-manifest-number', async () => {
-  const items = readCollection('schedule_items');
+  const items = await readCollectionAsync('schedule_items');
   const manifests = items.filter(i => i.item_type === 'manifest' && i.manifest_number);
   const nums = manifests.map(m => parseInt(m.manifest_number) || 0);
   const highest = nums.length > 0 ? Math.max(...nums) : 999;
@@ -1337,6 +2508,712 @@ ipcMain.handle('delete-outside-pumper', async (e, id) => {
 
 // ===== SEED TEST DATA =====
 // ===== DEP REPORTS =====
+// ===== P&L SNAPSHOTS =====
+ipcMain.handle('get-pl-snapshots', async () => {
+  const snaps = readCollection('pl_snapshots');
+  snaps.sort((a, b) => (b.month || '').localeCompare(a.month || ''));
+  return { data: snaps };
+});
+
+ipcMain.handle('delete-pl-snapshot', async (e, id) => {
+  remove('pl_snapshots', id);
+  return { success: true };
+});
+
+ipcMain.handle('save-pl-snapshot', async (e, data) => {
+  // Upsert by month — one snapshot per month
+  const snaps = readCollection('pl_snapshots');
+  const idx = snaps.findIndex(s => s.month === data.month);
+  if (idx >= 0) snaps[idx] = { ...snaps[idx], ...data, id: snaps[idx].id };
+  else snaps.push({ ...data, id: uuidv4() });
+  writeCollection('pl_snapshots', snaps);
+  return { success: true };
+});
+
+ipcMain.handle('import-pl-file', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Import QuickBooks P&L Export',
+    filters: [{ name: 'QuickBooks Export', extensions: ['csv', 'xlsx', 'xls'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths[0]) return { canceled: true };
+
+  const filePath = filePaths[0];
+  const ext = path.extname(filePath).toLowerCase();
+  let rows = [];
+
+  try {
+    if (ext === '.csv') {
+      const text = fs.readFileSync(filePath, 'utf8');
+      rows = text.split(/\r?\n/).map(line => line.split(',').map(c => c.replace(/^"|"$/g, '').trim()));
+    } else {
+      const wb = XLSX.readFile(filePath);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    }
+  } catch (e) {
+    return { error: 'Could not read file: ' + e.message };
+  }
+
+  // Parse QuickBooks P&L export format
+  // Detect month columns from header row (e.g. "Jan 26", "Feb 26", "Mar 26")
+  const MONTH_RE = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*['']?(\d{2,4})$/i;
+  const MONTH_NAMES = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+
+  let headerRowIdx = -1;
+  let monthCols = []; // [{colIdx, month:'2026-01', label:'Jan 26'}]
+
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const row = rows[i];
+    const found = [];
+    for (let j = 0; j < row.length; j++) {
+      const m = String(row[j]).trim().match(MONTH_RE);
+      if (m) {
+        const mn = MONTH_NAMES[m[1].toLowerCase()];
+        const yr = parseInt(m[2]) + (m[2].length === 2 ? 2000 : 0);
+        found.push({ colIdx: j, month: `${yr}-${String(mn).padStart(2,'0')}`, label: row[j] });
+      }
+    }
+    if (found.length > 0) { headerRowIdx = i; monthCols = found; break; }
+  }
+
+  // If no month columns found, treat as single-period: find amount column
+  const singlePeriod = monthCols.length === 0;
+  if (singlePeriod) {
+    // Try to detect a "Total" or single amount column
+    // Look for a header row with a date range or "Total"
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+      const row = rows[i];
+      for (let j = 0; j < row.length; j++) {
+        if (/total|amount|\d{4}/i.test(String(row[j]))) {
+          monthCols = [{ colIdx: j, month: null, label: String(row[j]) }];
+          headerRowIdx = i;
+          break;
+        }
+      }
+      if (monthCols.length) break;
+    }
+  }
+
+  // Walk rows below header and collect expense/income categories
+  const parseAmt = v => {
+    if (v === null || v === undefined || v === '') return null;
+    const s = String(v).replace(/[$,\s]/g, '').replace(/\((.+)\)/, '-$1');
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  };
+
+  // Build per-month expense buckets
+  const byMonth = {}; // month -> { categories: [{name, amount}], totalExpenses, totalIncome }
+  const initMonth = m => { if (!byMonth[m]) byMonth[m] = { categories: [], totalExpenses: 0, totalIncome: 0 }; };
+
+  let inExpenseSection = false;
+  let inIncomeSection = false;
+
+  for (let i = (headerRowIdx + 1); i < rows.length; i++) {
+    const row = rows[i];
+    const label = String(row[0] || '').trim();
+    if (!label) continue;
+
+    const labelLower = label.toLowerCase().replace(/\s+/g,' ');
+
+    // Section detection
+    if (/^\s*expense/i.test(label)) { inExpenseSection = true; inIncomeSection = false; continue; }
+    if (/^\s*income|^\s*revenue/i.test(label)) { inIncomeSection = true; inExpenseSection = false; continue; }
+    if (/^net (ordinary|income|profit|loss)/i.test(label)) { inExpenseSection = false; inIncomeSection = false; }
+
+    // Total rows
+    const isTotalExpense = /^total\s+expense/i.test(label.replace(/\s+/g,' '));
+    const isTotalIncome = /^total\s+(income|revenue)/i.test(label.replace(/\s+/g,' '));
+
+    for (const col of monthCols) {
+      const amt = parseAmt(row[col.colIdx]);
+      if (amt === null) continue;
+      const m = col.month || 'unknown';
+      initMonth(m);
+
+      if (isTotalExpense) { byMonth[m].totalExpenses = Math.abs(amt); }
+      else if (isTotalIncome) { byMonth[m].totalIncome = amt; }
+      else if (inExpenseSection && !labelLower.startsWith('total')) {
+        // Individual expense line
+        const clean = label.replace(/^\s+/, '');
+        byMonth[m].categories.push({ name: clean, amount: Math.abs(amt) });
+      }
+    }
+  }
+
+  // Build snapshots
+  const snapshots = Object.entries(byMonth).map(([month, data]) => ({
+    month,
+    label: monthCols.find(c => c.month === month)?.label || month,
+    categories: data.categories,
+    total_expenses: data.totalExpenses || data.categories.reduce((s,c) => s + c.amount, 0),
+    qb_income: data.totalIncome,
+    imported_at: new Date().toISOString(),
+    source_file: path.basename(filePath),
+  }));
+
+  if (snapshots.length === 0) return { error: 'Could not parse any monthly data from this file. Make sure you export a P&L by Month from QuickBooks (Reports → Company & Financial → Profit & Loss Standard → set dates → Columns: Month → Export to Excel/CSV).' };
+
+  // Save each month
+  const existing = readCollection('pl_snapshots');
+  for (const snap of snapshots) {
+    const idx = existing.findIndex(s => s.month === snap.month);
+    if (idx >= 0) existing[idx] = { ...existing[idx], ...snap };
+    else existing.push({ ...snap, id: uuidv4() });
+  }
+  writeCollection('pl_snapshots', existing);
+
+  return { success: true, count: snapshots.length, months: snapshots.map(s => s.label || s.month) };
+});
+
+// ===== EXPENSE SNAPSHOTS (AI-extracted from PDFs) =====
+ipcMain.handle('get-expense-snapshots', async () => {
+  const snaps = readCollection('expense_snapshots');
+  snaps.sort((a, b) => (b.period_start || '').localeCompare(a.period_start || ''));
+  return { data: snaps };
+});
+
+ipcMain.handle('delete-expense-snapshot', async (_e, id) => {
+  remove('expense_snapshots', id);
+  return { success: true };
+});
+
+ipcMain.handle('save-expense-snapshot', async (_e, data) => {
+  const snaps = readCollection('expense_snapshots');
+  if (data.id) {
+    const idx = snaps.findIndex(s => s.id === data.id);
+    if (idx >= 0) snaps[idx] = { ...snaps[idx], ...data };
+    else snaps.push(data);
+  } else {
+    snaps.push({ ...data, id: uuidv4(), imported_at: new Date().toISOString() });
+  }
+  writeCollection('expense_snapshots', snaps);
+  return { success: true };
+});
+
+ipcMain.handle('import-expense-pdf-ai', async (evt) => {
+  const send = (step, message, extra = {}) => {
+    try { evt.sender.send('expense-import-progress', { step, message, ...extra }); } catch {}
+  };
+  const settingsPath = path.join(userDataPath, 'settings.json');
+  const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+  const apiKey = settings.anthropic_api_key;
+  if (!apiKey) {
+    return { error: 'No Anthropic API key set. Go to Settings and paste your key (starts with sk-ant-).' };
+  }
+
+  send('picking', 'Choose a PDF…');
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Import Expense PDF',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths[0]) { send('cancelled', ''); return { canceled: true }; }
+  const filePath = filePaths[0];
+
+  send('reading', 'Reading PDF from disk…', { file: path.basename(filePath) });
+  let pdfBase64, pdfSizeKb;
+  try {
+    const buf = fs.readFileSync(filePath);
+    pdfSizeKb = Math.round(buf.length / 1024);
+    pdfBase64 = buf.toString('base64');
+  } catch (e) {
+    send('error', 'Could not read PDF: ' + e.message);
+    return { error: 'Could not read PDF: ' + e.message };
+  }
+  send('read_done', `Read ${pdfSizeKb} KB — preparing upload to Claude…`);
+
+  let Anthropic;
+  try {
+    Anthropic = require('@anthropic-ai/sdk').default || require('@anthropic-ai/sdk');
+  } catch (e) {
+    send('error', 'Anthropic SDK not installed: ' + e.message);
+    return { error: 'Anthropic SDK not installed: ' + e.message };
+  }
+
+  const client = new Anthropic({ apiKey });
+  send('calling', `Uploading PDF and asking Claude to extract line items — this may take 30–90 seconds for a full year…`);
+
+  const systemPrompt = `You are an expert bookkeeper extracting P&L data from a QuickBooks Profit & Loss PDF for a septic-pumping company.
+
+Your job: extract EXPENSE line items (primary goal), AND also capture income totals per period (secondary goal — used for historical revenue when invoice data is unavailable).
+
+The PDF may contain MULTIPLE period columns (e.g. "Jan-Dec 25" AND "Jan-Dec 24" for prior-year comparison). Extract every period column as a separate entry in \`periods\`, and give each line item an \`amounts\` array aligned to that periods array.
+
+Return ONLY valid JSON matching this schema (no prose, no markdown fences):
+{
+  "periods": [
+    { "label": "2025", "period_type": "year|quarter|month|custom", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }
+  ],
+  "line_items": [
+    {
+      "code": "<account code from PDF, e.g. '824', may be empty>",
+      "name": "<line item name exactly as shown in PDF>",
+      "parent_category": "<parent header the line appears under, e.g. 'AUTOMOBILE EXPENSE', 'PAYROLL EXPENSE', 'INSURANCE', 'COST OF OPERATIONS', 'OFFICE EXPENSE', 'UTILITIES', 'TAXES', 'PROFESSIONAL FEES', etc. — use the exact header as printed>",
+      "amounts": [<number aligned to periods[0]>, <number aligned to periods[1]>]
+    }
+  ],
+  "income_by_period": [<total income for periods[0]>, <total income for periods[1]>],
+  "totals_by_period": [<grand TOTAL EXPENSE for periods[0]>, <grand TOTAL EXPENSE for periods[1]>],
+  "net_by_period": [<net income for periods[0]>, <net income for periods[1]>]
+}
+
+Rules:
+- \`line_items\` contains ONLY EXPENSE rows. Do NOT include income accounts in line_items.
+- \`income_by_period\` captures the "Total Income" row grand total per period.
+- \`totals_by_period\` captures the "Total Expense" row grand total per period.
+- \`net_by_period\` captures Net Income (income minus expense) per period.
+- Amounts are positive numbers in USD for income/expense (strip $ and commas). Net income may be negative.
+- Exclude subtotal rows (lines starting with "Total ...") from line_items. Only include leaf expense line items.
+- \`parent_category\` must be the uppercase header the line item falls under in the PDF (e.g. "AUTOMOBILE EXPENSE"). For ungrouped lines at the bottom of the Expense section (with no header), use "OTHER".
+- If only one period column exists, \`periods\` has length 1 and each amounts array has length 1.`;
+
+  const t0 = Date.now();
+  let resp;
+  try {
+    resp = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 8192,
+      system: systemPrompt,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
+          { type: 'text', text: 'Extract ALL expense line items with their parent category headers and every period column. Ignore income. Return JSON per the schema.' },
+        ],
+      }],
+    });
+  } catch (e) {
+    send('error', 'Claude API error: ' + (e.message || String(e)));
+    return { error: 'Claude API error: ' + (e.message || String(e)) };
+  }
+  const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+  send('received', `Claude responded in ${elapsedSec}s — parsing extracted JSON…`);
+
+  const text = (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+  let parsed;
+  try {
+    // Strip markdown fences if Claude added any
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    send('error', 'Could not parse AI response as JSON.');
+    return { error: 'Could not parse AI response as JSON.', raw: text };
+  }
+
+  const nLines = Array.isArray(parsed.line_items) ? parsed.line_items.length : (parsed.categories?.length || 0);
+  const nPeriods = Array.isArray(parsed.periods) ? parsed.periods.length : 1;
+  send('done', `Found ${nLines} line items across ${nPeriods} period${nPeriods!==1?'s':''}.`);
+
+  return {
+    success: true,
+    extracted: parsed,
+    source_file: path.basename(filePath),
+    usage: resp.usage || null,
+  };
+});
+
+// Batch version: upload multiple PDFs at once. Processes them sequentially and
+// reports per-file progress via `expense-import-progress` with an `index`/`total`.
+ipcMain.handle('import-expense-pdf-ai-batch', async (evt) => {
+  const send = (step, message, extra = {}) => {
+    try { evt.sender.send('expense-import-progress', { step, message, ...extra }); } catch {}
+  };
+  const settingsPath = path.join(userDataPath, 'settings.json');
+  const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+  const apiKey = settings.anthropic_api_key;
+  if (!apiKey) {
+    return { error: 'No Anthropic API key set. Go to Settings and paste your key (starts with sk-ant-).' };
+  }
+
+  send('picking', 'Choose one or more PDFs…');
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Batch Import Expense PDFs',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    properties: ['openFile', 'multiSelections'],
+  });
+  if (canceled || !filePaths || filePaths.length === 0) { send('cancelled', ''); return { canceled: true }; }
+
+  let Anthropic;
+  try {
+    Anthropic = require('@anthropic-ai/sdk').default || require('@anthropic-ai/sdk');
+  } catch (e) {
+    send('error', 'Anthropic SDK not installed: ' + e.message);
+    return { error: 'Anthropic SDK not installed: ' + e.message };
+  }
+  const client = new Anthropic({ apiKey });
+
+  const systemPrompt = `You are an expert bookkeeper extracting P&L data from a QuickBooks Profit & Loss PDF for a septic-pumping company.
+
+Your job: extract EXPENSE line items (primary goal), AND also capture income totals per period (secondary goal — used for historical revenue when invoice data is unavailable).
+
+The PDF may contain MULTIPLE period columns (e.g. "Jan-Dec 25" AND "Jan-Dec 24" for prior-year comparison). Extract every period column as a separate entry in \`periods\`, and give each line item an \`amounts\` array aligned to that periods array.
+
+Return ONLY valid JSON matching this schema (no prose, no markdown fences):
+{
+  "periods": [
+    { "label": "2025", "period_type": "year|quarter|month|custom", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }
+  ],
+  "line_items": [
+    {
+      "code": "<account code from PDF, e.g. '824', may be empty>",
+      "name": "<line item name exactly as shown in PDF>",
+      "parent_category": "<parent header the line appears under, e.g. 'AUTOMOBILE EXPENSE', 'PAYROLL EXPENSE', 'INSURANCE', 'COST OF OPERATIONS', 'OFFICE EXPENSE', 'UTILITIES', 'TAXES', 'PROFESSIONAL FEES', etc. — use the exact header as printed>",
+      "amounts": [<number aligned to periods[0]>, <number aligned to periods[1]>]
+    }
+  ],
+  "income_by_period": [<total income for periods[0]>, <total income for periods[1]>],
+  "totals_by_period": [<grand TOTAL EXPENSE for periods[0]>, <grand TOTAL EXPENSE for periods[1]>],
+  "net_by_period": [<net income for periods[0]>, <net income for periods[1]>]
+}
+
+Rules:
+- \`line_items\` contains ONLY EXPENSE rows. Do NOT include income accounts in line_items.
+- \`income_by_period\` captures the "Total Income" row grand total per period.
+- \`totals_by_period\` captures the "Total Expense" row grand total per period.
+- \`net_by_period\` captures Net Income (income minus expense) per period.
+- Amounts are positive numbers in USD for income/expense (strip $ and commas). Net income may be negative.
+- Exclude subtotal rows (lines starting with "Total ...") from line_items. Only include leaf expense line items.
+- \`parent_category\` must be the uppercase header the line item falls under in the PDF. For ungrouped lines at the bottom of the Expense section (with no header), use "OTHER".
+- If only one period column exists, \`periods\` has length 1 and each amounts array has length 1.`;
+
+  const total = filePaths.length;
+
+  // Read every PDF from disk up front so the API calls all kick off together.
+  const jobs = [];
+  for (const fp of filePaths) {
+    const base = path.basename(fp);
+    try {
+      const buf = fs.readFileSync(fp);
+      jobs.push({ base, pdfBase64: buf.toString('base64'), sizeKB: Math.round(buf.length / 1024) });
+    } catch (e) {
+      jobs.push({ base, error: 'Could not read PDF: ' + e.message });
+    }
+  }
+
+  send('batch_start', `Uploading ${total} PDF${total !== 1 ? 's' : ''} to Claude in parallel…`, {
+    total,
+    files: jobs.map(j => j.base),
+  });
+
+  // Cap concurrency conservatively — Anthropic low-tier limits are 30k input + 8k
+  // output tokens/min. Each QB P&L extraction uses ~4-6k input and ~2-3k output,
+  // so 3 in flight keeps us under the output-token ceiling. Files that still hit
+  // a 429 are retried with exponential backoff rather than being dropped.
+  const CONCURRENCY = 3;
+  const MAX_RETRIES = 5;
+  let completed = 0;
+  let cursor = 0;
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  async function callClaude(job) {
+    return client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 8192,
+      system: systemPrompt,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: job.pdfBase64 } },
+          { type: 'text', text: 'Extract ALL expense line items with their parent category headers and every period column. Ignore income. Return JSON per the schema.' },
+        ],
+      }],
+    });
+  }
+
+  async function processOne(job) {
+    const { base } = job;
+    if (job.error) return { file: base, error: job.error };
+
+    const t0 = Date.now();
+    let resp;
+    let lastErr;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        resp = await callClaude(job);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        const msg = (e && e.message) ? e.message : String(e);
+        const status = e && (e.status || e.statusCode);
+        const isRateLimit = status === 429 || /rate[_\s-]?limit|429/i.test(msg);
+        const isOverloaded = status === 529 || /overloaded/i.test(msg);
+        if (!isRateLimit && !isOverloaded) {
+          break; // non-retryable error — bail immediately
+        }
+        // Honor `retry-after` header when the SDK surfaces it, otherwise back off
+        // exponentially with jitter: 8s, 16s, 32s, 64s, 128s.
+        const retryAfterSec = parseFloat(e && e.headers && (e.headers['retry-after'] || e.headers['x-ratelimit-reset'])) || 0;
+        const backoffSec = retryAfterSec > 0
+          ? Math.min(retryAfterSec, 120)
+          : Math.min(8 * Math.pow(2, attempt) + Math.random() * 2, 128);
+        send('batch_progress', `Waiting ${backoffSec.toFixed(0)}s (rate-limited) — ${base}`, { file: base, retry: attempt + 1 });
+        await sleep(backoffSec * 1000);
+      }
+    }
+    if (lastErr) {
+      return { file: base, error: 'Claude API error: ' + (lastErr.message || String(lastErr)) };
+    }
+
+    const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+    const text = (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    let parsed;
+    try {
+      const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      return { file: base, error: 'Could not parse AI response as JSON.', raw: text, elapsedSec };
+    }
+    return { file: base, extracted: parsed, usage: resp.usage || null, elapsedSec };
+  }
+
+  async function worker() {
+    while (true) {
+      const myIdx = cursor++;
+      if (myIdx >= jobs.length) return;
+      const job = jobs[myIdx];
+      const result = await processOne(job);
+      completed++;
+      const tag = result.error ? '(error)' : `(${result.elapsedSec}s)`;
+      send('batch_progress', `${completed}/${total} ${tag} — ${job.base}`, {
+        index: completed,
+        total,
+        file: job.base,
+        error: result.error || null,
+      });
+      results[myIdx] = result;
+    }
+  }
+
+  const results = new Array(jobs.length);
+  const workers = Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, () => worker());
+  await Promise.all(workers);
+
+  const okCount = results.filter(r => !r.error).length;
+  const errCount = total - okCount;
+  send('done', `Processed ${total} file${total !== 1 ? 's' : ''} — ${okCount} ok${errCount ? `, ${errCount} failed` : ''}.`, { total, okCount, errCount });
+  return { success: true, results };
+});
+
+// ===== SQUARE =====
+function squareRequest(method, path, body, accessToken) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const options = {
+      hostname: 'connect.squareup.com',
+      path,
+      method,
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Square-Version': '2024-01-17',
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
+      },
+    };
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+        catch (e) { resolve({ status: res.statusCode, body: data }); }
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function getSquareCreds() {
+  const settingsPath = path.join(userDataPath, 'settings.json');
+  const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+  return { accessToken: settings.square_access_token || '', locationId: settings.square_location_id || '' };
+}
+
+// Search Square customers by email or name
+ipcMain.handle('square-search-customers', async (e, query) => {
+  const { accessToken } = getSquareCreds();
+  if (!accessToken) return { error: 'Square access token not configured in Settings.' };
+  const body = { query: { filter: { email_address: { fuzzy: query } } } };
+  const res = await squareRequest('POST', '/v2/customers/search', body, accessToken);
+  if (res.status !== 200) {
+    // Try name search fallback
+    const res2 = await squareRequest('POST', '/v2/customers/search', { query: { filter: { reference_id: { exact: query } } } }, accessToken);
+    return res2.body;
+  }
+  return res.body;
+});
+
+// List stored cards for a Square customer
+ipcMain.handle('square-list-cards', async (e, squareCustomerId) => {
+  const { accessToken } = getSquareCreds();
+  if (!accessToken) return { error: 'Square access token not configured in Settings.' };
+  const res = await squareRequest('GET', `/v2/cards?customer_id=${encodeURIComponent(squareCustomerId)}&include_disabled=false`, null, accessToken);
+  if (res.status !== 200) return { error: res.body?.errors?.[0]?.detail || 'Square API error', body: res.body };
+  return res.body; // { cards: [...] }
+});
+
+// Charge a stored card
+ipcMain.handle('square-charge', async (e, { squareCustomerId, cardId, amountCents, note }) => {
+  const { accessToken, locationId } = getSquareCreds();
+  if (!accessToken) return { error: 'Square access token not configured in Settings.' };
+  if (!locationId) return { error: 'Square location ID not configured in Settings.' };
+  const body = {
+    idempotency_key: uuidv4(),
+    source_id: cardId,
+    customer_id: squareCustomerId,
+    amount_money: { amount: amountCents, currency: 'USD' },
+    location_id: locationId,
+    note: note || 'Septic service payment',
+  };
+  const res = await squareRequest('POST', '/v2/payments', body, accessToken);
+  if (res.status !== 200) return { error: res.body?.errors?.[0]?.detail || 'Square charge failed', body: res.body };
+  return res.body; // { payment: { id, status, receipt_url, ... } }
+});
+
+// Test Square connection
+ipcMain.handle('square-test', async () => {
+  const { accessToken, locationId } = getSquareCreds();
+  if (!accessToken) return { error: 'No access token configured.' };
+  const res = await squareRequest('GET', `/v2/locations/${locationId || 'me'}`, null, accessToken);
+  if (res.status === 200) return { success: true, name: res.body?.location?.name || res.body?.locations?.[0]?.name || 'Connected' };
+  return { error: res.body?.errors?.[0]?.detail || 'Connection failed' };
+});
+
+// ===== AR REPORT =====
+ipcMain.handle('get-ar-report', async () => {
+  const invoices = readCollection('invoices').filter(i => !i.deleted_at);
+  const customers = readCollection('customers');
+  const now = Date.now();
+  const DAY = 24 * 60 * 60 * 1000;
+
+  // Build per-customer AR. Group by customer_id when present; otherwise
+  // fall back to a normalized customer_name key so orphan invoices still
+  // aggregate under a real customer label instead of collapsing into "Unknown".
+  const custById = new Map(customers.map(c => [c.id, c]));
+  const norm = s => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+  const byCustomer = {};
+  invoices.forEach(inv => {
+    const balance = (parseFloat(inv.total) || 0) - (parseFloat(inv.amount_paid) || 0);
+    if (balance <= 0.005) return; // fully paid
+    const cust = inv.customer_id ? custById.get(inv.customer_id) : null;
+    const invName = inv.customer_name || inv.billing_company || '';
+    const invCity = inv.billing_city || inv.property_city || '';
+    const displayName = (cust && cust.name) || invName || 'Unknown';
+    const displayCity = (cust && cust.city) || invCity || '';
+    const key = inv.customer_id || ('name:' + norm(displayName));
+    if (!byCustomer[key]) byCustomer[key] = {
+      customerId: inv.customer_id || null,
+      name: displayName,
+      city: displayCity,
+      current: 0, d30: 0, d60: 0, d90: 0, total: 0, oldest: null,
+    };
+    const row = byCustomer[key];
+    row.total += balance;
+    if (!row.name || row.name === 'Unknown') row.name = displayName;
+    if (!row.city) row.city = displayCity;
+    const svcDate = inv.svc_date ? new Date(inv.svc_date) : (inv.created_at ? new Date(inv.created_at) : null);
+    const ageMs = svcDate ? now - svcDate.getTime() : 0;
+    const ageDays = ageMs / DAY;
+    if (ageDays < 30) row.current += balance;
+    else if (ageDays < 60) row.d30 += balance;
+    else if (ageDays < 90) row.d60 += balance;
+    else row.d90 += balance;
+    if (!row.oldest || (svcDate && svcDate < row.oldest)) row.oldest = svcDate;
+  });
+
+  const rows = Object.values(byCustomer).map(r => ({
+    ...r,
+    oldest: r.oldest ? r.oldest.toISOString().split('T')[0] : null,
+  })).sort((a, b) => b.total - a.total);
+
+  const totals = rows.reduce((acc, r) => {
+    acc.current += r.current; acc.d30 += r.d30; acc.d60 += r.d60; acc.d90 += r.d90; acc.total += r.total;
+    return acc;
+  }, { current: 0, d30: 0, d60: 0, d90: 0, total: 0 });
+
+  // Daily AR snapshot — record once per day so we can show 30-day deltas
+  const snapshots = readCollection('ar_snapshots');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const last = snapshots[snapshots.length - 1];
+  if (!last || last.date !== todayStr) {
+    snapshots.push({ date: todayStr, ...totals });
+    // Keep last ~400 days
+    if (snapshots.length > 400) snapshots.splice(0, snapshots.length - 400);
+    writeCollection('ar_snapshots', snapshots);
+  }
+
+  // Find nearest snapshot to a target offset; window is +/- tolerance days
+  const findNearest = (daysAgo, tolDays) => {
+    const targetMs = Date.now() - daysAgo * DAY;
+    let past = null, bestDiff = Infinity;
+    for (const s of snapshots) {
+      const diff = Math.abs(new Date(s.date).getTime() - targetMs);
+      if (diff < bestDiff && diff <= tolDays * DAY) { bestDiff = diff; past = s; }
+    }
+    return past;
+  };
+
+  const past30 = findNearest(30, 7);
+  const deltas = past30 ? {
+    current: totals.current - (past30.current || 0),
+    d30: totals.d30 - (past30.d30 || 0),
+    d60: totals.d60 - (past30.d60 || 0),
+    d90: totals.d90 - (past30.d90 || 0),
+    total: totals.total - (past30.total || 0),
+    since: past30.date,
+  } : null;
+
+  const past7 = findNearest(7, 2);
+  const delta7 = past7 ? {
+    total: totals.total - (past7.total || 0),
+    since: past7.date,
+  } : null;
+
+  // Collection ratio (last 30d): new billing vs. what was collected
+  // Collected = Billed - (AR_now - AR_30d_ago)
+  const cutoff30 = Date.now() - 30 * DAY;
+  const billed30d = invoices.reduce((sum, i) => {
+    const svc = i.svc_date ? new Date(i.svc_date).getTime() : 0;
+    return svc >= cutoff30 ? sum + (parseFloat(i.total) || 0) : sum;
+  }, 0);
+  const collection = past30 ? {
+    billed: billed30d,
+    collected: billed30d - (totals.total - (past30.total || 0)),
+    ratio: billed30d > 0 ? (billed30d - (totals.total - (past30.total || 0))) / billed30d : null,
+    since: past30.date,
+  } : null;
+
+  // Historical collection ratios — one per pair of snapshots ~30 days apart
+  const collectionHistory = [];
+  const sortedSnaps = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  for (let i = 1; i < sortedSnaps.length; i++) {
+    const s1 = sortedSnaps[i];
+    const s1Ms = new Date(s1.date).getTime();
+    // Find snapshot ~30d before s1 (within 7d tolerance)
+    let s0 = null, best = Infinity;
+    for (let j = 0; j < i; j++) {
+      const cand = sortedSnaps[j];
+      const diff = Math.abs((s1Ms - new Date(cand.date).getTime()) - 30*DAY);
+      if (diff < best && diff <= 7*DAY) { best = diff; s0 = cand; }
+    }
+    if (!s0) continue;
+    const fromMs = new Date(s0.date).getTime();
+    const billed = invoices.reduce((sum, inv) => {
+      const svc = inv.svc_date ? new Date(inv.svc_date).getTime() : 0;
+      return (svc > fromMs && svc <= s1Ms) ? sum + (parseFloat(inv.total) || 0) : sum;
+    }, 0);
+    const collected = billed - (s1.total - s0.total);
+    const ratio = billed > 0 ? collected / billed : null;
+    collectionHistory.push({ date: s1.date, from: s0.date, billed, collected, ratio });
+  }
+
+  return { data: rows, totals, deltas, delta7, collection, collectionHistory };
+});
+
 ipcMain.handle('get-dep-reports', async () => {
   const reports = readCollection('dep_reports');
   reports.sort((a, b) => (b.generated_at || '').localeCompare(a.generated_at || ''));
@@ -1344,7 +3221,7 @@ ipcMain.handle('get-dep-reports', async () => {
 });
 
 ipcMain.handle('generate-dep-report', async (e, period) => {
-  let loads = readCollection('disposal_loads');
+  let loads = readCollection('disposal_loads').filter(l => !l.deleted_at);
   const customers = readCollection('customers');
 
   loads = loads.filter(l => l.disposal_date >= period.from && l.disposal_date <= period.to);
@@ -1390,25 +3267,295 @@ ipcMain.handle('get-settings', async () => {
 
 ipcMain.handle('save-settings', async (e, data) => {
   const settingsPath = path.join(userDataPath, 'settings.json');
-  data.updated_at = new Date().toISOString();
-  fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2));
-  return { success: true, data };
+  const existing = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+  const merged = { ...existing, ...data, updated_at: new Date().toISOString() };
+  fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2));
+  return { success: true, data: merged };
+});
+
+// ===== GEOCODING SERVICE =====
+// All geocoding lives in main process so API keys (Mapbox token) never
+// reach the renderer. Providers are tried in a priority order based on
+// settings. Results always include a `provider` and `accuracy` field so
+// callers can see which tier answered.
+//
+// Supported modes:
+//   osm     — Nominatim free-form → Nominatim structured
+//   mapbox  — Mapbox address-only → Mapbox place (town) fallback
+//   hybrid  — Nominatim free-form → Mapbox free-form (best of both)
+//   auto    — (default) hybrid if mapbox_token present, else osm
+//
+// Nominatim public endpoint requires ~1 req/sec per user. We serialize all
+// Nominatim requests through a single promise chain in this module.
+let _nominatimChain = Promise.resolve();
+async function _rateLimitedNominatim(url) {
+  const run = async () => {
+    await new Promise(r => setTimeout(r, 1100));
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': 'InterstateSepticManager/1.0' }
+    });
+    if (!resp.ok) throw new Error('nominatim HTTP ' + resp.status);
+    return await resp.json();
+  };
+  const next = _nominatimChain.then(run, run); // continue even on prior error
+  _nominatimChain = next.catch(() => {});
+  return next;
+}
+
+async function _geocodeNominatimFreeForm(fullAddr) {
+  const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q='
+    + encodeURIComponent(fullAddr);
+  const data = await _rateLimitedNominatim(url);
+  if (data && data.length > 0) {
+    return {
+      lat: parseFloat(data[0].lat),
+      lng: parseFloat(data[0].lon),
+      approximate: false,
+      provider: 'nominatim',
+      accuracy: data[0].type || 'unknown',
+      place_name: data[0].display_name || '',
+    };
+  }
+  return null;
+}
+
+async function _geocodeNominatimStructured(parts) {
+  if (!parts || !parts.street || !parts.city) return null;
+  const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us'
+    + '&street=' + encodeURIComponent(parts.street)
+    + '&city=' + encodeURIComponent(parts.city)
+    + '&state=' + encodeURIComponent(parts.state || 'Maine');
+  const data = await _rateLimitedNominatim(url);
+  if (data && data.length > 0) {
+    return {
+      lat: parseFloat(data[0].lat),
+      lng: parseFloat(data[0].lon),
+      approximate: false,
+      provider: 'nominatim-structured',
+      accuracy: data[0].type || 'unknown',
+      place_name: data[0].display_name || '',
+    };
+  }
+  return null;
+}
+
+async function _geocodeMapbox(fullAddr, token, opts) {
+  if (!token) return null;
+  // types=address,poi first (houses/businesses); if nothing, caller falls through
+  const types = (opts && opts.types) || 'address,poi';
+  const url = 'https://api.mapbox.com/geocoding/v5/mapbox.places/'
+    + encodeURIComponent(fullAddr)
+    + '.json?limit=1&country=us'
+    + '&types=' + encodeURIComponent(types)
+    + '&access_token=' + encodeURIComponent(token);
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error('mapbox HTTP ' + resp.status + (body ? ' — ' + body.slice(0, 200) : ''));
+  }
+  const data = await resp.json();
+  if (data && Array.isArray(data.features) && data.features.length > 0) {
+    const f = data.features[0];
+    // Mapbox returns center as [lng, lat]
+    const lng = f.center[0];
+    const lat = f.center[1];
+    // accuracy: 'rooftop' | 'point' | 'parcel' | 'interpolated' | 'street' | 'intersection' | undefined
+    const acc = (f.properties && f.properties.accuracy) || (f.place_type && f.place_type[0]) || 'unknown';
+    // Anything looser than a real address-level hit gets flagged approximate
+    const loose = ['street', 'intersection', 'place', 'locality', 'region'];
+    const approximate = loose.includes(acc) || (f.relevance != null && f.relevance < 0.75);
+    return {
+      lat,
+      lng,
+      approximate,
+      provider: 'mapbox',
+      accuracy: acc,
+      place_name: f.place_name || '',
+      relevance: f.relevance,
+    };
+  }
+  return null;
+}
+
+// Town-center fallback as absolute last resort so the marker shows up
+// somewhere instead of vanishing. Uses Mapbox if token is present (more
+// reliable for US town names), else Nominatim.
+async function _geocodeTownCenter(parts, token) {
+  if (!parts || !parts.city) return null;
+  const query = parts.city + ', ' + (parts.state || 'Maine');
+  if (token) {
+    const r = await _geocodeMapbox(query, token, { types: 'place,locality' });
+    if (r) return { ...r, approximate: true, accuracy: 'town-center' };
+  }
+  const data = await _rateLimitedNominatim(
+    'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=' + encodeURIComponent(query)
+  );
+  if (data && data.length > 0) {
+    return {
+      lat: parseFloat(data[0].lat),
+      lng: parseFloat(data[0].lon),
+      approximate: true,
+      provider: 'nominatim',
+      accuracy: 'town-center',
+      place_name: data[0].display_name || '',
+    };
+  }
+  return null;
+}
+
+ipcMain.handle('geocode-address', async (e, parts) => {
+  // parts = { freeForm, street, city, state }
+  try {
+    if (!parts || !parts.freeForm) return { notFound: true, error: 'no address provided' };
+
+    const settingsPath = path.join(userDataPath, 'settings.json');
+    const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+    const token = (settings.mapbox_token || '').trim();
+    let mode = settings.geocoding_provider || 'auto';
+    if (mode === 'auto') mode = token ? 'hybrid' : 'osm';
+
+    // Jitter helper for town-center fallback so multiple approximate jobs
+    // in the same town don't stack on one pixel (~0.2 mile spread)
+    const jitter = (c) => ({
+      ...c,
+      lat: c.lat + (Math.random() - 0.5) * 0.006,
+      lng: c.lng + (Math.random() - 0.5) * 0.006,
+    });
+
+    const tiers = [];
+    if (mode === 'mapbox') {
+      tiers.push(() => _geocodeMapbox(parts.freeForm, token));
+    } else if (mode === 'osm') {
+      tiers.push(() => _geocodeNominatimFreeForm(parts.freeForm));
+      tiers.push(() => _geocodeNominatimStructured(parts));
+    } else { // hybrid
+      tiers.push(() => _geocodeNominatimFreeForm(parts.freeForm));
+      tiers.push(() => _geocodeMapbox(parts.freeForm, token));
+      tiers.push(() => _geocodeNominatimStructured(parts));
+    }
+
+    for (const tryTier of tiers) {
+      try {
+        const r = await tryTier();
+        if (r) return { ...r, notFound: false };
+      } catch (err) {
+        console.warn('[GEOCODE] tier error:', err.message);
+        // continue to next tier
+      }
+    }
+
+    // Last resort: town-center
+    try {
+      const tc = await _geocodeTownCenter(parts, token);
+      if (tc) {
+        console.log('[GEOCODE] Town-center fallback for:', parts.freeForm);
+        return { ...jitter(tc), notFound: false };
+      }
+    } catch (err) {
+      console.warn('[GEOCODE] town-center error:', err.message);
+    }
+
+    console.log('[GEOCODE] No match at any tier:', parts.freeForm);
+    return { notFound: true };
+  } catch (err) {
+    return { notFound: true, error: err.message };
+  }
+});
+
+// Quick provider-health check for the Settings → Test button.
+ipcMain.handle('test-mapbox-token', async (e, token) => {
+  const t = (token || '').trim();
+  if (!t) return { success: false, error: 'No token provided.' };
+  try {
+    // Probe with a deliberately rural Maine address likely missing from OSM
+    const url = 'https://api.mapbox.com/geocoding/v5/mapbox.places/'
+      + encodeURIComponent('8 Raccoon Ln, Cushing, ME')
+      + '.json?limit=1&country=us&types=address&access_token=' + encodeURIComponent(t);
+    const resp = await fetch(url);
+    if (resp.status === 401) return { success: false, error: 'Token rejected (401 Unauthorized). Double-check it was copied correctly.' };
+    if (resp.status === 403) return { success: false, error: 'Token forbidden (403). Check that the token has the geocoding scope enabled.' };
+    if (!resp.ok) return { success: false, error: 'HTTP ' + resp.status + ' from Mapbox.' };
+    const data = await resp.json();
+    if (data && Array.isArray(data.features) && data.features.length > 0) {
+      const f = data.features[0];
+      return {
+        success: true,
+        match: f.place_name,
+        lat: f.center[1],
+        lng: f.center[0],
+        accuracy: (f.properties && f.properties.accuracy) || (f.place_type && f.place_type[0]) || 'unknown',
+        relevance: f.relevance,
+      };
+    }
+    return { success: true, match: null, note: 'Token valid but this specific address returned no hit (Mapbox will still handle other addresses fine).' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('clear-geocode-cache', async () => {
+  writeCollection('geocode_cache', []);
+  return { success: true };
+});
+
+// ===== MOTIVE GPS =====
+ipcMain.handle('get-motive-locations', async () => {
+  const settingsPath = path.join(userDataPath, 'settings.json');
+  const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+  const apiKey = settings.motive_api_key;
+  if (!apiKey) return { error: 'No Motive API key configured', vehicles: [] };
+  return new Promise((resolve) => {
+    const options = {
+      hostname: 'api.gomotive.com',
+      path: '/v3/vehicle_locations?per_page=100',
+      method: 'GET',
+      headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+    };
+    const req = https.request(options, (res) => {
+      let body = '';
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); }
+        catch (e) { resolve({ error: 'Parse error', vehicles: [] }); }
+      });
+    });
+    req.on('error', (e) => resolve({ error: e.message, vehicles: [] }));
+    req.setTimeout(10000, () => { req.destroy(); resolve({ error: 'Timeout', vehicles: [] }); });
+    req.end();
+  });
 });
 
 // ===== TANK TYPES =====
 const DEFAULT_TANK_TYPES = [
-  { name: 'Septic Tank',          waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 1  },
-  { name: 'Septic Tank+Filter',   waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 2  },
-  { name: 'Holding Tank',         waste_code: 'H',  disposal_label: 'Holding Tank Waste Disposal',      pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 3  },
-  { name: 'Grease Trap',          waste_code: 'G',  disposal_label: 'Grease Trap Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 4  },
-  { name: 'Interior Grease Trap', waste_code: 'Ig', disposal_label: 'Grease Trap Waste Disposal',       pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 5  },
-  { name: 'Cesspool',             waste_code: 'C',  disposal_label: 'Cesspool Waste Disposal',          pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 6  },
-  { name: 'Aerobic System',       waste_code: 'As', disposal_label: 'Aerobic System Waste Disposal',    pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 7  },
-  { name: 'Pump Chamber',         waste_code: 'P',  disposal_label: 'Septic Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 8  },
-  { name: 'Distribution Box',     waste_code: 'Db', disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 9  },
-  { name: 'Drain Clearing',       waste_code: 'Dc', disposal_label: '',                                 pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 10 },
-  { name: 'Wet Well',             waste_code: 'Ls', disposal_label: 'Wet Well Waste Disposal',          pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 11 },
-  { name: 'Other',                waste_code: '',   disposal_label: 'Waste Disposal',                   pumping_price: 250, disposal_price: 140, generates_disposal: false, sort_order: 99 },
+  { name: 'Septic Tank',                        waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 1  },
+  { name: 'Septic Tank+Filter',                 waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 2  },
+  { name: 'Septic Tank w/ Intank Pump',         waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 3  },
+  { name: 'Septic Tank w/ Intank Pump+Filter',  waste_code: 'S',  disposal_label: 'Septic Tank Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 4  },
+  { name: 'Holding Tank',                       waste_code: 'H',  disposal_label: 'Holding Tank Waste Disposal',           pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 5  },
+  { name: 'Cesspool',                           waste_code: 'C',  disposal_label: 'Cesspool Waste Disposal',               pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 6  },
+  { name: 'Aerobic System',                     waste_code: 'As', disposal_label: 'Aerobic System Waste Disposal',         pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 7  },
+  { name: 'Grease Trap',                        waste_code: 'G',  disposal_label: 'Grease Trap Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 8  },
+  { name: 'Interior Grease Trap',               waste_code: 'Ig', disposal_label: 'Grease Trap Waste Disposal',            pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 9  },
+  { name: 'Grinder Pump Station',               waste_code: 'Ps', disposal_label: 'Pump Station Waste Disposal',           pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 10 },
+  { name: 'Separate Pump Station',              waste_code: 'S',  disposal_label: 'Septic Waste Disposal',                 pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 11 },
+  { name: 'Septic/Sewer Pump Station',          waste_code: 'Ps', disposal_label: 'Pump Station Waste Disposal',           pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 12 },
+  { name: 'Pump Chamber',                       waste_code: 'P',  disposal_label: 'Septic Waste Disposal',                 pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 13 },
+  { name: 'Wet Well',                           waste_code: 'Ls', disposal_label: 'Wet Well Waste Disposal',               pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 14 },
+  { name: 'Treatment Plant',                    waste_code: 'Tp', disposal_label: 'Treatment Plant Waste Disposal',        pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 15 },
+  { name: 'Vault Toilet',                       waste_code: 'Vt', disposal_label: 'Vault Toilet Waste Disposal',           pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 16 },
+  { name: 'Portable Toilets',                   waste_code: 'Pt', disposal_label: 'Portable Toilet Waste Disposal',        pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 17 },
+  { name: 'Fuji Tank',                          waste_code: 'Fj', disposal_label: 'Fuji Tank Waste Disposal',              pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 18 },
+  { name: 'Leachate',                           waste_code: '',   disposal_label: 'Leachate Disposal',                     pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 19 },
+  { name: 'Manhole/Sewage',                     waste_code: 'Mh', disposal_label: 'Sewage Waste Disposal',                 pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 20 },
+  { name: 'Lobster / Fish Waste',               waste_code: '',   disposal_label: 'Fish Waste Disposal',                   pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 21 },
+  { name: 'Seaweed Waste',                      waste_code: 'Sw', disposal_label: 'Seaweed Waste Disposal',                pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 22 },
+  { name: 'Brewery',                            waste_code: 'Br', disposal_label: 'Brewery Waste Disposal',                pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 23 },
+  { name: 'Water/Non Hazardous Liquids',        waste_code: '',   disposal_label: 'Non Hazardous Liquid Disposal',         pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 24 },
+  { name: 'Boat Bottom Wash',                   waste_code: 'B',  disposal_label: 'Boat Wash Disposal',                    pumping_price: 250, disposal_price: 140, generates_disposal: true,  sort_order: 25 },
+  { name: 'Water',                              waste_code: '',   disposal_label: '',                                      pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 26 },
+  { name: 'Distribution Box',                   waste_code: 'Db', disposal_label: '',                                      pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 27 },
+  { name: 'Drain Clearing',                     waste_code: 'Dc', disposal_label: '',                                      pumping_price: 250, disposal_price: 0,   generates_disposal: false, sort_order: 28 },
+  { name: 'Other',                              waste_code: '',   disposal_label: 'Waste Disposal',                        pumping_price: 250, disposal_price: 140, generates_disposal: false, sort_order: 99 },
 ];
 
 ipcMain.handle('get-tank-types', async () => {
@@ -1427,16 +3574,26 @@ ipcMain.handle('get-tank-types', async () => {
     return tt;
   });
   if (patched) writeCollection('tank_types', types);
+  // Patch: add any missing default types not yet in the collection (by name)
+  const existingNames = new Set(types.map(t => t.name));
+  let addedDefaults = false;
+  for (const dt of DEFAULT_TANK_TYPES) {
+    if (!existingNames.has(dt.name)) {
+      types.push({ id: uuidv4(), ...dt });
+      addedDefaults = true;
+    }
+  }
+  if (addedDefaults) writeCollection('tank_types', types);
   return { data: types.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)) };
 });
 
 ipcMain.handle('save-tank-type', async (e, data) => {
-  const saved = upsert('tank_types', data);
+  const saved = await upsertAsync('tank_types', data);
   return { success: true, data: saved };
 });
 
 ipcMain.handle('delete-tank-type', async (e, id) => {
-  deleteItem('tank_types', id);
+  await removeAsync('tank_types', id);
   return { success: true };
 });
 
@@ -1485,13 +3642,13 @@ ipcMain.handle('delete-service-product', async (e, id) => {
 
 // ===== USERS (TECHS) =====
 ipcMain.handle('get-users', async () => {
-  const users = readCollection('users');
+  const users = await readCollectionAsync('users');
   users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   return { data: users };
 });
 
 ipcMain.handle('delete-user', async (e, id) => {
-  remove('users', id);
+  await removeAsync('users', id);
   return { success: true };
 });
 
@@ -1561,6 +3718,213 @@ ipcMain.handle('change-password', async (e, userId, newPassword) => {
   users[idx].password_hash = bcrypt.hashSync(newPassword, salt);
   users[idx].updated_at = new Date().toISOString();
   writeCollection('users', users);
+  return { success: true };
+});
+
+// =====================================================================
+// CLOUD USER MANAGEMENT (Supabase) — owner-only operations
+// Maintains a logged-in Supabase session for owner; all CRUD operations
+// run as the owner via RLS.
+// =====================================================================
+const { createClient: _sbCreateClient } = require('@supabase/supabase-js');
+const SUPABASE_DOMAIN = 'interstate-septic.app';
+const supabaseConfigPath = path.join(userDataPath, 'supabase-config.json');
+let _sbClient = null;
+let _sbSession = null;
+
+function _getSbConfig() {
+  if (!fs.existsSync(supabaseConfigPath)) return null;
+  try { return JSON.parse(fs.readFileSync(supabaseConfigPath, 'utf8')); } catch { return null; }
+}
+
+function _getSbClient() {
+  if (_sbClient) return _sbClient;
+  const cfg = _getSbConfig();
+  if (!cfg || !cfg.url || !cfg.anonKey) return null;
+  _sbClient = _sbCreateClient(cfg.url, cfg.anonKey, { auth: { persistSession: false } });
+  return _sbClient;
+}
+
+// Session persistence — writes refresh+access token to a file in userData
+const _sbSessionPath = path.join(userDataPath, 'supabase-session.json');
+
+function _saveSbSession(session) {
+  if (!session) return;
+  try {
+    fs.writeFileSync(_sbSessionPath, JSON.stringify({
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+      expires_at: session.expires_at,
+      user_id: session.user?.id
+    }, null, 2));
+  } catch (e) {
+    console.warn('[CLOUD] could not save session:', e.message);
+  }
+}
+
+function _clearSbSession() {
+  try { if (fs.existsSync(_sbSessionPath)) fs.unlinkSync(_sbSessionPath); } catch {}
+}
+
+async function _restoreSbSession() {
+  if (!fs.existsSync(_sbSessionPath)) return null;
+  let saved;
+  try { saved = JSON.parse(fs.readFileSync(_sbSessionPath, 'utf8')); }
+  catch { return null; }
+  if (!saved.access_token || !saved.refresh_token) return null;
+
+  const sb = _getSbClient();
+  if (!sb) return null;
+  const { data, error } = await sb.auth.setSession({
+    access_token: saved.access_token,
+    refresh_token: saved.refresh_token
+  });
+  if (error || !data.session) {
+    _clearSbSession();
+    return null;
+  }
+  _sbSession = data.session;
+  // Save refreshed tokens
+  _saveSbSession(data.session);
+  return data.session;
+}
+
+function _normalizeUsername(s) {
+  return (s || '').toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9._-]/g, '');
+}
+
+ipcMain.handle('cloud-config-status', async () => {
+  const cfg = _getSbConfig();
+  return {
+    configured: !!(cfg && cfg.url && cfg.anonKey),
+    url: cfg?.url || null,
+    signedIn: !!_sbSession,
+    sessionUser: _sbSession?.user?.email || null
+  };
+});
+
+ipcMain.handle('cloud-login', async (e, username, password) => {
+  const sb = _getSbClient();
+  if (!sb) return { success: false, error: 'Supabase not configured' };
+  const u = _normalizeUsername(username);
+  const email = `${u}@${SUPABASE_DOMAIN}`;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) return { success: false, error: error.message };
+  _sbSession = data.session;
+  _saveSbSession(data.session);
+  // Look up role
+  const { data: profile } = await sb.from('users').select('id, name, role, username, color, phone').eq('auth_user_id', data.user.id).single();
+  // Hydrate local cache and subscribe to realtime — non-blocking
+  _cloudHydrateStore().catch(e => console.warn('[CLOUD] hydrate error:', e.message));
+  setTimeout(() => _cloudSubscribeRealtime(), 100);
+  return { success: true, user: profile, session: { expires_at: data.session.expires_at } };
+});
+
+ipcMain.handle('cloud-logout', async () => {
+  _cloudUnsubscribeRealtime();
+  const sb = _getSbClient();
+  if (sb) await sb.auth.signOut();
+  _sbSession = null;
+  _clearSbSession();
+  return { success: true };
+});
+
+ipcMain.handle('cloud-restore-session', async () => {
+  const session = await _restoreSbSession();
+  if (!session) return { success: false };
+  const sb = _getSbClient();
+  const { data: profile, error } = await sb.from('users').select('id, name, role, username, color, phone').eq('auth_user_id', session.user.id).single();
+  if (error || !profile) {
+    _clearSbSession();
+    _sbSession = null;
+    return { success: false };
+  }
+  // Hydrate local cache and subscribe to realtime
+  _cloudHydrateStore().catch(e => console.warn('[CLOUD] hydrate error:', e.message));
+  setTimeout(() => _cloudSubscribeRealtime(), 100);
+  return { success: true, user: profile, session: { expires_at: session.expires_at } };
+});
+
+ipcMain.handle('cloud-users-list', async () => {
+  const sb = _getSbClient();
+  if (!sb || !_sbSession) return { success: false, error: 'Not signed in to cloud' };
+  const { data, error } = await sb.from('users')
+    .select('id, username, name, phone, role, color, auth_user_id, created_at, updated_at')
+    .order('role', { ascending: true })
+    .order('username');
+  if (error) return { success: false, error: error.message };
+  return { success: true, data: data.map(u => ({ ...u, linked: !!u.auth_user_id })) };
+});
+
+ipcMain.handle('cloud-users-create', async (e, payload) => {
+  const sb = _getSbClient();
+  if (!sb || !_sbSession) return { success: false, error: 'Not signed in to cloud' };
+  if (!payload.username || !payload.name || !payload.role || !payload.password) {
+    return { success: false, error: 'Username, name, role, and password are required' };
+  }
+  if (!['owner','office','tech'].includes(payload.role)) {
+    return { success: false, error: 'Invalid role' };
+  }
+  if (payload.password.length < 6) {
+    return { success: false, error: 'Password must be at least 6 characters' };
+  }
+
+  const username = _normalizeUsername(payload.username);
+  const email = `${username}@${SUPABASE_DOMAIN}`;
+
+  // 1. Insert public.users row first so trigger has a target
+  const { data: insertData, error: insertErr } = await sb.from('users').insert({
+    username,
+    name: payload.name,
+    role: payload.role,
+    phone: payload.phone || null,
+    color: payload.color || null
+  }).select().single();
+  if (insertErr) return { success: false, error: 'Profile create failed: ' + insertErr.message };
+
+  // 2. Sign up the auth account using a separate client (preserves owner session)
+  const cfg = _getSbConfig();
+  const signupClient = _sbCreateClient(cfg.url, cfg.anonKey, { auth: { persistSession: false } });
+  const { error: signupErr } = await signupClient.auth.signUp({ email, password: payload.password });
+  if (signupErr) {
+    // Rollback the profile insert
+    await sb.from('users').delete().eq('id', insertData.id);
+    return { success: false, error: 'Auth account create failed: ' + signupErr.message };
+  }
+  await signupClient.auth.signOut();
+
+  return { success: true, data: { ...insertData, linked: true } };
+});
+
+ipcMain.handle('cloud-users-update', async (e, userId, updates) => {
+  const sb = _getSbClient();
+  if (!sb || !_sbSession) return { success: false, error: 'Not signed in to cloud' };
+  const allowed = {};
+  if (updates.name !== undefined) allowed.name = updates.name;
+  if (updates.phone !== undefined) allowed.phone = updates.phone;
+  if (updates.role !== undefined) {
+    if (!['owner','office','tech'].includes(updates.role)) {
+      return { success: false, error: 'Invalid role' };
+    }
+    allowed.role = updates.role;
+  }
+  if (updates.color !== undefined) allowed.color = updates.color;
+  if (updates.username !== undefined) {
+    allowed.username = _normalizeUsername(updates.username);
+  }
+  const { data, error } = await sb.from('users').update(allowed).eq('id', userId).select().single();
+  if (error) return { success: false, error: error.message };
+  return { success: true, data };
+});
+
+ipcMain.handle('cloud-users-delete', async (e, userId) => {
+  const sb = _getSbClient();
+  if (!sb || !_sbSession) return { success: false, error: 'Not signed in to cloud' };
+  const { error } = await sb.from('users').delete().eq('id', userId);
+  if (error) return { success: false, error: error.message };
+  // NOTE: this does not remove auth.users — that requires service role.
+  // The orphaned auth account stays but cannot log in (its public.users row is gone,
+  // and the app rejects logins without a linked profile).
   return { success: true };
 });
 
@@ -1697,7 +4061,7 @@ async function checkDueNotices() {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     if (!settings.smtp_host) return;
 
-    let notices = readCollection('service_due_notices');
+    let notices = readCollection('service_due_notices').filter(n => !n.deleted_at);
     const customers = readCollection('customers');
     const properties = readCollection('properties');
     const today = new Date().toISOString().split('T')[0];
@@ -1809,10 +4173,10 @@ async function checkJobReminders() {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     if (!settings.smtp_host) return;
 
-    const jobs = readCollection('jobs');
+    const jobs = readCollection('jobs').filter(j => !j.deleted_at);
     const customers = readCollection('customers');
     const properties = readCollection('properties');
-    
+
     // Calculate tomorrow's date
     const today = new Date();
     const tomorrow = new Date(today);
@@ -1820,7 +4184,7 @@ async function checkJobReminders() {
     const tomorrowStr = tomorrow.toISOString().split('T')[0];
 
     // Find jobs scheduled for tomorrow that haven't had reminders sent yet
-    const jobsForTomorrow = jobs.filter(j => 
+    const jobsForTomorrow = jobs.filter(j =>
       j.scheduled_date === tomorrowStr && 
       (!j.reminder_sent || j.reminder_sent !== tomorrowStr)
     );
@@ -1967,125 +4331,127 @@ ipcMain.handle('seed-test-data', async () => {
   const vehicles = readCollection('vehicles');
   if (vehicles.length === 0) return { success: false, error: 'No vehicles found. Add trucks first.' };
 
-  const existingJobs = readCollection('jobs');
   const today = new Date().toISOString().split('T')[0]; // e.g. 2026-03-14
-  const todayJobs = existingJobs.filter(j => j.scheduled_date === today);
-  if (todayJobs.length > 0) return { success: false, error: `Already ${todayJobs.length} jobs for ${today}. Delete them first or pick another date.` };
 
-  const maineNames = [
-    'Robert & Linda Thompson', 'James & Susan Mitchell', 'David & Nancy Anderson',
-    'Michael & Karen Roberts', 'William & Patricia Clark', 'Richard & Barbara Lewis',
-    'Charles & Margaret Walker', 'Thomas & Dorothy Hall', 'Daniel & Sandra Young',
-    'Paul & Betty Allen', 'Mark & Helen King', 'Steven & Ruth Wright',
-    'Edward & Sharon Hill', 'Brian & Laura Scott', 'George & Diane Green',
-    'Kenneth & Cynthia Adams', 'Ronald & Kathleen Baker', 'Timothy & Deborah Nelson',
-    'Jeffrey & Carolyn Carter', 'Gary & Janet Campbell', 'Dennis & Martha Parker',
-    'Peter & Ann Evans', 'Larry & Marie Edwards', 'Frank & Virginia Collins',
-    'Raymond & Judy Stewart', 'Jerry & Cheryl Morris', 'Douglas & Teresa Murphy',
-    'Henry & Gloria Rogers', 'Carl & Jean Reed', 'Arthur & Rose Cook',
-    'Wayne & Alice Morgan', 'Roy & Frances Bell', 'Eugene & Evelyn Howard'
-  ];
-  // Real midcoast Maine addresses for accurate geocoding
-  const maineAddresses = [
-    { address: '18 Simmons Rd', city: 'Camden', zip: '04843' },
-    { address: '104 Main St', city: 'Rockland', zip: '04841' },
-    { address: '22 Pascal Ave', city: 'Rockport', zip: '04856' },
-    { address: '85 Beechwood St', city: 'Thomaston', zip: '04861' },
-    { address: '574 West St', city: 'Rockport', zip: '04856' },
-    { address: '40 Knox St', city: 'Thomaston', zip: '04861' },
-    { address: '15 Spruce Head Rd', city: 'South Thomaston', zip: '04858' },
-    { address: '126 Moore Rd', city: 'Warren', zip: '04864' },
-    { address: '2966 Atlantic Hwy', city: 'Waldoboro', zip: '04572' },
-    { address: '33 Elm St', city: 'Camden', zip: '04843' },
-    { address: '250 Camden St', city: 'Rockland', zip: '04841' },
-    { address: '11 Mountain St', city: 'Camden', zip: '04843' },
-    { address: '44 Mechanic St', city: 'Rockland', zip: '04841' },
-    { address: '68 Old County Rd', city: 'Rockland', zip: '04841' },
-    { address: '1 Pie Ln', city: 'Waldoboro', zip: '04572' },
-    { address: '190 Union St', city: 'Rockport', zip: '04856' },
-    { address: '12 Island Ave', city: 'Spruce Head', zip: '04859' },
-    { address: '75 Cross St', city: 'Rockland', zip: '04841' },
-    { address: '365 Main St', city: 'Rockland', zip: '04841' },
-    { address: '48 Sea St', city: 'Camden', zip: '04843' },
-    { address: '100 Limerock St', city: 'Rockland', zip: '04841' },
-    { address: '5 Lighthouse Rd', city: 'Owls Head', zip: '04854' },
-    { address: '23 Wadsworth St', city: 'Thomaston', zip: '04861' },
-    { address: '88 Washington St', city: 'Camden', zip: '04843' },
-    { address: '15 River Rd', city: 'Cushing', zip: '04563' },
-    { address: '42 Friendship St', city: 'Waldoboro', zip: '04572' },
-    { address: '9 Clark Island Rd', city: 'Saint George', zip: '04860' },
-    { address: '31 Gleason Hill Rd', city: 'Union', zip: '04862' },
-    { address: '156 Wallston Rd', city: 'Tenants Harbor', zip: '04860' },
-    { address: '77 Port Clyde Rd', city: 'Saint George', zip: '04860' },
-    { address: '210 Park St', city: 'Rockland', zip: '04841' },
-    { address: '14 Bayview St', city: 'Camden', zip: '04843' },
-    { address: '55 Buttermilk Ln', city: 'Thomaston', zip: '04861' },
-  ];
-  const phones = () => `(207) ${Math.floor(Math.random()*900+100)}-${Math.floor(Math.random()*9000+1000)}`;
-  const tankTypes = ['Septic', 'Septic', 'Septic', 'Grease Trap', 'Holding Tank', 'Cesspool'];
-  const tankVolumes = [1000, 1000, 1000, 1000, 1000, 1000, 750, 750, 1500, 1500, 1500, 750];
+  // If there are previous demo jobs for today, silently clean them up first
+  // (user might be re-running the demo) instead of blocking. Real jobs are
+  // left alone — demo jobs just stack on top of them.
+  const existingJobs = readCollection('jobs');
+  const stalePrevDemoToday = existingJobs.filter(j => j._test_data && j.scheduled_date === today);
+  if (stalePrevDemoToday.length > 0) {
+    await unseedAllTestData();
+    console.log(`[DEMO] Cleaned up ${stalePrevDemoToday.length} previous demo jobs before re-seeding`);
+  }
+
+  // NEW APPROACH: sample REAL customers + their REAL properties + REAL tanks
+  // from the existing database. Tag ONLY the job record with _test_data:true.
+  // Customers/properties/tanks are never modified, never flagged, never
+  // touched — so there is NOTHING about them to clean up on unseed.
+  //
+  // Safety guarantees:
+  //   - No confirmation emails: sendJobConfirmEmail early-returns on
+  //     job._test_data (see line ~766).
+  //   - Unseed cascade: demoJobIds is built from j._test_data. Every
+  //     downstream collection (invoices, payments, schedule_items,
+  //     reminders, service_due_notices, filter_leads, disposal_loads)
+  //     is cleaned by demoJobIds.has(job_id). demoCustIds/demoPropIds/
+  //     demoTankIds stay empty, so the base customer/property/tank
+  //     collections get zero deletions.
+  //   - Using real addresses means demo jobs geocode cleanly and show
+  //     on the map the way real jobs do.
+
+  const allCustomers = readCollection('customers').filter(c => !c._test_data && !c.deleted_at);
+  const allProperties = readCollection('properties').filter(p => !p._test_data && !p.deleted_at);
+  const allTanks = readCollection('tanks').filter(t => !t._test_data);
+
+  if (allCustomers.length === 0) {
+    return { success: false, error: 'No customers in the database yet. Import customers first, then use + Demo.' };
+  }
+
+  // Index: customer_id → [properties with a usable address]
+  const propsByCust = new Map();
+  for (const p of allProperties) {
+    if (!p.customer_id || !p.address || !p.city) continue;
+    if (!propsByCust.has(p.customer_id)) propsByCust.set(p.customer_id, []);
+    propsByCust.get(p.customer_id).push(p);
+  }
+
+  // Index: property_id → [tanks with real, non-zero volume]
+  // We intentionally drop tanks whose volume is 0 / null / blank here —
+  // those produce work orders that show "0 gal" for the job, which is
+  // what bit us on the first pass.
+  const tanksByProp = new Map();
+  for (const t of allTanks) {
+    if (!t.property_id) continue;
+    const vol = parseInt(t.volume_gallons) || 0;
+    if (vol <= 0) continue; // skip blank/zero-capacity tanks
+    if (!tanksByProp.has(t.property_id)) tanksByProp.set(t.property_id, []);
+    tanksByProp.get(t.property_id).push(t);
+  }
+
+  // Prefer customers whose property is already in the geocode cache —
+  // they'll show on the map instantly, no Nominatim roundtrip needed.
+  const geocodeCache = readCollection('geocode_cache');
+  const cachedAddrs = new Set(geocodeCache.map(g => (g.address || '').toLowerCase().trim()));
+  const fullAddrOf = (p) =>
+    [p.address, p.city, p.state || 'ME'].filter(Boolean).join(', ').toLowerCase().trim();
+
+  // Build the pool of (customer, property) pairs usable for a demo job.
+  // REQUIREMENT: the property must have at least one real tank with a
+  // real volume_gallons value. Otherwise the job card would show "0 gal"
+  // and the route panel's planned-gallons total would be wrong.
+  const pool = [];
+  for (const cust of allCustomers) {
+    const props = propsByCust.get(cust.id);
+    if (!props || props.length === 0) continue;
+
+    // Candidate properties under this customer that have usable tanks
+    const viable = props.filter(p => tanksByProp.has(p.id));
+    if (viable.length === 0) continue; // this customer has no tank data — skip
+
+    // Prefer a viable property that's already geocoded
+    const prop = viable.find(p => cachedAddrs.has(fullAddrOf(p))) || viable[0];
+    pool.push({ customer: cust, property: prop, geocoded: cachedAddrs.has(fullAddrOf(prop)) });
+  }
+
+  if (pool.length === 0) {
+    return {
+      success: false,
+      error: 'No customers with both a property address AND tank volume data were found. '
+        + 'Import your tank data first (TankTrack merge or Tanks tab), then use + Demo.'
+    };
+  }
+
+  // Shuffle, but float geocoded ones to the front so most of today's demo
+  // jobs render on the map on the first click.
+  pool.sort(() => Math.random() - 0.5);
+  pool.sort((a, b) => (b.geocoded ? 1 : 0) - (a.geocoded ? 1 : 0));
+
   const confirmStatuses = ['confirmed', 'confirmed', 'confirmed', 'no_reply', 'auto_confirmed', 'unconfirmed', 'left_message'];
   const times = ['07:00', '07:30', '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00'];
-
-  let nameIdx = 0;
-  const seededCustomers = [];
-  const seededProperties = [];
-  const seededTanks = [];
-  const seededJobs = [];
+  const ttConfig = readCollection('tank_types');
+  const ttMap = {};
+  ttConfig.forEach(tt => { ttMap[tt.name] = tt; });
+  const pumpUnitPrice = 250;
+  const dispUnitPrice = 140;
 
   // Pick the first 4 vehicles with capacity (pump trucks)
   const pumpTrucks = vehicles.filter(v => v.capacity_gallons > 0).slice(0, 4);
   if (pumpTrucks.length === 0) return { success: false, error: 'No trucks with capacity found.' };
 
+  let poolIdx = 0;
+  const seededJobs = [];
+
   for (const truck of pumpTrucks) {
     const jobCount = 6 + Math.floor(Math.random() * 3); // 6-8 jobs per truck
     for (let i = 0; i < jobCount; i++) {
-      if (nameIdx >= maineNames.length) break;
-      const name = maineNames[nameIdx];
-      const addr = maineAddresses[nameIdx % maineAddresses.length];
-      nameIdx++;
+      if (poolIdx >= pool.length) break;
+      const { customer, property } = pool[poolIdx++];
 
-      // Create customer
-      const cust = upsert('customers', {
-        name: name,
-        phone: phones(),
-        email: name.split(' ')[0].toLowerCase() + '@email.com',
-        _test_data: true,
-      });
-      seededCustomers.push(cust);
-
-      // Create property
-      const prop = upsert('properties', {
-        customer_id: cust.id,
-        address: addr.address,
-        city: addr.city,
-        state: 'ME',
-        zip: addr.zip,
-        _test_data: true,
-      });
-      seededProperties.push(prop);
-
-      // Create 1-2 tanks
-      const numTanks = Math.random() < 0.2 ? 2 : 1;
-      for (let t = 0; t < numTanks; t++) {
-        const tank = upsert('tanks', {
-          property_id: prop.id,
-          tank_type: tankTypes[Math.floor(Math.random() * tankTypes.length)],
-          volume_gallons: tankVolumes[Math.floor(Math.random() * tankVolumes.length)],
-          _test_data: true,
-        });
-        seededTanks.push(tank);
-      }
-
-      // Create job with pricing based on tank volume
-      // Qty = volume / 1000 so a 1500 gal tank = qty 1.5 at $250/unit pumping, $140/unit disposal
-      const jobTanks = seededTanks.filter(t => t.property_id === prop.id);
-      const tankVol = jobTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0) || 1000;
-      const pumpUnitPrice = 250;
-      const dispUnitPrice = 140;
-      const ttConfig = readCollection('tank_types');
-      const ttMap = {};
-      ttConfig.forEach(tt => { ttMap[tt.name] = tt; });
+      // Guaranteed non-empty by the pool filter above — every pooled
+      // property has at least one tank with volume_gallons > 0.
+      const jobTanks = tanksByProp.get(property.id);
+      const tankVol = jobTanks.reduce((s, t) => s + (parseInt(t.volume_gallons) || 0), 0);
       const allItems = jobTanks.flatMap(t => {
         const tQty = Math.max(1, Math.round(((t.volume_gallons || 0) / 1000) * 100) / 100);
         const tt = ttMap[t.tank_type] || {};
@@ -2098,9 +4464,10 @@ ipcMain.handle('seed-test-data', async () => {
         return lines;
       });
       const total = Math.round(allItems.reduce((s, li) => s + li.qty * li.unit_price, 0) * 100) / 100;
+
       const job = upsert('jobs', {
-        customer_id: cust.id,
-        property_id: prop.id,
+        customer_id: customer.id,    // ← REAL customer id, never modified
+        property_id: property.id,    // ← REAL property id, never modified
         vehicle_id: truck.id,
         assigned_to: truck.default_tech_id || '',
         scheduled_date: today,
@@ -2112,7 +4479,7 @@ ipcMain.handle('seed-test-data', async () => {
         gallons: tankVol,
         line_items: allItems,
         total,
-        _test_data: true,
+        _test_data: true,            // ← ONLY the job is tagged
       });
       seededJobs.push(job);
     }
@@ -2121,30 +4488,98 @@ ipcMain.handle('seed-test-data', async () => {
   return {
     success: true,
     data: {
-      customers: seededCustomers.length,
-      properties: seededProperties.length,
-      tanks: seededTanks.length,
+      customers: 0,                 // no customers created — uses existing
+      properties: 0,                // no properties created
+      tanks: 0,                     // no tanks created
       jobs: seededJobs.length,
       date: today,
+      pool_size: pool.length,
+      mode: 'real_customers',
     }
   };
 });
 
 // ===== UNSEED TEST DATA =====
-ipcMain.handle('unseed-test-data', async () => {
-  const collections = ['jobs', 'customers', 'properties', 'tanks'];
+// Comprehensive cascade: removes every demo-tagged record AND every dependent
+// record that links to it (invoices, payments, schedule_items, reminders,
+// service_due_notices, filter_leads, afcs, disposal_loads, day_notes).
+async function unseedAllTestData() {
   const counts = {};
-  for (const col of collections) {
-    const items = readCollection(col);
-    const kept = items.filter(i => !i._test_data);
-    const removed = items.length - kept.length;
-    counts[col] = removed;
-    writeCollection(col, kept);
+
+  // 1. Collect IDs of every demo-tagged seed entity across the 4 base collections
+  const demoCustIds = new Set();
+  const demoPropIds = new Set();
+  const demoTankIds = new Set();
+  const demoJobIds = new Set();
+
+  for (const c of readCollection('customers')) if (c._test_data) demoCustIds.add(c.id);
+  for (const p of readCollection('properties')) {
+    if (p._test_data || demoCustIds.has(p.customer_id)) demoPropIds.add(p.id);
   }
-  return {
-    success: true,
-    data: counts,
+  for (const t of readCollection('tanks')) {
+    if (t._test_data || demoPropIds.has(t.property_id)) demoTankIds.add(t.id);
+  }
+  for (const j of readCollection('jobs')) {
+    if (j._test_data || demoCustIds.has(j.customer_id) || demoPropIds.has(j.property_id)) {
+      demoJobIds.add(j.id);
+    }
+  }
+
+  // 2. Base collections — remove tagged or linked rows
+  const custKept = readCollection('customers').filter(c => !demoCustIds.has(c.id));
+  counts.customers = demoCustIds.size;
+  writeCollection('customers', custKept);
+
+  const propKept = readCollection('properties').filter(p => !demoPropIds.has(p.id));
+  counts.properties = demoPropIds.size;
+  writeCollection('properties', propKept);
+
+  const tankKept = readCollection('tanks').filter(t => !demoTankIds.has(t.id));
+  counts.tanks = demoTankIds.size;
+  writeCollection('tanks', tankKept);
+
+  const jobKept = readCollection('jobs').filter(j => !demoJobIds.has(j.id));
+  counts.jobs = demoJobIds.size;
+  writeCollection('jobs', jobKept);
+
+  // 3. Dependent collections — cascade delete anything referencing demo records
+  const cascade = (colName, predicate) => {
+    const items = readCollection(colName);
+    const kept = items.filter(i => !predicate(i));
+    const removed = items.length - kept.length;
+    if (removed > 0) {
+      counts[colName] = removed;
+      writeCollection(colName, kept);
+    }
   };
+
+  cascade('invoices', i =>
+    demoJobIds.has(i.job_id) ||
+    demoCustIds.has(i.customer_id) ||
+    demoPropIds.has(i.property_id) ||
+    i._test_data
+  );
+  cascade('payments', p => demoJobIds.has(p.job_id) || demoCustIds.has(p.customer_id) || p._test_data);
+  cascade('schedule_items', s => demoJobIds.has(s.job_id) || s._test_data);
+  cascade('reminders', r => demoJobIds.has(r.job_id) || demoCustIds.has(r.customer_id) || r._test_data);
+  cascade('service_due_notices', n =>
+    demoJobIds.has(n.job_id) || demoCustIds.has(n.customer_id) || demoPropIds.has(n.property_id) || n._test_data
+  );
+  cascade('filter_leads', f =>
+    demoJobIds.has(f.job_id) || demoCustIds.has(f.customer_id) || demoPropIds.has(f.property_id) || f._test_data
+  );
+  cascade('afcs', a => demoCustIds.has(a.customer_id) || a._test_data);
+  cascade('disposal_loads', d => demoJobIds.has(d.job_id) || d._test_data);
+  cascade('day_notes', d => d._test_data);
+  cascade('ar_snapshots', a => a._test_data);
+
+  console.log('[DEMO] Cascade removed:', counts);
+  return counts;
+}
+
+ipcMain.handle('unseed-test-data', async () => {
+  const counts = await unseedAllTestData();
+  return { success: true, data: counts };
 });
 
 // ===== GEOCODE CACHE =====
@@ -2263,110 +4698,141 @@ ipcMain.handle('import-preview-tanktrack', async (e, filePath, limit) => {
 });
 
 ipcMain.handle('import-execute-tanktrack', async (e, filePath, maxCustomers) => {
+  const sendProgress = (p) => { try { e.sender.send('import-progress', p); } catch (_) {} };
   try {
+    sendProgress({ stage: 'reading', message: 'Reading Excel file…' });
     const wb = XLSX.readFile(filePath);
     const raw = XLSX.utils.sheet_to_json(wb.Sheets['Customers']);
-    const existingCustomers = readCollection('customers');
-    const existingProperties = readCollection('properties');
+
+    // Work on copies in memory — write ONCE at the end to avoid O(n²) disk writes
+    const customers = readCollection('customers').slice();
+    const properties = readCollection('properties').slice();
+    const tanks = readCollection('tanks').slice();
+
+    sendProgress({ stage: 'grouping', message: 'Grouping rows by customer…' });
+
+    // Safe string coercion — Excel gives numbers/dates as non-strings
+    const s = (v) => (v == null ? '' : String(v).trim());
 
     // Group by customer
     const custMap = new Map();
     for (const row of raw) {
-      const firstName = (row['First Name'] || '').trim();
-      const lastName = (row['Last Name'] || '').trim();
+      const firstName = s(row['First Name']);
+      const lastName = s(row['Last Name']);
       if (!firstName && !lastName) continue;
       const name = [firstName, lastName].filter(Boolean).join(' ');
-      const billingAddr = (row['Billing Address 1'] || '').trim();
+      const billingAddr = s(row['Billing Address 1']);
       const key = (name + '|' + billingAddr).toLowerCase();
 
       if (!custMap.has(key)) {
         custMap.set(key, { name, row, properties: [] });
       }
 
-      const propAddr = (row['Property Address 1'] || '').trim();
+      const propAddr = s(row['Property Address 1']);
       if (propAddr) custMap.get(key).properties.push(row);
     }
 
     const allCustomers = Array.from(custMap.values());
     const toImport = maxCustomers ? allCustomers.slice(0, maxCustomers) : allCustomers;
+    const total = toImport.length;
+
+    // Build dup-check index once (avoid O(n*m) per-row scans)
+    const custIndex = new Set(customers.map(c =>
+      `${(c.name || '').toLowerCase()}|${(c.address || '').toLowerCase()}`
+    ));
 
     let imported = 0, skipped = 0, propsCreated = 0, tanksCreated = 0;
+    const now = new Date().toISOString();
 
-    for (const cust of toImport) {
+    for (let i = 0; i < toImport.length; i++) {
+      const cust = toImport[i];
       const row = cust.row;
       const name = cust.name;
+      const billingAddr = s(row['Billing Address 1']);
+      const dupKey = `${name.toLowerCase()}|${billingAddr.toLowerCase()}`;
 
-      // Check for duplicate by name + billing address
-      const billingAddr = (row['Billing Address 1'] || '').trim();
-      const isDup = existingCustomers.some(ec =>
-        ec.name?.toLowerCase() === name.toLowerCase() &&
-        (ec.address || '').toLowerCase() === billingAddr.toLowerCase()
-      );
-      if (isDup) { skipped++; continue; }
-
-      // Create customer
-      const customer = upsert('customers', {
-        name,
-        phone: row['Cell Phone'] || row['Home Phone'] || row['Work Phone'] || '',
-        email: (row['Email'] || '').trim(),
-        contact_method: _mapContactMethod(row['E-Contact Method']),
-        address: billingAddr,
-        address2: (row['Billing Address 2'] || '').trim(),
-        city: (row['Billing City'] || '').trim(),
-        state: (row['Billing State'] || 'ME').trim(),
-        zip: (row['Billing Zip Code'] || '').trim(),
-        notes: (row['Contact Notes[Private]'] || '').trim(),
-        imported_from: 'tanktrack',
-      });
-      existingCustomers.push(customer);
-      imported++;
-
-      // Create properties + tanks for this customer
-      for (const propRow of cust.properties) {
-        const propAddr = (propRow['Property Address 1'] || '').trim();
-        if (!propAddr) continue;
-
-        // Check for duplicate property
-        const propDup = existingProperties.some(ep =>
-          ep.customer_id === customer.id &&
-          (ep.address || '').toLowerCase() === propAddr.toLowerCase()
-        );
-        if (propDup) continue;
-
-        const property = upsert('properties', {
-          customer_id: customer.id,
-          address: propAddr,
-          address2: (propRow['Property Address 2'] || '').trim(),
-          city: (propRow['Property City'] || '').trim(),
-          state: (propRow['Property State'] || 'ME').trim(),
-          zip: (propRow['Property Zip Code'] || '').trim(),
-          county: (propRow['Property County'] || '').trim(),
-          property_type: propRow['Property Type'] === 'C' ? 'Commercial' : propRow['Property Type'] === 'R' ? 'Residential' : '',
-          directions: (propRow['Directions'] || '').trim(),
-          notes: (propRow['Property Notes'] || '').trim(),
-          last_appointment_date: propRow['Last Appointment Date'] || null,
-          next_appointment_date: propRow['Next Appointment Date'] || null,
-          service_due_date: propRow['Service Due Date'] || null,
+      if (custIndex.has(dupKey)) { skipped++; }
+      else {
+        const customer = {
+          id: uuidv4(),
+          name,
+          phone: s(row['Cell Phone']) || s(row['Home Phone']) || s(row['Work Phone']),
+          email: s(row['Email']),
+          contact_method: _mapContactMethod(row['E-Contact Method']),
+          address: billingAddr,
+          address2: s(row['Billing Address 2']),
+          city: s(row['Billing City']),
+          state: s(row['Billing State']) || 'ME',
+          zip: s(row['Billing Zip Code']),
+          notes: s(row['Contact Notes[Private]']),
           imported_from: 'tanktrack',
-        });
-        existingProperties.push(property);
-        propsCreated++;
+          created_at: now,
+          updated_at: now,
+        };
+        customers.push(customer);
+        custIndex.add(dupKey);
+        imported++;
 
-        // Tank 1
-        if (propRow['Tank 1 Capacity'] > 0 || (propRow['Tank 1 Type/Source'] && propRow['Tank 1 Type/Source'] !== 'Drain Clearing')) {
-          upsert('tanks', { property_id: property.id, ..._parseTank(propRow, 1), imported_from: 'tanktrack' });
-          tanksCreated++;
+        const propsSeen = new Set();
+        for (const propRow of cust.properties) {
+          const propAddr = s(propRow['Property Address 1']);
+          if (!propAddr) continue;
+          const pKey = propAddr.toLowerCase();
+          if (propsSeen.has(pKey)) continue;
+          propsSeen.add(pKey);
+
+          const property = {
+            id: uuidv4(),
+            customer_id: customer.id,
+            address: propAddr,
+            address2: s(propRow['Property Address 2']),
+            city: s(propRow['Property City']),
+            state: s(propRow['Property State']) || 'ME',
+            zip: s(propRow['Property Zip Code']),
+            county: s(propRow['Property County']),
+            property_type: propRow['Property Type'] === 'C' ? 'Commercial' : propRow['Property Type'] === 'R' ? 'Residential' : '',
+            directions: s(propRow['Directions']),
+            notes: s(propRow['Property Notes']),
+            last_appointment_date: propRow['Last Appointment Date'] || null,
+            next_appointment_date: propRow['Next Appointment Date'] || null,
+            service_due_date: propRow['Service Due Date'] || null,
+            imported_from: 'tanktrack',
+            created_at: now,
+            updated_at: now,
+          };
+          properties.push(property);
+          propsCreated++;
+
+          if (propRow['Tank 1 Capacity'] > 0 || (propRow['Tank 1 Type/Source'] && propRow['Tank 1 Type/Source'] !== 'Drain Clearing')) {
+            tanks.push({ id: uuidv4(), property_id: property.id, ..._parseTank(propRow, 1), imported_from: 'tanktrack', created_at: now, updated_at: now });
+            tanksCreated++;
+          }
+          if (propRow['Tank 2 Capacity'] > 0 || (propRow['Tank 2 Type/Source'] && propRow['Tank 2 Type/Source'] !== 'Drain Clearing' && propRow['Tank 2 Type/Source'] !== '')) {
+            tanks.push({ id: uuidv4(), property_id: property.id, ..._parseTank(propRow, 2), imported_from: 'tanktrack', created_at: now, updated_at: now });
+            tanksCreated++;
+          }
         }
-        // Tank 2
-        if (propRow['Tank 2 Capacity'] > 0 || (propRow['Tank 2 Type/Source'] && propRow['Tank 2 Type/Source'] !== 'Drain Clearing' && propRow['Tank 2 Type/Source'] !== '')) {
-          upsert('tanks', { property_id: property.id, ..._parseTank(propRow, 2), imported_from: 'tanktrack' });
-          tanksCreated++;
-        }
+      }
+
+      // Yield every 25 rows so progress events flush and UI stays responsive
+      if ((i + 1) % 25 === 0 || i === toImport.length - 1) {
+        sendProgress({ stage: 'importing', current: i + 1, total, imported, skipped, propsCreated, tanksCreated });
+        await new Promise(r => setImmediate(r));
       }
     }
 
+    sendProgress({ stage: 'saving', message: 'Writing to disk…', current: total, total });
+    writeCollection('customers', customers);
+    writeCollection('properties', properties);
+    writeCollection('tanks', tanks);
+    broadcastDataChange('customers');
+    broadcastDataChange('properties');
+    broadcastDataChange('tanks');
+
+    sendProgress({ stage: 'done', imported, skipped, propsCreated, tanksCreated });
     return { success: true, imported, skipped, propsCreated, tanksCreated };
   } catch (err) {
+    sendProgress({ stage: 'error', error: err.message });
     return { error: err.message };
   }
 });
@@ -2376,66 +4842,128 @@ ipcMain.handle('import-invoices-tanktrack', async (e, filePath) => {
     const wb = XLSX.readFile(filePath);
     if (!wb.Sheets['Invoices']) return { error: 'No Invoices sheet found.' };
     const raw = XLSX.utils.sheet_to_json(wb.Sheets['Invoices']);
+    const sendProgress = (p) => { try { e.sender.send('import-progress', p); } catch (_) {} };
 
+    sendProgress({ stage: 'reading', message: 'Indexing customers & properties…' });
     const customers = readCollection('customers');
     const properties = readCollection('properties');
-    const existingInvoices = readCollection('invoices');
-    let imported = 0, skipped = 0;
+    const invoices = readCollection('invoices').slice();
 
-    for (const row of raw) {
-      const invNum = String(row['Invoice Number'] || '').trim();
-      if (!invNum) continue;
+    // Build lookup indexes once
+    const custByName = new Map();
+    for (const c of customers) custByName.set((c.name || '').toLowerCase(), c);
+    const propsByCust = new Map();
+    for (const p of properties) {
+      const list = propsByCust.get(p.customer_id) || [];
+      list.push(p);
+      propsByCust.set(p.customer_id, list);
+    }
+    const invoiceNumbers = new Set(invoices.map(i => i.invoice_number));
 
-      // Skip if invoice number already exists
-      if (existingInvoices.some(ei => ei.invoice_number === invNum)) { skipped++; continue; }
+    const total = raw.length;
+    let imported = 0, skipped = 0, updated = 0;
+    const now = new Date().toISOString();
 
-      // Match customer
-      const fullName = (row['Full Name'] || [row['First Name'], row['Last Name']].filter(Boolean).join(' ')).trim();
-      const cust = customers.find(c => c.name?.toLowerCase() === fullName.toLowerCase());
+    // Safe string coercion — Excel gives numbers/dates as non-strings
+    const s = (v) => (v == null ? '' : String(v).trim());
 
-      // Match property
-      const propAddr = (row['Property Address 1'] || '').trim();
-      let prop = null;
-      if (cust && propAddr) {
-        prop = properties.find(p => p.customer_id === cust.id && p.address?.toLowerCase() === propAddr.toLowerCase());
+    // Index existing invoices by number for in-place update of complete/waiting_area
+    const invByNumber = new Map();
+    for (const inv of invoices) if (inv.invoice_number) invByNumber.set(inv.invoice_number, inv);
+
+    for (let i = 0; i < raw.length; i++) {
+      const row = raw[i];
+      const invNum = s(row['Invoice Number']);
+      if (!invNum) { /* no progress-meaningful work */ }
+      else if (invoiceNumbers.has(invNum)) {
+        // Sync fields that the importer now derives (complete, waiting_area)
+        const existing = invByNumber.get(invNum);
+        if (existing) {
+          const newComplete = s(row['Job Completed?']).toLowerCase().startsWith('y');
+          const newWaiting = !s(row['Truck']);
+          if (existing.complete !== newComplete || existing.waiting_area !== newWaiting) {
+            existing.complete = newComplete;
+            existing.waiting_area = newWaiting;
+            existing.updated_at = now;
+            updated++;
+          }
+        }
+        skipped++;
+      }
+      else {
+        const billingCompany = s(row['Billing Company']) || s(row['Company']) || s(row['Company Name']);
+        const propertyCompany = s(row['Property Company']);
+        const fullName = s(row['Full Name'])
+          || [s(row['First Name']), s(row['Last Name'])].filter(Boolean).join(' ')
+          || billingCompany
+          || propertyCompany;
+        const cust = custByName.get(fullName.toLowerCase());
+        const propAddr = s(row['Property Address 1']) || s(row['Property Address']);
+        let prop = null;
+        if (cust && propAddr) {
+          const list = propsByCust.get(cust.id) || [];
+          prop = list.find(p => (p.address || '').toLowerCase() === propAddr.toLowerCase()) || null;
+        }
+        const totalAmount = parseFloat(row['Total Invoice Amount']) || 0;
+        const totalPaid = parseFloat(row['Total Amount Paid']) || 0;
+        const paymentStatus = totalPaid >= totalAmount && totalAmount > 0 ? 'paid' : totalPaid > 0 ? 'partial' : 'unpaid';
+        invoices.push({
+          id: uuidv4(),
+          invoice_number: invNum,
+          customer_id: cust?.id || null,
+          customer_name: fullName,
+          billing_company: billingCompany || fullName,
+          billing_city: s(row['Billing City']) || cust?.city || '',
+          property_id: prop?.id || null,
+          property_company: propertyCompany,
+          property_address: s(row['Property Address 1']) || prop?.address || '',
+          property_city: s(row['Property City']) || prop?.city || '',
+          svc_date: row['Date of Service'] || null,
+          total: totalAmount,
+          amount_paid: totalPaid,
+          status: paymentStatus,
+          payment_status: paymentStatus,
+          payment_method: s(row['Payment Method']),
+          payment_due_date: row['Payment Due Date'] || null,
+          products_services: s(row['Products/Services']),
+          product_sales: parseFloat(row['Product Sales']) || 0,
+          quantity: s(row['Quantity']),
+          unit_cost: s(row['Unit Cost']),
+          technician: s(row['Technician']),
+          tech_notes: s(row['Technician Notes']),
+          job_notes: s(row['Job Notes']),
+          job_codes: s(row['Job Codes']),
+          gallons_pumped_total: parseInt(row['Gallons Pumped']) || 0,
+          truck: s(row['Truck']),
+          tank_type: s(row['Tank Type']),
+          tank_size: parseInt(row['Tank Size']) || 0,
+          waste_manifest: s(row['Waste Manifest #']),
+          waste_site: s(row['Waste Site']),
+          disposal_date: row['Disposal Date'] || null,
+          check_numbers: s(row['Check Numbers']),
+          complete: s(row['Job Completed?']).toLowerCase().startsWith('y'),
+          waiting_area: !s(row['Truck']),
+          imported_from: 'tanktrack',
+          created_at: now,
+          updated_at: now,
+        });
+        invoiceNumbers.add(invNum);
+        imported++;
       }
 
-      const totalAmount = parseFloat(row['Total Invoice Amount']) || 0;
-      const totalPaid = parseFloat(row['Total Amount Paid']) || 0;
-
-      const invoice = upsert('invoices', {
-        invoice_number: invNum,
-        customer_id: cust?.id || null,
-        customer_name: fullName,
-        property_id: prop?.id || null,
-        svc_date: row['Date of Service'] || null,
-        amount: totalAmount,
-        total_paid: totalPaid,
-        status: totalPaid >= totalAmount ? 'paid' : totalPaid > 0 ? 'partial' : 'unpaid',
-        payment_method: (row['Payment Method'] || '').trim(),
-        payment_due_date: row['Payment Due Date'] || null,
-        products_services: (row['Products/Services'] || '').trim(),
-        quantity: parseInt(row['Quantity']) || 1,
-        unit_cost: parseFloat(row['Unit Cost']) || 0,
-        technician: (row['Technician'] || '').trim(),
-        tech_notes: (row['Technician Notes'] || '').trim(),
-        job_notes: (row['Job Notes'] || '').trim(),
-        gallons_pumped_total: parseInt(row['Gallons Pumped']) || 0,
-        truck: (row['Truck'] || '').trim(),
-        tank_type: (row['Tank Type'] || '').trim(),
-        tank_size: parseInt(row['Tank Size']) || 0,
-        waste_manifest: (row['Waste Manifest #'] || '').trim(),
-        waste_site: (row['Waste Site'] || '').trim(),
-        disposal_date: row['Disposal Date'] || null,
-        check_numbers: (row['Check Numbers'] || '').trim(),
-        imported_from: 'tanktrack',
-      });
-      existingInvoices.push(invoice);
-      imported++;
+      if ((i + 1) % 50 === 0 || i === raw.length - 1) {
+        sendProgress({ stage: 'importing', current: i + 1, total, imported, skipped });
+        await new Promise(r => setImmediate(r));
+      }
     }
 
-    return { success: true, imported, skipped };
+    sendProgress({ stage: 'saving', message: 'Writing invoices to disk…', current: total, total });
+    writeCollection('invoices', invoices);
+    broadcastDataChange('invoices');
+    sendProgress({ stage: 'done', imported, skipped, updated });
+    return { success: true, imported, skipped, updated };
   } catch (err) {
+    try { e.sender.send('import-progress', { stage: 'error', error: err.message }); } catch (_) {}
     return { error: err.message };
   }
 });
@@ -2452,7 +4980,8 @@ function _mapContactMethod(val) {
 
 function _parseTank(row, num) {
   const prefix = `Tank ${num} `;
-  const typeSource = (row[prefix + 'Type/Source'] || '').trim();
+  const s = (v) => (v == null ? '' : String(v).trim());
+  const typeSource = s(row[prefix + 'Type/Source']);
   let tankType = 'Septic Tank';
   if (typeSource.includes('Filter')) tankType = 'Septic Tank+Filter';
   else if (typeSource.includes('Holding')) tankType = 'Holding Tank';
@@ -2463,33 +4992,33 @@ function _parseTank(row, num) {
   else if (typeSource.includes('Septic')) tankType = 'Septic Tank';
   else if (typeSource) tankType = typeSource;
 
-  const filterVal = (row[prefix + 'Filter?'] || '').toLowerCase();
+  const filterVal = s(row[prefix + 'Filter?']).toLowerCase();
   let filter = 'unknown';
   if (filterVal === 'yes' || filterVal === 'true') filter = 'yes';
   else if (filterVal === 'no' || filterVal === 'false' || filterVal === 'n/a') filter = 'no';
 
-  const riserVal = (row[prefix + 'Riser?'] || '').toLowerCase();
+  const riserVal = s(row[prefix + 'Riser?']).toLowerCase();
   let riser = 'unknown';
   if (riserVal === 'yes' || riserVal === 'true') riser = 'yes';
   else if (riserVal === 'no' || riserVal === 'false') riser = 'no';
 
   const freqVal = parseInt(row[prefix + 'Pump Frequency']) || 0;
-  const freqUnit = (row[prefix + 'Pump Frequency Unit'] || '').toLowerCase();
+  const freqUnit = s(row[prefix + 'Pump Frequency Unit']).toLowerCase();
   let pumpFreq = '';
   if (freqVal > 0 && freqUnit.includes('year')) {
     pumpFreq = freqVal === 1 ? '1 year' : freqVal + ' years';
   }
 
   return {
-    tank_name: (row[prefix + 'Name'] || '').trim(),
+    tank_name: s(row[prefix + 'Name']),
     tank_type: tankType,
     volume_gallons: parseInt(row[prefix + 'Capacity']) || 0,
     depth_inches: parseInt(row[prefix + 'Depth']) || null,
     hose_length_ft: parseInt(row[prefix + 'Hose Length']) || null,
     filter,
-    filter_type: (row[prefix + 'Filter Type'] || '').trim(),
+    filter_type: s(row[prefix + 'Filter Type']),
     riser,
     pump_frequency: pumpFreq,
-    notes: (row[prefix + 'Notes'] || '').trim(),
+    notes: s(row[prefix + 'Notes']),
   };
 }

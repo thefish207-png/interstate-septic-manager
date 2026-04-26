@@ -8,7 +8,8 @@
     "dev": "electron .",
     "build": "electron-builder --win",
     "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac"
+    "build:mac": "electron-builder --mac",
+    "release": "electron-builder --win --publish always"
   },
   "build": {
     "appId": "com.interstateseptic.manager",
@@ -21,17 +22,35 @@
       "preload.js",
       "supabase.js",
       "src/**/*",
+      "assets/**/*",
       "node_modules/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "build-config",
+        "to": "build-config",
+        "filter": ["**/*"]
+      }
+    ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "publisherName": "Interstate Septic"
     },
     "mac": {
       "target": "dmg"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "thefish207-png",
+      "repo": "interstate-septic-manager",
+      "private": true,
+      "releaseType": "release"
     }
   },
   "devDependencies": {
@@ -40,8 +59,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
-    "@supabase/supabase-js": "^2.49.0",
+    "@supabase/supabase-js": "^2.104.1",
     "bcryptjs": "^3.0.3",
+    "electron-updater": "^6.8.3",
     "nodemailer": "^8.0.0",
     "uuid": "^13.0.0",
     "xlsx": "^0.18.5"

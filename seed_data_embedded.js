@@ -1,16 +1,815 @@
-// Embedded seed data — guarantees app has data even if file system reads fail
+// Embedded seed data — operational customer/job data cleared for blank-slate testing
+// Kept: users, vehicles, service_categories, service_products, waste_sites
 module.exports = {
-  customers: [{"name":"Everett Spear","phone":"(207) 596-3936","email":"espear@elspearinc.com","contact_method":"email","address":"120 Summer St","city":"Rockland","state":"ME","zip":"04841-2236","notes":"","imported_from":"tanktrack","id":"5ffba3f2-cc02-42d1-8eeb-8ec3dc4410e9","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"name":"O' Hara Corporation","phone":"(207) 594-0400","email":"nohara@journeysend.com","contact_method":"email","address":"120 Tillson Ave","city":"Rockland","state":"ME","zip":"04841-3451","notes":"","imported_from":"tanktrack","id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"name":"GOOD CALL 43, LLC (OWNER: CRAIG CALL)","phone":"(207) 208-0026","email":"Support@MaineRentalServices.com","contact_method":"email","address":"1837 Atlantic Hwy","city":"Waldoboro","state":"ME","zip":"04572-6023","notes":"Billing Company: MAINE RENTAL SERVICES","imported_from":"tanktrack","id":"8ac709c0-2cfc-4301-988a-91c5aab46261","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"name":"SAMOSET RESORT","phone":"(207) 542-4562","email":"Tiffany.Chabot@ophotels.com","contact_method":"email","address":"220 Warrenton St","city":"Rockport","state":"ME","zip":"04856-3816","notes":"Billing Company: SAMOSET RESORT","imported_from":"tanktrack","id":"2810410e-4d90-4eeb-9fa4-700ce3006c9c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Richard and Lacey Wilshire","phone":"(207) 975-9660","email":"laceywilshire@gmail.com","contact_method":"email","address":"PO Box 404","city":"Union","state":"ME","zip":"04862","notes":"","imported_from":"tanktrack","id":"124da965-a6f6-43f4-8c11-776cd1375c48","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"1.) Stephen \"Steve\" Stinson","phone":"(207) 975-1230","email":"ClawsRocklandMaine@gmail.com","contact_method":"email","address":"111 Old Rockland St","city":"Rockport","state":"ME","zip":"04856-4805","notes":"","imported_from":"tanktrack","id":"d986a5e0-e0ec-49bc-ba90-6890e816481c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"2.)  John & Stephanie Clapp, III (Buyers)","phone":"(207) 785-4501","email":"early577@gmail.com","contact_method":"email","address":"285 Camden Rd","city":"Appleton","state":"ME","zip":"04862-6430","notes":"","imported_from":"tanktrack","id":"467dc6fc-d800-48d5-8165-0a6dc6b80da4","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Valerie Landsburg","phone":"(310) 990-0774","email":"findval@icloud.com","contact_method":"email","address":"31 Talbot Ave","city":"Rockland","state":"ME","zip":"04841-2922","notes":"","imported_from":"tanktrack","id":"704151c3-19fb-4826-8d5c-363932bdf906","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Jane Rothschild","phone":"(334) 993-5554","email":"jrmc4825@icloud.com","contact_method":"email","address":"P.O. Box 11404","city":"Montgomery","state":"AL","zip":"36111-0404","notes":"","imported_from":"tanktrack","id":"40ee25a5-19b5-4bf1-8c71-d0c19e6bcec1","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"6.) Vinalhaven Treatment Plant","phone":"(207) 975-5842","email":"DYoung@TownofVinalhaven.org","contact_method":"email","address":"19 Washington School Rd","city":"Vinalhaven","state":"ME","zip":"04863-3836","notes":"Billing Company: TOWN OF VINALHAVEN","imported_from":"tanktrack","id":"8423d71f-c541-432e-93a1-abb11760b610","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Peter Codella","phone":"(917) 678-3546","email":"petercodella@gmail.com","contact_method":"email","address":"30 Mountain St","city":"Vinalhaven","state":"ME","zip":"04863-3817","notes":"Billing Company: P C BUILDERS","imported_from":"tanktrack","id":"7837bfd7-6956-40ba-bd89-79499ab165eb","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Tom Mellor","phone":"(207) 691-2770","email":"ttmellor@gmail.com","contact_method":"email","address":"13 Booker St","city":"Thomaston","state":"ME","zip":"04861-3820","notes":"","imported_from":"tanktrack","id":"6cf0d12c-057a-40e9-b4af-afc04de86974","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Gary C and Shasta Minery","phone":"(207) 975-4929","email":"gcminery@msn.com","contact_method":"email","address":"21 Elementary School Rd","city":"Tenants Harbor","state":"ME","zip":"04860","notes":"","imported_from":"tanktrack","id":"45d348a9-7fa2-4a8d-8b25-7d2522944c69","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Elijah MacDougall & Alexis Davis","phone":"(207) 542-4017","email":"alexisldavis6007@gmail.com","contact_method":"email","address":"20 Passanen Ln","city":"Saint George","state":"ME","zip":"04860-4200","notes":"","imported_from":"tanktrack","id":"4eede18b-ed3c-42f7-83e4-be4f61e334b9","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"1.) Elder Green","phone":"(207) 350-5384","email":"billing@eldercarenetwork.org","contact_method":"email","address":"6 Hodgdon St","city":"Damariscotta","state":"ME","zip":"04543-4638","notes":"Billing Company: ELDER CARE NETWORK OF LINCOLN COUNTY","imported_from":"tanktrack","id":"0262c3dd-555a-43b8-b002-e68f61c90fc6","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Pauline T","phone":"(207) 594-7860","email":"AccountsPayable@RocklandMarineCorp.com","contact_method":"email","address":"PO Box 309","city":"Rockland","state":"ME","zip":"04841","notes":"Billing Company: ROCKLAND MARINE CORP.","imported_from":"tanktrack","id":"2642985e-ce06-4964-9f26-01709125a9b5","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"American Unagi","phone":"(207) 479-1536","email":"AmericanUnagi@bill.com","contact_method":"email","address":"PO Box 81","city":"Thomaston","state":"ME","zip":"04861","notes":"Billing Company: American Unagi","imported_from":"tanktrack","id":"74b8fb32-097f-49a0-88a2-c6506df1f7c9","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Christina Goosens","phone":"(207) 790-1665","email":"christinitag@gmail.com","contact_method":"email","address":"191 Payson Rd","city":"Union","state":"ME","zip":"04862-3210","notes":"","imported_from":"tanktrack","id":"24d22d3c-ff57-49e9-a20c-b63711efa423","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"3.) Ash Point School","phone":"(207) 542-9074","email":"RGetchell@RSU13.org","contact_method":"email","address":"ATTN: REED GETCHELL, FACILITIES DIRECTOR","city":"Rockland","state":"ME","zip":"04841","notes":"Billing Company: R S U #13","imported_from":"tanktrack","id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Kate Brigham","phone":"(646) 515-8266","email":"hello@duckit.ai","contact_method":"email","address":"2740 Western Rd","city":"Warren","state":"ME","zip":"04864-4466","notes":"","imported_from":"tanktrack","id":"08163e99-8bd1-4759-9a3d-454f04a95516","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Suzanne MacFayden (Residence)","phone":"(401) 374-9700","email":"Mac.Smeltz@gmail.com","contact_method":"email","address":"476 Wottons Mill Rd","city":"Union","state":"ME","zip":"04862-3405","notes":"","imported_from":"tanktrack","id":"be484865-d860-459b-ad20-32812a31c8ba","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Janet & Greg McElroy","phone":"(207) 707-2630","email":"wemcelroys@gmail.com","contact_method":"email","address":"PO Box 268","city":"Owls Head","state":"ME","zip":"04854","notes":"","imported_from":"tanktrack","id":"a6d54fbe-c034-4722-ae88-cd02a371ab2c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"MID-COAST SOLID WASTE","phone":"(207) 691-6331","email":"Admin@midcoastsolidwaste.org","contact_method":"email","address":"P.O. BOX 1016","city":"ROCKPORT","state":"ME","zip":"04856","notes":"Billing Company: MID-COAST SOLID WASTE CORP","imported_from":"tanktrack","id":"9c10445e-9e96-4e65-bf28-d2040abfe9a5","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"8.) PBMC (Dermatology)","phone":"(207) 301-8610","email":"info_pbengineering@MaineHealth.org","contact_method":"email","address":"118 Northport Ave.","city":"BELFAST","state":"ME","zip":"04915","notes":"Billing Company: PEN BAY MEDICAL CENTER","imported_from":"tanktrack","id":"a7b6f93a-8b76-47ce-8b74-bb4df343de83","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Vicki Doudera","phone":"(207) 542-1990","email":"vicki@camdenre.com","contact_method":"email","address":"18 Trim St","city":"Camden","state":"ME","zip":"04843-1626","notes":"","imported_from":"tanktrack","id":"fc07a297-4aed-43c7-9db3-ace03eb757d5","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"2.) PBMC (Emergency Room Hallway)","phone":"(207) 301-8610","email":"info_pbengineering@MaineHealth.org","contact_method":"email","address":"118 Northport Ave.","city":"BELFAST","state":"ME","zip":"04915","notes":"Billing Company: PEN BAY MEDICAL CENTER","imported_from":"tanktrack","id":"9dbd7c44-fff8-4b17-8f36-bacbe3943c25","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"6.) SUSSMAN HOUSE","phone":"(207) 301-8610","email":"info_pbengineering@MaineHealth.org","contact_method":"email","address":"118 Northport Ave.","city":"BELFAST","state":"ME","zip":"04915","notes":"Billing Company: PEN BAY MEDICAL CENTER","imported_from":"tanktrack","id":"acf85ac7-7d5b-4a38-a7eb-9a36cf5d5960","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Emily Sontag","phone":"(828) 424-1811","email":"wncdentrepair@gmail.com","contact_method":"email","address":"4 Acorn Ln","city":"Rockport","state":"ME","zip":"04856-6321","notes":"","imported_from":"tanktrack","id":"f098526d-6b8c-4265-ba07-eb7f8602de6b","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"name":"Bayview Management","phone":"(207) 542-9283","email":"Matthew@BayviewCollection.com","contact_method":"email","address":"PO Box 812","city":"Camden","state":"ME","zip":"04843","notes":"Billing Company: BAYVIEW MANAGEMENT","imported_from":"tanktrack","id":"34f5924e-a4d0-40c6-8f12-8c1a5d962227","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"}],
-  jobs: [{"customer_id":"5ffba3f2-cc02-42d1-8eeb-8ec3dc4410e9","property_id":"0240a0d3-0e5e-426f-ba62-8af811cffa27","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":10,"invoice_number":"8345","tech_notes":"","job_notes":"text on the way","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"9a1dcd39-d5dc-492b-8faf-03f1e0c47289","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"customer_id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":20,"invoice_number":"8359","tech_notes":"","job_notes":"pump tank  and clear line , wants to know if pump is clogged?","gallons_pumped":{},"service_type":"drain clearing","imported_from":"tanktrack","id":"f31abc16-3322-4422-bd47-199b5819f0a0","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"customer_id":"8ac709c0-2cfc-4301-988a-91c5aab46261","property_id":"98ee646d-8d0a-4336-9de4-99bb1f9b0b78","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":30,"invoice_number":"2527","tech_notes":"","job_notes":"","gallons_pumped":{},"service_type":"CITY SEWER","imported_from":"tanktrack","id":"af1ccd57-abd9-45d8-bf53-582fd54a6496","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"2810410e-4d90-4eeb-9fa4-700ce3006c9c","property_id":"db2e740f-d11c-483c-8c71-5d1be610f7a2","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"f71d2a24-03b2-436b-9d51-2d4a875fd031","sort_order":10,"invoice_number":"7028","tech_notes":"","job_notes":"PLEASE PUMP EXTERIOR GREASE TANK & 2 CATCH BASKETS NEAR BUILDING #600.\n**PLEASE BRING KEY WHEN YOU PUMP THE GREASE BASKETS**\n*AUTO. SCHED. TO PUMP EVERY 6 WEEKS / NEXT DUE: MARCH 2026 (@ 7-7:30 A.M.)\nLAST PUMPED: 2/9/26 (SCHED.), 12/29/25 (SCHED.) ETC.\nNOTE: 1/28/25 - PER TYLER, PUMP STN AREA WAS CROWDED. PLAN TO PUMP IT WHEN IT'S EASIER TO ACCESS.\nEmail invoice to: Tiffany.Chabot@ophotels.com\n(tlc 11/18/25)","gallons_pumped":{},"service_type":"GREASE TANK","imported_from":"tanktrack","id":"43a34b66-11dc-41d5-b069-ff230ebd4c90","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"124da965-a6f6-43f4-8c11-776cd1375c48","property_id":"79f9bdf7-3082-44ce-8823-c7a0a7bb47a5","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"aac46ea4-ad9c-4660-812d-0d44313f93d3","sort_order":10,"invoice_number":"8304","tech_notes":"","job_notes":"filter was clogged , customer cleaned it, everything is draining but not  pumped in 5 years, tank is on right facing house, is exposed .by basement entry door, back down driveway park near woodshed","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"b650e5de-e459-4d3c-bcf5-f24972fe8a95","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"d986a5e0-e0ec-49bc-ba90-6890e816481c","property_id":"9ecefe46-016b-4396-b31d-0d27ec25da8c","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"aac46ea4-ad9c-4660-812d-0d44313f93d3","sort_order":20,"invoice_number":"8366","tech_notes":"","job_notes":"**CALL STEVE ON WAY (207-975-1230/CELL#)\r\n\r\nON 3/12/26 - Tech Notes: CLYDE - Jetted from the tank cleared soft clog in the cast iron pipe. Per Customer, Clyde told him tank should be pumped.\r\n*OPEN/PUMP SEPTIC TANK (1000 GALS)\r\n*CURRENT USAGE: FAMILY OF 4 (2 ADULTS & 2 KIDS IN COLLEGE THAT COME & GO W/ LOTS OF LAUNDRY). \r\n*MAINTENANCE: HOW OFTEN SHOULD TANK BE PUMPED?\r\nCCard (VISA-2530, Exp. 4/27)-under Steven D. Stinson / Claws Inc.\r\nEmail invoice & CCard receipt to: ClawsRocklandMaine@gmail.com\r\n(tlc 3/12)","gallons_pumped":{},"service_type":"Septic","imported_from":"tanktrack","id":"8f0b7983-c9ad-4af7-bc4f-54087d9ff7d2","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"aac46ea4-ad9c-4660-812d-0d44313f93d3","sort_order":30,"invoice_number":"8360","tech_notes":"","job_notes":"wants to know if pump is clogged asked for both trucks","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"5ae0ca5d-2582-417b-8439-9deb153c1eca","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"467dc6fc-d800-48d5-8165-0a6dc6b80da4","property_id":"8698b62c-b0b7-48ab-a0d3-219962535c35","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","assigned_to":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","sort_order":10,"invoice_number":"8394","tech_notes":"","job_notes":"**8:30 A.M. \r\nSELLERS' REALTOR: DOUG ERICKSON, SOUNDVEST/MASIELLO GROUP WILL MEET YOU (207-446-3333/CELL#)\r\nLISTING REALTOR: REMAX/JARET & COHN\r\n\r\nBUYERS REQ. SEWER LINE INSPECTION. CLEANOUT ACCESS IN BASEMENT\r\nPROPERTY IS VACANT / ON CITY SEWER\r\n*NO HISTORY OF SERVICE FOUND AT ISSI\r\n**EMAIL INSPECTION REPORT TO BOTH BUYERS (early577@gmail.com) & BUYERS' REALTOR (Erickson@Soundvest.com)\r\nCCard (M/C-2251, Exp. 2/30)-under John B. Clapp, III\r\nEmail invoice & CCard receipt to: early577@gmail.com\r\n(tlc 3/13)","gallons_pumped":{},"service_type":"City Sewer","imported_from":"tanktrack","id":"568825d2-b752-453b-8075-7a6623e823fc","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"704151c3-19fb-4826-8d5c-363932bdf906","property_id":"b916c866-787c-419c-b179-36646df216ca","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","assigned_to":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","sort_order":20,"invoice_number":"8337","tech_notes":"","job_notes":"","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"f77b56ce-0f0e-42b9-b267-4a173cd88594","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"40ee25a5-19b5-4bf1-8c71-d0c19e6bcec1","property_id":"2033ec9f-d361-4f8c-a880-0ad89b828247","scheduled_date":"2026-03-16","status":"scheduled","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","assigned_to":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","sort_order":30,"invoice_number":"8338","tech_notes":"","job_notes":"realtor Diane Jousset 603-568-9071","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"ea31fb0f-fd9b-47c8-8957-291cdc1026f6","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"8423d71f-c541-432e-93a1-abb11760b610","property_id":"ae0696f0-b3e3-43bc-b6cb-525b634a38ea","scheduled_date":"2026-03-17","status":"scheduled","vehicle_id":"16d4db35-1d59-4fb9-8daa-3d5101f45375","assigned_to":"1940d691-3b28-4d03-931e-dd7a82464c43","sort_order":10,"invoice_number":"8270","tech_notes":"","job_notes":"**7 A.M. & 1 P.M. FERRY RESERVATIONS (UNLESS YOU CAN MAKE AN EARLIER RETURN BOAT)**\nPUMP FROM TREATMENT PLANT / BRING BACK LOAD TO ISSI\nPer John Hughes, start pumping from First train / Primary A - Left side.\n***Discount (-$10.00 per hour / pumping fee) given on March (early scheduled pumping) - Scheduled: 3/17, 3/24, & 3/31***\nAdditional Scheduled trips: 4/7, 4/14, 4/21 & 4/28; 5/5, 5/12, 5/19 & 5/26.\n\nEmail invoice to: DYoung@TownofVinalhaven.org; copies to: John.Hughes@MaineWater.com & Michael.Martin@MaineWater.com\n(tlc 3/4/26)","gallons_pumped":{},"service_type":"Primary B Left","imported_from":"tanktrack","id":"7f5280bc-43d3-404e-8b3b-6683e397313f","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"6cf0d12c-057a-40e9-b4af-afc04de86974","property_id":"1371a5d4-1e3f-4146-b58e-93111caf3c0d","scheduled_date":"2026-03-17","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":10,"invoice_number":"8396","tech_notes":"","job_notes":"leaking in basement, sump pump in basement \"gray water drain\" has a cap on it","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"cc599e06-6fc1-46c7-b465-f102206f4cc4","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"45d348a9-7fa2-4a8d-8b25-7d2522944c69","property_id":"3ecc6788-6265-410e-8f2b-179586f1f8a0","scheduled_date":"2026-03-17","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"fffc57cf-8a2a-48c0-beea-db680be951d1","sort_order":10,"invoice_number":"8340","tech_notes":"","job_notes":"routine, overdue , no issues","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"b363896c-b731-48f1-ba3f-d5c9d5cfdde8","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"4eede18b-ed3c-42f7-83e4-be4f61e334b9","property_id":"b2188c59-1a8f-4190-8ef2-fc3fc4c99f84","scheduled_date":"2026-03-17","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"fffc57cf-8a2a-48c0-beea-db680be951d1","sort_order":20,"invoice_number":"8388","tech_notes":"","job_notes":"call on way\r\noverdue on pumping","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"29cc8eda-b48c-4946-8de8-b128221a6d0a","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"0262c3dd-555a-43b8-b002-e68f61c90fc6","property_id":"11c1cbf9-70b8-4311-bb8b-3a346d26b0bc","scheduled_date":"2026-03-18","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"aac46ea4-ad9c-4660-812d-0d44313f93d3","sort_order":10,"invoice_number":"4556","tech_notes":"","job_notes":"bring auger","gallons_pumped":{},"service_type":"Interior Grease","imported_from":"tanktrack","id":"6ff10464-e2d6-4d82-a30e-0fbbde8812be","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"2642985e-ce06-4964-9f26-01709125a9b5","property_id":"4671d97f-d8c4-41c7-afd8-ba0399940e64","scheduled_date":"2026-03-19","status":"scheduled","vehicle_id":"16d4db35-1d59-4fb9-8daa-3d5101f45375","assigned_to":"1940d691-3b28-4d03-931e-dd7a82464c43","sort_order":10,"invoice_number":"8363","tech_notes":"","job_notes":"do at high tide","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"976b6f2d-908e-4966-9ba8-d570af8e03a9","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"74b8fb32-097f-49a0-88a2-c6506df1f7c9","property_id":"bf3d3b84-d23d-4db2-88a7-aee363b1409d","scheduled_date":"2026-03-19","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"f71d2a24-03b2-436b-9d51-2d4a875fd031","sort_order":10,"invoice_number":"1416","tech_notes":"","job_notes":"CALL ON THE WAY           SPEAK WITH JONATHAN ONLY THE OTHERS ARE NOT IN THE LOOP ABOUT WHAT NEEDS PUMPING\n\nTank C is the two indoor upright tanks 2000 each if emptied to the bottom\n\nTank A is the outside concrete tank near the office 2000 gallons","gallons_pumped":{},"service_type":"A: Outside Tank","imported_from":"tanktrack","id":"d4bd4be2-8690-427f-b86b-3d4a3eab8a7e","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"24d22d3c-ff57-49e9-a20c-b63711efa423","property_id":"45a15434-46b0-4dd6-a594-06af17bcb0b1","scheduled_date":"2026-03-19","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"aac46ea4-ad9c-4660-812d-0d44313f93d3","sort_order":10,"invoice_number":"8350","tech_notes":"","job_notes":"call on way","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"16e71527-cfef-473f-8ec6-50a42c71e54e","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","scheduled_date":"2026-03-20","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"f71d2a24-03b2-436b-9d51-2d4a875fd031","sort_order":10,"invoice_number":"8071","tech_notes":"","job_notes":"(JOB #1 OF #2)\n*solar panel company installed panels on front of school, drove across front lawn where septic tanks are located, left ruts in lawn over the tanks & appear to have broken covers, may have additional damage. Need all septic tanks pumped, filters cleaned & septic systems inspected. \n(ESTIMATE 5000 GALS)\n*PROOF OF SERVICE - EMAIL to: RGetchell@RSU13.org\n**rescheduled from wk of 2/16 (covers not accessible @ that time) - reschedule to next school vac. wk (wk of 4/20)\n* CONTACT: REED GETCHELL, MAINT. / CALL ON WAY   [JOB #2 OF #2]\n\nALL TANKS HAVE OUTLET COVERS / PUMP THRU OUTLET COVERS\n\n**PUMP ALL (3) SEPTIC TANKS + CLEAN (3) FILTERS\n (ESTIMATE 4,500 GALS.)\n\n*Email invoice to: RGetchell@RSU13.org \n*NOTE: Reed Getchell to review & approve all invoices / forwards invoices for payment**\n*NEW BUDGET YEAR BEGINS 7/1 (DELAY BILLING UNTIL AFTER 7/1); DISCOUNT PUMP FEE GIVEN FOR EARLY PUMP OUT - $240.00 PER 1,000 GALS. (NO DISCOUNT ON DISPOSAL FEES OR INTERIOR GREASE TRAPS)\n(tlc 2/12)","gallons_pumped":{},"service_type":"Pump Station out back","imported_from":"tanktrack","id":"3d29e6bc-e925-4ded-91fc-912997c7e1da","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","scheduled_date":"2026-03-20","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"f71d2a24-03b2-436b-9d51-2d4a875fd031","sort_order":20,"invoice_number":"8373","tech_notes":"","job_notes":"(JOB #2 OF #2) - FINISH PUMPING\n*solar panel company installed panels on front of school, drove across front lawn where septic tanks are located, left ruts in lawn over the tanks & appear to have broken covers, may have additional damage. Need all septic tanks pumped, filters cleaned & septic systems inspected. \n(ESTIMATE 5000 GALS)\n*PROOF OF SERVICE - EMAIL to: RGetchell@RSU13.org\n**rescheduled from wk of 2/16 (covers not accessible @ that time) - reschedule to next school vac. wk (wk of 4/20)\n* CONTACT: REED GETCHELL, MAINT. / CALL ON WAY   [JOB #2 OF #2]\n\nALL TANKS HAVE OUTLET COVERS / PUMP THRU OUTLET COVERS\n\n**PUMP ALL (3) SEPTIC TANKS + CLEAN (3) FILTERS\n (ESTIMATE 4,500 GALS.)\n\n*Email invoice to: RGetchell@RSU13.org \n*NOTE: Reed Getchell to review & approve all invoices / forwards invoices for payment**\n*NEW BUDGET YEAR BEGINS 7/1 (DELAY BILLING UNTIL AFTER 7/1); DISCOUNT PUMP FEE GIVEN FOR EARLY PUMP OUT - $240.00 PER 1,000 GALS. (NO DISCOUNT ON DISPOSAL FEES OR INTERIOR GREASE TRAPS)\n(tlc 2/12)","gallons_pumped":{},"service_type":"E) Exterior Grease w/ filter","imported_from":"tanktrack","id":"03b39b5e-cdaa-4552-bf61-847b75b42a41","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"08163e99-8bd1-4759-9a3d-454f04a95516","property_id":"a8e2e284-7485-4b3c-879b-93b567297723","scheduled_date":"2026-03-20","status":"scheduled","vehicle_id":"129ebf19-b26d-4f62-894b-016ec624df63","assigned_to":"fffc57cf-8a2a-48c0-beea-db680be951d1","sort_order":10,"invoice_number":"8383","tech_notes":"","job_notes":"Call Tyler","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"0b4cbbb3-b76e-4044-afd5-7e4ee7a7d9ff","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","scheduled_date":"2026-03-20","status":"scheduled","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","assigned_to":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","sort_order":10,"invoice_number":"8374","tech_notes":"","job_notes":"**ONSITE MAINTENANCE: COLIN 207-596-9380/CELL#\r\n\r\n*Solar panel company installed panels on FRONT of school, drove across FRONT lawn where septic tanks are located, left two (2) big ruts in lawn over the tanks & appear to have broken covers, may have additional damage. *Need all septic tanks pumped, filters cleaned & septic systems inspected. \r\n(ESTIMATE 4500-5000 GALS)\r\n*Email inspection report findings to: RGetchell@RSU13.org\r\n\r\nNOTE: ALL TANKS HAVE OUTLET COVERS / PUMP THRU OUTLET COVERS\r\n\r\n*Email invoice to: RGetchell@RSU13.org \r\n*NOTE: Reed Getchell to review & approve all invoices / forwards invoices for payment**\r\n*EITHER THE SCHOOL WILL PAY WITH CCARD OR THE SOLAR COMPANY TO PAY FOR THE INSPECTION FEES, PER REED GETCHELL. \r\n(tlc 3/12)","gallons_pumped":{},"service_type":"D) Exterior Grease w/ filter","imported_from":"tanktrack","id":"1b4a629e-6f72-4ce1-a038-63cd0b2faa3c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"08163e99-8bd1-4759-9a3d-454f04a95516","property_id":"a8e2e284-7485-4b3c-879b-93b567297723","scheduled_date":"2026-03-20","status":"scheduled","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","assigned_to":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","sort_order":20,"invoice_number":"8382","tech_notes":"","job_notes":"","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"2ee6e442-08b0-4f8f-99f6-762ba11ff2ef","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"be484865-d860-459b-ad20-32812a31c8ba","property_id":"b7808834-d1cc-45f0-b3ce-3540eb616a98","scheduled_date":"2026-03-23","status":"scheduled","vehicle_id":null,"assigned_to":null,"sort_order":10,"invoice_number":"8369","tech_notes":"","job_notes":"","gallons_pumped":{},"service_type":"Septic","imported_from":"tanktrack","id":"a6e1d8b4-d458-47e8-9463-02ee7d113505","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"a6d54fbe-c034-4722-ae88-cd02a371ab2c","property_id":"0fcb7a79-1933-4946-8b6d-4ae912e053e4","scheduled_date":"2026-03-23","status":"scheduled","vehicle_id":null,"assigned_to":null,"sort_order":20,"invoice_number":"8389","tech_notes":"","job_notes":"","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"986765c2-bc59-4aa5-aa58-821da472cb85","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"9c10445e-9e96-4e65-bf28-d2040abfe9a5","property_id":"d36587e4-7bd8-4a30-bc60-7acce4ec6e51","scheduled_date":"2026-03-23","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":10,"invoice_number":"6925","tech_notes":"","job_notes":"**REQ. MON. / 7:30 A.M. (MID-COAST SOLID WASTE CLOSED - APPT. COORD. BY VINCENT.) ***(COORD. APPT. W/ PUMP TRUCK)***\r\nPUMP MANHOLE & PUMP STATION; STANDBY WHILE JETTING DRAIN LINES, MANHOLE, PUMP STATION & TRENCHES\r\n(ALLOW 2 HOURS) - \r\n*NOTIFY EVERY 3 MONTHS - ADJUSTED NOTE 11/12/25: PER VINCENT KWIATKOWSKI, THEY WISH TO DO SERVICE (3) X PER YEAR (MARCH / JULY / NOV.) \r\n\r\nE-mail invoice to: Admin@midcoastsolidwaste.org.\r\n*NEXT SCHEDULED SERVICE: 07/20/26 @ 7:30 A.M. (tlc)\r\n(tlc 11/12/25)","gallons_pumped":{},"service_type":"A.) Manhole","imported_from":"tanktrack","id":"8ea67ea5-014e-4a19-880d-5e16b8079d6e","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"8423d71f-c541-432e-93a1-abb11760b610","property_id":"ae0696f0-b3e3-43bc-b6cb-525b634a38ea","scheduled_date":"2026-03-24","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"f71d2a24-03b2-436b-9d51-2d4a875fd031","sort_order":10,"invoice_number":"8275","tech_notes":"","job_notes":"**7 A.M. & 1 P.M. FERRY RESERVATIONS (UNLESS YOU CAN MAKE AN EARLIER RETURN BOAT)**\r\nPUMP FROM TREATMENT PLANT / BRING BACK LOAD TO ISSI\r\nPer John Hughes, start pumping from First train / Primary A - Left side.\r\n***Discount (-$10.00 per hour / pumping fee) given on March (early scheduled pumping) - Scheduled: 3/17, 3/24, & 3/31***\r\nAdditional Scheduled trips: 4/7, 4/14, 4/21 & 4/28; 5/5, 5/12, 5/19 & 5/26.\r\n\r\nEmail invoice to: DYoung@TownofVinalhaven.org; copies to: John.Hughes@MaineWater.com & Michael.Martin@MaineWater.com\r\n(tlc 3/4/26)","gallons_pumped":{},"service_type":"Priamry C Right","imported_from":"tanktrack","id":"8a7e8852-b1c8-4c05-a676-04146630b5fc","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"a7b6f93a-8b76-47ce-8b74-bb4df343de83","property_id":"d617264e-18c2-4a3e-95e7-c103acf6bc7a","scheduled_date":"2026-03-25","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":10,"invoice_number":"1075","tech_notes":"","job_notes":"Work must be done before 7:15AM\r\n\r\nRequests Wednesdays\r\n\r\nJet Drain Lines at Dermatology","gallons_pumped":{},"service_type":"Septic","imported_from":"tanktrack","id":"e06b10b2-1b73-46c8-9cce-c19c1ba1ed52","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"fc07a297-4aed-43c7-9db3-ace03eb757d5","property_id":"35e28916-7e82-4479-b9bf-4fa945ba0b0e","scheduled_date":"2026-03-25","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":20,"invoice_number":"5673","tech_notes":"","job_notes":"routine maintenance","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"31adb11c-acb1-4516-998f-aa8e58efb865","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"9dbd7c44-fff8-4b17-8f36-bacbe3943c25","property_id":"dfa34865-1d3c-40bd-88bc-23f864df64e4","scheduled_date":"2026-03-25","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":30,"invoice_number":"1129","tech_notes":"","job_notes":"must be done early AM\nJetter","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"79534fb4-1868-4b52-bacc-1164508b1c90","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"acf85ac7-7d5b-4a38-a7eb-9a36cf5d5960","property_id":"2cf682d9-79ca-4994-bb0c-69602fc718ec","scheduled_date":"2026-03-25","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"fffc57cf-8a2a-48c0-beea-db680be951d1","sort_order":10,"invoice_number":"3619","tech_notes":"","job_notes":"**AUTO. SCHEDULE WED. EARLY A.M.  \r\nCHECK STRAINER BASKET / PUMP IF NEEDED - SCHEDULE EVERY 4 MONTHS NOW, PER REQ. OF PHYS. PLANT ON 5/21/25, DUE TO ISSUES THAT KEEP REOCURRING @ SUSSMAN. (PREV. MAINT. PLAN WAS EVERY 5 MONTHS)\r\n*Email invoice to Mary.Sargent@MaineHealth.org & Accounts Payable - WCGH_ACCOUNTSPAYABLE@MAINEHEALTH.ORG\r\n(tlc 5/21)","gallons_pumped":{},"service_type":"Septic","imported_from":"tanktrack","id":"00f22e05-8f3d-4703-ad3e-f95fb8fcb249","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"f098526d-6b8c-4265-ba07-eb7f8602de6b","property_id":"4b27468b-2232-4303-ac79-052a80dd388b","scheduled_date":"2026-03-25","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"fffc57cf-8a2a-48c0-beea-db680be951d1","sort_order":20,"invoice_number":"8333","tech_notes":"","job_notes":"routine","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"6903fb96-8a99-4af4-8fe7-f7980eeb2390","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"34f5924e-a4d0-40c6-8f12-8c1a5d962227","property_id":"922d87fa-0104-4b3f-8601-2b0b3b981e65","scheduled_date":"2026-03-25","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"fffc57cf-8a2a-48c0-beea-db680be951d1","sort_order":30,"invoice_number":"6696","tech_notes":"","job_notes":"*PUMP BOTH GREASE TANKS A & B EVERY 6 MONTHS - AUTH. BY STUART SMITH & TYLER FISH. **NO NEED TO CALL / AUTO. SCHEDULE**\r\n(AS OF 10/27/25)\r\n\r\nTANK A (1000 GALS GREASE)\r\nTANK B (1000 GALS GREASE)\r\n\r\nEmail invoice to: Matthew@BayviewCollection.com\r\n(tlc 10/28/25)","gallons_pumped":{},"service_type":"A.) Grease Tank","imported_from":"tanktrack","id":"3c07eb25-c468-47bc-8e36-25f5af637cf4","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"74b8fb32-097f-49a0-88a2-c6506df1f7c9","property_id":"bf3d3b84-d23d-4db2-88a7-aee363b1409d","scheduled_date":"2026-03-26","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"f71d2a24-03b2-436b-9d51-2d4a875fd031","sort_order":10,"invoice_number":"1417","tech_notes":"","job_notes":"CALL ON THE WAY           SPEAK WITH JONATHAN ONLY THE OTHERS ARE NOT IN THE LOOP ABOUT WHAT NEEDS PUMPING\n\nTank C is the two indoor upright tanks 2000 each if emptied to the bottom\n\nTank A is the outside concrete tank near the office 2000 gallons","gallons_pumped":{},"service_type":"C: Inside Tanks","imported_from":"tanktrack","id":"028dd715-3772-4ac0-acd8-beddefe25862","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"5ffba3f2-cc02-42d1-8eeb-8ec3dc4410e9","property_id":"0240a0d3-0e5e-426f-ba62-8af811cffa27","scheduled_date":"2026-03-15","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":10,"invoice_number":"8345","tech_notes":"","job_notes":"text on the way","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"d3b95df7-c941-42d1-82d8-016ac42eb972","created_at":"2026-03-15T22:36:56.739Z","updated_at":"2026-03-15T22:36:56.746Z"},{"customer_id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","scheduled_date":"2026-03-15","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":20,"invoice_number":"8359","tech_notes":"","job_notes":"pump tank  and clear line , wants to know if pump is clogged?","gallons_pumped":{},"service_type":"drain clearing","imported_from":"tanktrack","id":"f98219d9-f9a4-45aa-ade1-e98a5f2a032d","created_at":"2026-03-15T22:36:56.746Z","updated_at":"2026-03-15T22:36:56.746Z"},{"customer_id":"8ac709c0-2cfc-4301-988a-91c5aab46261","property_id":"98ee646d-8d0a-4336-9de4-99bb1f9b0b78","scheduled_date":"2026-03-15","status":"scheduled","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","assigned_to":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","sort_order":30,"invoice_number":"2527","tech_notes":"","job_notes":"","gallons_pumped":{},"service_type":"CITY SEWER","imported_from":"tanktrack","id":"682ee293-cf93-4c67-8074-2ecc8a4adb69","created_at":"2026-03-15T22:36:56.746Z","updated_at":"2026-03-15T22:36:56.746Z"},{"customer_id":"2810410e-4d90-4eeb-9fa4-700ce3006c9c","property_id":"db2e740f-d11c-483c-8c71-5d1be610f7a2","scheduled_date":"2026-03-15","status":"scheduled","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","assigned_to":"f71d2a24-03b2-436b-9d51-2d4a875fd031","sort_order":10,"invoice_number":"7028","tech_notes":"","job_notes":"PLEASE PUMP EXTERIOR GREASE TANK & 2 CATCH BASKETS NEAR BUILDING #600.\n**PLEASE BRING KEY WHEN YOU PUMP THE GREASE BASKETS**\n*AUTO. SCHED. TO PUMP EVERY 6 WEEKS / NEXT DUE: MARCH 2026 (@ 7-7:30 A.M.)\nLAST PUMPED: 2/9/26 (SCHED.), 12/29/25 (SCHED.) ETC.\nNOTE: 1/28/25 - PER TYLER, PUMP STN AREA WAS CROWDED. PLAN TO PUMP IT WHEN IT'S EASIER TO ACCESS.\nEmail invoice to: Tiffany.Chabot@ophotels.com\n(tlc 11/18/25)","gallons_pumped":{},"service_type":"GREASE TANK","imported_from":"tanktrack","id":"eb8e405c-feea-49f1-be90-31b6f4de9df9","created_at":"2026-03-15T22:36:56.746Z","updated_at":"2026-03-15T22:36:56.746Z"},{"customer_id":"124da965-a6f6-43f4-8c11-776cd1375c48","property_id":"79f9bdf7-3082-44ce-8823-c7a0a7bb47a5","scheduled_date":"2026-03-15","status":"scheduled","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","assigned_to":"aac46ea4-ad9c-4660-812d-0d44313f93d3","sort_order":10,"invoice_number":"8304","tech_notes":"","job_notes":"filter was clogged , customer cleaned it, everything is draining but not  pumped in 5 years, tank is on right facing house, is exposed .by basement entry door, back down driveway park near woodshed","gallons_pumped":{},"service_type":"Septic Pump","imported_from":"tanktrack","id":"d35ddb1f-a126-48a2-a7ae-8ee030f0cbb3","created_at":"2026-03-15T22:36:56.746Z","updated_at":"2026-03-15T22:36:56.746Z"}],
-  users: [{"name":"Tyler","phone":"2075422259","username":"tyler","password_hash":"$2b$10$B1no5ua7ONjO.mHB6mFHwOuvgpxQP5810IM.segUgmvmpaMwNmxcG","role":"admin","id":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","created_at":"2026-03-14T20:27:15.262Z","updated_at":"2026-03-14T20:27:15.262Z"},{"name":"Clyde Collins","phone":"","username":"clyde.collins","role":"tech","id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","created_at":"2026-03-15T22:08:30.262Z","updated_at":"2026-03-15T22:08:30.262Z"},{"name":"Dan Greiner","phone":"","username":"dan.greiner","role":"tech","id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","created_at":"2026-03-15T22:08:30.263Z","updated_at":"2026-03-15T22:08:30.263Z"},{"name":"Roy Grotton","phone":"","username":"roy.grotton","role":"tech","id":"aac46ea4-ad9c-4660-812d-0d44313f93d3","created_at":"2026-03-15T22:08:30.263Z","updated_at":"2026-03-15T22:08:30.263Z"},{"name":"Josh Hallowell","phone":"","username":"josh.hallowell","role":"tech","id":"fffc57cf-8a2a-48c0-beea-db680be951d1","created_at":"2026-03-15T22:08:30.263Z","updated_at":"2026-03-15T22:08:30.263Z"},{"name":"Chris","phone":"","username":"chris","role":"tech","id":"1940d691-3b28-4d03-931e-dd7a82464c43","created_at":"2026-03-15T22:08:30.263Z","updated_at":"2026-03-15T22:08:30.263Z"}],
-  properties: [{"customer_id":"5ffba3f2-cc02-42d1-8eeb-8ec3dc4410e9","address":"120 Summer St","city":"Rockland","state":"ME","zip":"04841-2236","county":"","property_type":"","directions":"","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"0240a0d3-0e5e-426f-ba62-8af811cffa27","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"customer_id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","address":"117 Tillson Ave","city":"Rockland","state":"ME","zip":"04841-3416","county":"","property_type":"","directions":"117 Tillson Ave Rockland \nJourneys End Marina","notes":"","last_appointment_date":"2026-03-06","next_appointment_date":null,"imported_from":"tanktrack","id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"customer_id":"8ac709c0-2cfc-4301-988a-91c5aab46261","address":"43 Broad St. (4 UNIT APT. BLDG.)","city":"Rockland","state":"ME","zip":"04841","county":"","property_type":"","directions":"43 BROAD ST., ROCKLAND - 4-APT. BLDG. (3/24/25 – CURRENT OWNER: GOOD CALL 43, LLC / CRAIG CALL)\n(NOW UNITS #1, #2, #3 & #4) - FORMERLY KNOWN AS 43-45 BROAD ST. \n\nFROM INDUSTRIAL PARK ONTO BROADWAY / AT STOP LIGHT TURN L PAST THE FIRE STATION / OPPOSITE SCHOFIELD'S STORE TURN R ONTO BROAD ST / 2ND BUILDING ON THE R (COUNTING BUILDING ON THE CORNER) / WHITE APARTMENT BUILDING","notes":"","last_appointment_date":"2025-03-24","next_appointment_date":"2027-03-04","imported_from":"tanktrack","id":"98ee646d-8d0a-4336-9de4-99bb1f9b0b78","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"customer_id":"2810410e-4d90-4eeb-9fa4-700ce3006c9c","address":"220 Warrenton St","city":"Rockport","state":"ME","zip":"04856-3816","county":"","property_type":"","directions":"1.)  220 WARRENTON ST., ROCKPORT\n\n* AS OF 6/7/23, MAIL ORIGINAL COPIES OF INVOICES TO 220 WARRENTON ST., ROCKPORT, ME  04856, PER MARJORIE DOWDEN.  ALSO, EMAIL INVOICES TO ALLUCH@AVIDXCHANGE.COM.\n\n* PLEASE EMAIL INVOICE & CREDIT CARD RECEIPTS TO:  ALLUCH@AVIDXCHANGE.COM\n\nADAM PEASE EMAIL:  MAINTEN@SAMOSET.COM","notes":"","last_appointment_date":"2026-02-09","next_appointment_date":"2026-04-27","imported_from":"tanktrack","id":"db2e740f-d11c-483c-8c71-5d1be610f7a2","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"124da965-a6f6-43f4-8c11-776cd1375c48","address":"99 Sennebec Rd","city":"Union","state":"ME","zip":"04862-4616","county":"","property_type":"","directions":"99 Sennebec Rd Union","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"79f9bdf7-3082-44ce-8823-c7a0a7bb47a5","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"d986a5e0-e0ec-49bc-ba90-6890e816481c","address":"111 Old Rockland St","city":"Rockport","state":"ME","zip":"04856-4805","county":"","property_type":"","directions":"","notes":"","last_appointment_date":"2026-03-12","next_appointment_date":null,"imported_from":"tanktrack","id":"9ecefe46-016b-4396-b31d-0d27ec25da8c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"467dc6fc-d800-48d5-8165-0a6dc6b80da4","address":"43 Gleason St","city":"Thomaston","state":"ME","zip":"04861-3400","county":"","property_type":"","directions":"43 GLEASON ST., THOMASTON\n\nLITTLE WHITE CAPE HOUSE / #43 ON HOUSE","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"8698b62c-b0b7-48ab-a0d3-219962535c35","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"704151c3-19fb-4826-8d5c-363932bdf906","address":"31 Talbot Ave","city":"Rockland","state":"ME","zip":"04841-2922","county":"","property_type":"","directions":"white house with green shutters, second in from union street","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"b916c866-787c-419c-b179-36646df216ca","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"40ee25a5-19b5-4bf1-8c71-d0c19e6bcec1","address":"21 Penobscot Ave","city":"Camden","state":"ME","zip":"04843-2220","county":"","property_type":"","directions":"21 penobscot ave., camden   \nrt 1 n to camden / r onto bayview st / r onto penobscot ave / # 21 penobscot ave on r","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"2033ec9f-d361-4f8c-a880-0ad89b828247","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"8423d71f-c541-432e-93a1-abb11760b610","address":"Off of Sands Rd","city":"Vinalhaven","state":"ME","zip":"04863","county":"","property_type":"","directions":"6.)  OFF OF SANDS RD., VINALHAVEN - VINALHAVEN TREATMENT PLANT","notes":"","last_appointment_date":"2025-11-02","next_appointment_date":"2026-03-24","imported_from":"tanktrack","id":"ae0696f0-b3e3-43bc-b6cb-525b634a38ea","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"7837bfd7-6956-40ba-bd89-79499ab165eb","address":"37 Reach Rd","city":"Vinalhaven","state":"ME","zip":"04863","county":"","property_type":"","directions":"37 Reach Rd Vinalhaven","notes":"","last_appointment_date":"2025-12-07","next_appointment_date":null,"imported_from":"tanktrack","id":"2149310e-6654-4dd0-a3b0-dd70869d885c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"6cf0d12c-057a-40e9-b4af-afc04de86974","address":"13 Booker St","city":"Thomaston","state":"ME","zip":"04841","county":"","property_type":"","directions":"13 Booker St Thomaston","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"1371a5d4-1e3f-4146-b58e-93111caf3c0d","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"45d348a9-7fa2-4a8d-8b25-7d2522944c69","address":"21 Elementary School Rd","city":"Tenants Harbor","state":"ME","zip":"04860","county":"","property_type":"","directions":"21 elementary school rd., tenants harbor \nrt 131 /  r onto watts ave /  l onto elementary school rd / r on st george elementary school rd /  2 story brown house w/brown garage on  r / paved driveway / # 21 on house","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"3ecc6788-6265-410e-8f2b-179586f1f8a0","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"4eede18b-ed3c-42f7-83e4-be4f61e334b9","address":"20 Passanen Ln","city":"Saint George","state":"ME","zip":"04860-4200","county":"","property_type":"","directions":"RTE 131 /APPROX. 7/10th MILE PAST RTE 73 /PASS HUMBLE FARMER ON R / JUST AFTER RD CURVES TO THE R / AT THE BOTTOM OF THE HILL (BEFORE THE RD CURVES TO THE L) TURN L ONTO PASSANEN LANE /DRIVEWAY STARTS OUT DIRT /BEAR R & GO TO THE END /BIG GRAY HOUSE W/ GRAY DECK","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"b2188c59-1a8f-4190-8ef2-fc3fc4c99f84","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"0262c3dd-555a-43b8-b002-e68f61c90fc6","address":"6 Hodgdon St (Group Home)","city":"Damariscotta","state":"ME","zip":"04543","county":"","property_type":"","directions":"1.) 6 HODGDON ST., DAMARISCOTTA - ELDER GREEN\nRTE 1 S/ LEFT BUSINESS RTE 1 / RIGHT AT LIGHT BY CHURCH ONTO HODGDON ST / ELDERCARE NETWORK","notes":"","last_appointment_date":"2026-02-18","next_appointment_date":"2026-04-16","imported_from":"tanktrack","id":"11c1cbf9-70b8-4311-bb8b-3a346d26b0bc","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"2642985e-ce06-4964-9f26-01709125a9b5","address":"79 Mechanic St","city":"Rockland","state":"ME","zip":"04841-3513","county":"","property_type":"","directions":"79 Mechanic St Rockland","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"4671d97f-d8c4-41c7-afd8-ba0399940e64","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"74b8fb32-097f-49a0-88a2-c6506df1f7c9","address":"1 Pie Lane","city":"Waldoboro","state":"ME","zip":"04572","county":"","property_type":"","directions":"ONE PIE LANE, WALDOBORO\nRTE 1 SOUTH / TURN R ONTO RTE 32 / GO APPROX 2 MILES TAKE A SLIGHT L ONTO 1 PIE LANE\n\n******DRIVERS ONLY TALK TO JONATHON TO KNOW WHICH TANKS NEED PUMPING**********\n****ADDENDUM NOTE OF 1/25/24:  MUST STATE HOW MANY GALLONS ARE PUMPED OUT OF LEFT BUILDING FARM TANK & HOW MANY GALLONS ARE PUMPED OUT OF RIGHT BUILDING FARM TANK - AMERICAN UNAGI NEEDS IT BROKE DOWN FOR THEIR BILLING. (tlc)","notes":"","last_appointment_date":"2026-03-12","next_appointment_date":"2026-10-15","imported_from":"tanktrack","id":"bf3d3b84-d23d-4db2-88a7-aee363b1409d","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"24d22d3c-ff57-49e9-a20c-b63711efa423","address":"191 Payson Rd","city":"Union","state":"ME","zip":"04862-3210","county":"","property_type":"","directions":"191 payson rd., union  \nrt  17 / r onto rt  235 / 1st l onto payson rd / 2nd house after bridge / house w/ attached barn & white picket / before  church","notes":"","last_appointment_date":"2025-04-10","next_appointment_date":null,"imported_from":"tanktrack","id":"45a15434-46b0-4dd6-a594-06af17bcb0b1","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","address":"54 Ash Point Dr (New School)","city":"Owls Head","state":"ME","zip":"04854-3517","county":"","property_type":"","directions":"3.)  54 ASHPOINT DR., OWLS HEAD - ASH POINT SCHOOL (NEW OWLS HEAD CENTRAL SCHOOL)","notes":"","last_appointment_date":"2026-02-19","next_appointment_date":null,"imported_from":"tanktrack","id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"08163e99-8bd1-4759-9a3d-454f04a95516","address":"2740 Western Rd","city":"Warren","state":"ME","zip":"04864-4466","county":"","property_type":"","directions":"2740 Western Rd Warren","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"a8e2e284-7485-4b3c-879b-93b567297723","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"be484865-d860-459b-ad20-32812a31c8ba","address":"476 Wottons Mill Rd","city":"Union","state":"ME","zip":"04862-3405","county":"","property_type":"","directions":"476 WOTTONS MILL RD., UNION  \nFROM RTE 17 /  L ONTO WOTTONS MILL RD / ABOUT 1 MILE FROM RTE 17 ON THE L  / BEIGE CAPE / #476 ON MAILBOX","notes":"","last_appointment_date":"2025-04-10","next_appointment_date":"2027-03-23","imported_from":"tanktrack","id":"b7808834-d1cc-45f0-b3ce-3540eb616a98","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"a6d54fbe-c034-4722-ae88-cd02a371ab2c","address":"134 Bellevue St","city":"Owls Head","state":"ME","zip":"04854","county":"","property_type":"","directions":"TURN R ONTO CRESCENT BEACH RD /  L ONTO BELLEVUE ST / # 134 ON THE R/ LARGE WHITE HOUSE WITH FRONT PORCH","notes":"","last_appointment_date":"2025-04-11","next_appointment_date":"2027-03-23","imported_from":"tanktrack","id":"0fcb7a79-1933-4946-8b6d-4ae912e053e4","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"9c10445e-9e96-4e65-bf28-d2040abfe9a5","address":"90 UNION ST (OFFICE / TRANSFER STATION)","city":"ROCKPORT","state":"ME","zip":"04856","county":"","property_type":"","directions":"2.)  90 UNION ST., ROCKPORT - MID-COAST SOLID WASTE (OFFICE / TRANSFER STATION)\n\nRTE 1 / TAKE 1ST R PAST QUARRY HILL / GO TO THE END OF THE STREET / TURN R ONTO UNION ST / # 90 UNION ST","notes":"","last_appointment_date":"2025-11-24","next_appointment_date":"2026-07-20","imported_from":"tanktrack","id":"d36587e4-7bd8-4a30-bc60-7acce4ec6e51","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"a7b6f93a-8b76-47ce-8b74-bb4df343de83","address":"6 Glen Cove Drive","city":"Rockport","state":"ME","zip":"04856","county":"","property_type":"","directions":"8.)  6 GLEN COVE DR., ROCKPORT - P.B.M.C. DERMATOLOGY CENTER  \nBUILDING BETWEEN DUMPSTERS AND SMOKE STACK","notes":"","last_appointment_date":"2026-03-11","next_appointment_date":"2026-04-08","imported_from":"tanktrack","id":"d617264e-18c2-4a3e-95e7-c103acf6bc7a","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"fc07a297-4aed-43c7-9db3-ace03eb757d5","address":"18 Trim St","city":"Camden","state":"ME","zip":"04843-1626","county":"","property_type":"","directions":"18 trim st., camden  \nrte 1 to camden / l onto rte 105 / at top of hill turn r onto trim st / 2nd house on r / # 18 / gray 2-story house w/slate roof","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"35e28916-7e82-4479-b9bf-4fa945ba0b0e","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"9dbd7c44-fff8-4b17-8f36-bacbe3943c25","address":"6 Glen Cove Dr","city":"Rockport","state":"ME","zip":"04856-4272","county":"","property_type":"","directions":"2.)  6 GLEN COVE DR., ROCKPORT - AT THE HOSPITAL","notes":"","last_appointment_date":"2026-03-11","next_appointment_date":"2026-04-08","imported_from":"tanktrack","id":"dfa34865-1d3c-40bd-88bc-23f864df64e4","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"acf85ac7-7d5b-4a38-a7eb-9a36cf5d5960","address":"4 Anchor Dr","city":"Rockport","state":"ME","zip":"04856","county":"","property_type":"","directions":"","notes":"","last_appointment_date":"2025-11-19","next_appointment_date":"2026-07-22","imported_from":"tanktrack","id":"2cf682d9-79ca-4994-bb0c-69602fc718ec","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"f098526d-6b8c-4265-ba07-eb7f8602de6b","address":"4 Acorn Ln","city":"Rockport","state":"ME","zip":"04856-6321","county":"","property_type":"","directions":"4 achorn lane, rockport Emily sontag wncdentrepair@gmail.com  3/25\nrt  17 / straight at 17 & 90 intersection / mirror lake lane/ left  onto achorn lane  / left at fork /#4  first house on left / tan  colonial","notes":"","last_appointment_date":null,"next_appointment_date":null,"imported_from":"tanktrack","id":"4b27468b-2232-4303-ac79-052a80dd388b","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"customer_id":"34f5924e-a4d0-40c6-8f12-8c1a5d962227","address":"18 & 24 Central Street","city":"Rockport","state":"ME","zip":"04856","county":"","property_type":"","directions":"18 & 24 Central St., Rockport","notes":"","last_appointment_date":"2025-09-12","next_appointment_date":"2026-09-23","imported_from":"tanktrack","id":"922d87fa-0104-4b3f-8601-2b0b3b981e65","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"}],
-  tanks: [{"property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","tank_name":"drain clearing","tank_type":"Drain Clearing","volume_gallons":0,"notes":"","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"8f1d3e8a-aa02-438f-b697-cb17049edf6d","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"property_id":"98ee646d-8d0a-4336-9de4-99bb1f9b0b78","tank_name":"CITY SEWER","tank_type":"Septic Tank","volume_gallons":0,"notes":"*NOTES: 3/24/25 - CURRENT PROPERTY MANAGER: MAINE RENTAL SERVICES - BRYAN CARLETON (207-208-0026/CELL#). (tlc); PREV. PROPERTY MANAGER: BY THE BAY PROPERTY MANAGEMENT; *5/5/16 – PREV. PROPERTY OWNERS: SUMNER & MARJORIE KINNEY / KINNEY RENTALS. *RENTERS: * 6/2/17 - MR. CRUDELL IS NO LONGER THE RENTER. (tlc) \n----------------------------\n\n*ON CITY SEWER\n\nLAST ORDER DATE:\n12/23/21 (PUMPED 9,000 GALS. FROM BASEMENT & JET - BILLED BY THE BAY PROPERTY MANAGEMENT)\n3/2/21 (INSPECT SEWER LINE W/ CAMERA - PD. BY ANDREW MOORE)\n12/5/19 (JETTER & CAMERA)\n12/4/18 (JETTER)\n11/30/18 (JETTER)\n11/22/17 (JETTER)\n10/29/16 (JETTER)\n5/31/16 (JETTER)\n2/1/15 (JETTER) - (BILLED UNDER KINNEY RENTALS)\n5/8/14 (JETTER)\n5/3/13 (JETTER)\n4/26/12 (JETTER)\n8/3/11 (JETTER)\n7/26/11 (JETTER)\n9/21/10 (JETTER)  \n12/11/09 (JETTER)\n11/28/08 (JETTER)\n12/26/07 (JETTER)\n\n* NOTIFY ANNUALLY TO JET (NOV. '20)\n\nNOTES:  \n\n* ON 12/5/19, JEFF NOTED THAT THE CAMERA SHOWED SOME SPOTS WHERE EFFLUENT WAS POOLED (LOW SPOTS) AND IN THE PVC PIPE AT BACK OF THE NEXT DOOR HOUSE, THERE WAS A PAPER CLOG.  HE JET THIS CLEAR.\n\n* ON 12/4/18, JEFF JET TO APPROX 120' AND NOTED THAT THE JETTER LINE GOT STUCK.  THE PIPE IS BROKEN.\n\n* ON 11/30/18, JEFF JET THE LATERAL.  HE NOTED THAT THE PIPE IS ALL CLEAN AND CLEAR.\n\n* ON 11/22/17, JEFF JET AND CLEARED THE LINE.  THE CELLAR DRAINED OUT GREAT.\n\n* ON 5/31/16, JEFF JET THE WHOLE LINE TO THE MAIN - ALL CLEAR.\n\n* 4/23/15 - SPOKE W/ SUMNER KINNEY. THIS PROPERTY CAME UP ON REMINDER NOTIFICATION FOR ANNUAL JETTING MAY 2015. SINCE WE WERE LAST AT PROPERTY ON 2/1/15 FOR AN EMERGENCY JETTER JOB, SUMNER REQUESTS THAT WE MAKE NEXT YEAR (MAY 2016) THE ANNUAL NOTIFICATION FOR PREV. MAINT. (tlc)\n\n* ON 2/1/15, TYLER JET THE LINE 25' OUT FROM THE NEIGHBOR'S CLEANOUT.  HE WAS ABLE TO CLEAR THE LINE.\n\n* ON 5/8/14, JEFF JET FROM THE BASEMENT CLEANOUT TO APPROX. 200'. THE LINE WAS CLEAN AND CLEAR. \n\n* ON 5/3/13, JEFF JET THE WHOLE LINE - ALL CLEAR.\n\n* ON 4/11/13, SUMNER KINNEY/KINNEY RENTALS, PER AMBER, OKAYED ROUTINE AUGER/JETTER MAINT. JOB FOR THIS PROPERTY.  SCHEDULE WORK W/RENTER, DAVE CRUDELL.\n\n* ON 4/26/12, JEFF JET FROM BROAD ST OUT TO APPROX. 200' AND THEN FROM GRACE ST TO THE MAIN LINE.   \n\n* ON 8/3/11, JEFF TRIED TO JET FROM THE CLEANOUT BEHIND 62 GRACE ST AND HIT A BIG LIP AT APPROX. 90'.  HE CLEARED THE LINE.  MR. CRUDELL'S BASEMENT WAS STILL FULL.  HE JET DOWN THE FLOOR CLEANOUT TO APPROX. 150' AND IT FINALLY DRAINED.  APPROX. 3' FROM FLOOR CLEANOUT, WATER WAS COMING UP NEXT TO THE BASEMENT WALL - PIPE IS BROKEN.\n\n* ON 7/26/11, JEFF JET FROM THE CLEANOUT AT 62 GRACE ST OUT TO THE MAIN.  ALL CLEAR.\n\n* ON 9/21/10, JEFF NOTED THAT THE BROAD ST LINE RUNS OVER TO GRACE ST WITH A CLEANOUT AT BACK CORNER OF 62 GRACE ST.  HE WENT OUT 100' AND ENCOUNTERED A PAPER CLOG AT APPROX. 48'.  HE CLEARED THE LINE.\n\n* ON 12/11/09, JEFF JET APPROX. 220' TO MAIN ON GRACE ST.\n\n* ON 11/28/08, REG WENT OUT 150' AND CLEARED THE LINE.\n\n* ON 12/26/07, JOHN WENT OUT APPROX. 200' WITH THE JETTER.  HE BELIEVED IT WAS CLOGGED WHERE THE OLD CLAY TILE PIPE MET THE NEW PVC PIPE, BUT WAS UNSURE.\n\n(ACCT. PREV. UNDER: BY THE BAY PROPERTY MANAGEMENT; ANDREW MOORE)\n(PREV. OWNERS: SUMNER & MARJORIE KINNEY)","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"0d3375ba-fee4-4e53-aa1e-5593d13108f0","created_at":"2026-03-15T22:31:35.745Z","updated_at":"2026-03-15T22:31:35.745Z"},{"property_id":"db2e740f-d11c-483c-8c71-5d1be610f7a2","tank_name":"GREASE TANK","tank_type":"Grease Trap","volume_gallons":3000,"notes":"* AUTOMATIC*******BRING KEY WHEN YOU PUMP THE GREASE BASKETS.********\r\n\r\n1.)  TANK SIZE:  3,000 GALLONS GREASE & 2 CATCH BASKETS NEAR BUILDING # 600\r\n\r\n* AUTOMATICALLY PUMP EVERY 6 WEEKS UNTIL ADAM PEASE TELLS US OTHERWISE.  REVISED:  ON 3/24/20, ADAM CALLED AND STATED THAT THE SAMOSET HAS CLOSED UNTIL 5/7/20.  HE REQUESTED THAT WE PUMP THE GREASE TANK AND CATCH BASKETS AGAIN ON 6/1/20.\r\n\r\nLAST PUMPED: 12/9/24 (3000  GALS) 10/28/24  (3,000 GALS)  9/16/24  (3,000 GALS)  8/5/24  (3,000 GALS) 6/24/24  (3,000 GALS)  5/13/24 (3,000 GALLONS)  4/1/24 (3,000 GALLONS) 2/19/24  (3,000 GALS)  2/19/24 (3,000 GALS.) 1/8/24 (3,000 GALS.)   11/20/23 (3,000 GALS.)   10/9/23 (3,000 GALS.)   8/29/23 (3,000 GALS.)   7/17/23 (3,000 GALS.)   6/5/23 (3,000 GALS.)   4/24/23  (3,100 GALLONS)  3/11/23 (3,000 GALS.)   1/30/23 (3,000 GALS.)   12/19/22 (3,050 GALS.)   6/6/22 (3,000 GALS.)   4/18/22 (3,050 GALS.)   3/8/22 (3,050 GALS.)   1/24/22 (3,000 GALS.)   12/13/21 (3,050 GALS.)   11/1/21 (3,050 GALS.)   9/20/21 (3,000 GALS.)   8/9/21 (3,000 GALS.)   6/28/21 (3,000 GALS.)   5/17/21 (3,050 GALS.)   4/5/21 (3,050 GALS.)   11/30/20 (3,050 GALS.)   10/5/20 (3,050 GALS.)   8/24/20 (3,050 GALS.)   7/13/20 (3,050 GALS.)   3/23/20 (3,050 GALS.)   2/10/20 (3,000 GALS.)   12/30/19 (3,050 GALS.)   11/18/19 (3,050 GALS.)   10/7/19 (3,050 GALS.)   8/26/19 (3,050 GALS.)   7/15/19 (3,050 GALS.)   6/3/19 (3,100 GALS.)   4/22/19 (3,050 GALS.)   3/11/19 (3,000 GALS.)   1/28/19 (3,050 GALS.)   12/17/18 (3,000 GALS.)   11/5/18 (3,050 GALS.)   9/24/18 (3,050 GALS.)   8/13/18 (3,000 GALS.)   7/2/18 (3,050 GALS.)   5/21/18 (3,050 GALS.)   4/9/18 (3,050 GALS.)   2/26/18 (3,050 GALS.)   1/15/18 (3,050 GALS.)   12/4/17 (3,050 GALS.)   10/20/17 (3,050 GALS.)   9/11/17 (3,050 GALS.)   7/24/17 (3,050 GALS.)   6/12/17 (3,100 GALS.)   5/1/17 (3,050 GALS.)   3/20/17 (3,000 GALS.)   2/6/17 (3,100 GALS.)   12/27/16   11/14/16 (3,050 GALS.)   9/26/16 (3,050 GALS.)   8/15/16 (3,050 GALS.)   7/6/16 (3,050 GALS.)   6/13/16 (3,050 GALS.)   5/2/16 (3,050 GALS.)   3/21/16(3,050 GALS.)  2/8/16 (3,000 GALS.- SEE NOTES BELOW)   12/28/15 (3,050 GALS.)   11/16/15 (3,050 GALS.)   10/5/15 (3,050 GALS.)   8/24/15 (3,050 GALS.)   7/13/15 (3,050 GALS.)   6/1/15 (3,050 GALS.)   4/20/15 (3,050 GALS.)   3/9/15 (3,000 GALS.)  1/23/15 (3,050 GALS.)   12/15/14 (3,050 GALS.)   10/27/14 (3,050 GALS.)    9/15/14 (3,000 GALS.) 8/4/14 (3,050 GALS.) 6/23/14 (3,050 GALS.)   5/12/14 (3,050 GALS.)   3/31/14 (3,000 GALS.)   2/17/14 (3,000 GALS.)   12/27/13 (3,000 GALS.)   11/4/13 (3,050 GALS.)   9/23/13 (3,000 GALS.)   8/5/13 (3,050 GALS.)   6/24/13 (3,000 GALS.)   5/13/13 (3,050 GALS.)   4/1/13 (3,000 GALS.)   2/18/13 (12,000 GALS.)   2/17/13 & 2/16/13 (PUMPED 33,500 GALS.)   1/21/13 (3,000 GALS.)   12/10/12   10/29/12 (3,050 GALS.)   9/17/12   8/6/12 (3,000 GALS.)   6/25/12 (3,000 GALS.)   5/14/12 (3,050 GALS.)   4/2/12 (3,050 GALS.)   11/14/11 (3,050 GALS.)   10/3/11 (3,000 GALS.)    8/22/11 (3,000 GALS.)   7/11/11 (3,000 GALS.)   5/23/11 (PUMPED 3,000 GALS.)   4/4/11   12/6/10   10/25/10   9/13/10   7/26/10   6/14/10 (PUMPED 3,000 GALS.)   5/3/10   3/3/10   11/16/09   10/5/09   8/24/09   7/13/09   6/1/09   4/13/09   3/2/09   12/1/08   10/20/08 (PUMPED 3,000 GAL. TANK)   9/8/08   7/28/08   6/9/08   4/28/08   3/17/08   1/28/08   12/10/07   10/22/07 (PUMPED 3,000 GAL. TANK)   9/10/07 (PUMPED 3,000 GAL. TANK)   7/27/07 (3,000 GALS - REG COULD NOT GET TO CATCH BASKETS)  6/18/07 (3,000 GALS)   5/7/07 (PUMPED 3,050 GALS GREASE)   2/12/07  (PUMPED 3,000 GALS GREASE ONLY) 12/27/06   11/13/06   10/2/06   7/10/06   5/22/06   4/10/06   2/28/06   1/16/06   12/5/05   10/24/05   9/12/05   7/25/05   6/13/05   5/2/05   3/14/05   1/31/05   12/13/04   10/25/04   9/13/04   8/2/04   6/21/04   5/10/04   3/29/04   2/16/04   1/5/04    \r\n\r\nLAST ORDER DATE:\r\n9/17/24 (SERVICE CALL-NO NOTES)\r\n8/30/24 (MINI AUGER KITCHEN DRAIN TO BREAK CLOG AND THEN PLUNGER TO PUSH TRHOUGH)\r\n6/21/23 (AUGER KITCHEN SINK DRAIN)\r\n9/9/21 (JET OUTSIDE LINE BEHIND INDOOR POOL & BY OVERHEAD DOOR)\r\n10/5/20 (JET FROM P. STATION)\r\n7/12/19 (MINI AUGER FLOOR DRAIN IN MENS LOCKER ROOM)\r\n12/2/17 (JET FROM P. STATION TO GREASE TRAP)\r\n1/24/15 (4 HOUR SERVICE CALL) \r\n1/31/14 (JET DRAIN IN LAUNDRY ROOM)\r\n7/30/13 (JET FLOOR DRAIN)\r\n7/15/13 (JET 6 LINE FROM MANHOLE UP TO WASH AREA)\r\n5/16/13 (JET KITCHEN DRAIN LINE)\r\n2/18/13 (JETTER - SEE NOTES)\r\n2/17/13 (JETTER - SEE NOTES)\r\n2/16/13 (JETTER - SEE NOTES)\r\n5/24/12 (JET FROM CLEANOUT BY THE DISHWASHER)\r\n3/30/11 (CAMERA & DVD)\r\n3/1/10 (MINI AUGERED 2 DRAINS IN KITCHEN & 1 DRAIN IN LAUNDRY ROOM - SEE NOTES)\r\n2/23/10 (JET MAIN LINE IN KITCHEN)\r\n2/3/10 (JETTER DRAINS IN KITCHEN)\r\n2/1/10 (CAMERA & JETTER DRAINS IN KITCHEN)\r\n8/4/00 (JETTER FLOOR DRAINS TO KITCHEN)\r\n11/15/99 (JETTER DRAIN @ GOLF CLUBHOUSE)\r\n7/20/99 (JETTER GOLF CART WASH DRAIN AT THE CLUB HOUSE)\r\n12/7/98 (JETTER FLOOR DRAINS)\r\n7/11/98 (JETTER @ CLUB HOUSE)\r\n\r\nNOTES: \r\n\r\n* ON 6/21/23, JEFF NOTED THE FLOOR SINK IN THE KITCHEN HAS BROKEN PIECES OF PORCELAIN OR GLASS.  IT BEN THE AUGER HEAD REPEATEDLY.  HE WAS UNABLE TO HELP.\r\n\r\n* ON 3/13/23 TYLER NOTED HE DID NOT PUMP THE PUMP STATION DUE TO SNOW.\r\n\r\n* ON 6/6/22 & 9/20/21, TYLER NOTED THAT HE COULD NOT PUMP THE GREASE CATCH BASKETS DUE TO EVENT TENT IN THE WAY.\r\n\r\n* ON 10/5/20, ANDY JET FROM THE PUMP STATION AND CLEARED THE GREASE BLOCKAGE.\r\n\r\n* ON 7/12/19, JEFF MINI AUGERED FLOOR DRAIN AND WAS ABLE TO CLEAR THE BLOCKAGE.\r\n\r\n* ON 9/25/18, TYLER CALLED ADAM'S CELL. SINCE HE DID NOT HEAR BACK FROM HIM ON 9/24/18, TO REPORT THE PUMP ISSUE.\r\n\r\n* ON 9/24/18, TYLER NOTED THAT HE WAS ABLE TO PUMP THE CATCH BASKETS THIS TIME, BUT THE PUMPS WILL NOT STOP RUNNING.  HE LEFT A VOICE MAIL MESSAGE, BUT WAS UNABLE TO SPEAK TO ADAM.\r\n\r\n* ON 8/13/18, TYLER NOTED THAT THINGS HAVE BEEN CHANGED AT THE SAMOSET, AND HE COULD NOT ACCESS THE PUMP STATION.  THERE'S LIGHT POSTS IN THE WAY.\r\n\r\n* ON 2/8/16, TYLER NOTED THAT THE ROAD ALONGSIDE THE ICE SKATING RINK NEEDS TO BE CLEARED OF SNOW AND ICE IN ORDER TO REACH THE PUMP STATION, WHERE THE CATCH BASKETS ARE LOCATED.\r\n\r\n* ON 1/24/15, REG WAS CALLED OUT AROUND MIDNIGHT BECAUSE THE PUMP STOPPED WORKING UNDERNEATH THE BAR.  HE ASSISTED ADAM PEASE ON THIS JOB FROM 12:30 - 4:30 A.M.  HE SAID TO CHARGE IT OUT AS AN $80 PER HOUR SERVICE CALL FEE.\r\n\r\n* ON 8/27/13 - SPOKE W/ ADAM. INTERSTATE HAS A PIECE OF JETTER STUCK DOWN IN THE DRAIN LINE IN THE KITCHEN. ADAM REPORTS THAT THEY HAVE RE-ROUTED SOME OF THEIR LINES TO WORK AROUND THIS & HOPEFULLY WON'T NEED THE MONTHLY  JETTING. THEY WILL CALL US IF THEY NEED US IN THE FUTURE. (tlc)\r\n\r\n* ON 5/15/13, ADAM REQUESTED THAT WE JET THE KITCHEN'S MAIN LINES MONTHLY AS A PREVENTATIVE MAINTENANCE.\r\n\r\nNOTES:  \r\n\r\n* ON 7/30/13, JEFF JET FROM THE FLOOR CLEANOUT TO THE CLOG.  HE CLEARED THE LINE.\r\n\r\n* ON 7/15/13, JEFF JET THE 6 LINE FROM THE MANHOLE UP TO THE WASH AREA.  HE CLEARED AND ALSO WENT DOWN THE EXIT END.\r\n\r\n* ON 5/16/13, JEFF JET THE KITCHEN DRAIN LINE AND GOT STUCK APPROX 10' OUT.  THE JETTER LINE RUPTURED AND JEFF HAD TO CUT OFF APPROX 20'.  HE COULD NOT RETRIEVE THE STUCK HOSE FROM THE DRAIN LINE.\r\n\r\n* ON 2/16/13, 2/17/13, & 2/18/13, DAREN, JEFF, & ANDY PUMPED A TOTAL OF 45,500 GALLONS FROM THE GREASE TANK AND DISPOSED 37,500 GALS. OF WASTE IN THE MANHOLE ON-SITE AND 8,000 GALS. AT THE ROCKLAND WASTEWATER FACILITY.  ON 2/18/13, JEFF WAS ABLE TO CLEAR THE FROZEN DRAIN WITH THE JETTER. \r\n\r\n* ON 5/24/12, JEFF JET FROM THE CLEANOUT BY THE DISHWASHER OUT TO APPROX. 75'.  HE WAS ABLE TO CLEAR THE LINE. \r\n\r\n* ON 3/30/11, JEFF NOTED THAT THE CAMERA SHOWED THE 3 LINE TO BE IN GOOD SHAPE.  AT APPROX. 24' IN, THERE'S A 90 DEGREE TURN THAT DUMPS INTO A CAST IRON PIPE.  JEFF RECORDED IT AND GAVE THE DVD TO MIKE.\r\n\r\n* ON 3/1/10, JEFF MINI AUGERED 3 DRAINS:  2 DRAINS IN THE KITCHEN AND 1 DRAIN IN THE LAUNDRY ROOM.  ONE OF THE DRAINS IN THE KITCHEN WAS BLOCKED W/NEW FLOOR COATING.  JEFF WAS UNABLE TO CLEAR THAT DRAIN.\r\n\r\n* ON 2/3/10, JEFF JET OUT 10 LINES INCLUDING THE MAIN LINE.  JEFF WILL NEED TO GO BACK AND JET THE MAIN LINE AGAIN ONCE ALL THE LINES ARE HOOKED UP.\r\n\r\n* ON 2/1/10, JEFF CAMERAED MAIN LINE THROUGH THE KITCHEN, 75' FLOWING, BUT LOTS OF GREASE.  HE JET 3 LINES INCLUDING MAIN LINE.  HE CLEARED OUT LOTS OF GREASE.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"56dbc1ab-a405-4b9d-87bc-43c987c4e5f9","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"79f9bdf7-3082-44ce-8823-c7a0a7bb47a5","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1000,"notes":"new 2020","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"8d8e7dc3-6bf1-48f9-8e44-e756a1542a45","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"9ecefe46-016b-4396-b31d-0d27ec25da8c","tank_name":"Septic","tank_type":"Septic Tank","volume_gallons":1000,"notes":"NOTE: 03/12/26 - CURRENT USAGE: FAMILY OF 4, 2 ADULTS & 2 TEENS IN COLLEGE - COME & GO W/ LOTS OF LAUNDRY. (tlc)\n-----------------------\n\nTANK SIZE:  1,000 GALLON REGULAR TANK\n\n* NEED 1 EXTRA LENGTH OF HOSE.\n\nLAST PUMPED:  8/21/23 (+$100 EMERGENCY WEEKEND CHARGE)   9/13/21   6/12/20   7/23/12   10/9/00 (+INSPECTED)   10/2/98   7/13/90 \n\n* NOTIFY IN 5 YEARS (AUG. '28).\n\nNOTES:  \n*ON 10/9/00, I BILLED JANICE LACHANCE FOR PUMPING AND STEVE STINSON FOR THE INSPECTION.\n\n(PREV. UNDER:  NEELO LOFMAN ESTATE)","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"bc17cc0c-7962-46fb-8bbc-7f33a60776fa","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":500,"notes":"","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"8dbbc8db-6954-4a6c-910b-78f0d4e514ee","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"8698b62c-b0b7-48ab-a0d3-219962535c35","tank_name":"City Sewer","tank_type":"Septic Tank","volume_gallons":0,"notes":"*ON CITY SEWER\n*CLEANOUT ACCESS IN THE BASEMENT\n\n*NO SERVICE HISTORY FOUND @ ISSI","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"61dec445-a859-46c5-8774-d59f042b423a","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"2033ec9f-d361-4f8c-a880-0ad89b828247","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1500,"notes":"tank size:  1,500 gallon concrete w/ outlet filter (risers on center & outlet covers - 9\" deep)\n* the outlet cement riser is under the wooden cover in the flower bed.  \n* need 1 extra length of hose.\nlast pumped:  9/26/22   4/5/17   8/30/13 (+inspected)\n* notify annually to clean filter (sept. '23)\n* notify in 5 years (sept. '27).","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"f8737c56-46b0-4ac9-9e8d-f0269b6cc2ec","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"ae0696f0-b3e3-43bc-b6cb-525b634a38ea","tank_name":"Primary B Left","tank_type":"Septic Tank","volume_gallons":7000,"notes":"","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"f6a36566-fa74-4ffe-87ad-dcafc4006536","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"2149310e-6654-4dd0-a3b0-dd70869d885c","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":25,"notes":"","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"62a83994-f4d0-42ce-82db-0820904a8486","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"3ecc6788-6265-410e-8f2b-179586f1f8a0","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1000,"notes":"tank size:  1,000 gallon lowboy\nlast pumped:  10/8/13   5/3/07  10/17/00   8/28/98   5/12/95 \n* notify in 4 years.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"c1259d33-4ba4-4a0c-8168-5122b3a8a7ea","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"b2188c59-1a8f-4190-8ef2-fc3fc4c99f84","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1000,"notes":"","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"29dc53e4-1557-4609-99ed-fb8cfe165e1c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"11c1cbf9-70b8-4311-bb8b-3a346d26b0bc","tank_name":"Interior Grease","tank_type":"Grease Trap","volume_gallons":25,"notes":"*PUMP INTERIOR GREASE TRAP & MINI AUGER GREASE LINE AT SAME APPT. (PUMP TRUCK TO BRING MINI AUGER)\n*NOTE OF 5/6/25: NANCY MARCILLE, ADMINISTRATOR, REQUESTS PUMPING OF INTERIOR GREASE TRAP & AUGERING OF GREASE LINE MONTHLY GOING FORWARD. THEY AGREE TO PAY FOR SERVICES WITHIN 30 DAYS. (tlc)\n---------------------\nTANK SIZE & TYPE:  25 GALLON INTERIOR GREASE TRAP\n\nLAST PUMPED:  9/5/24  8/21/24   8/7/24  7/24/24   7/10/24  6/26/24  6/13/24  5/29/24   5/15/24  5/1/24   4/17/24  4/3/24  3/20/24  3/6/24  2/21/24   2/7/24  1/24/24   1/9/24   12/21/23   12/6/23   11/22/23   11/8/23   10/25/23   10/11/23   9/27/23   9/13/23   8/30/23   8/16/23   8/1/23   7/19/23   7/5/23   6/21/23   6/8/23   5/25/23  5/11/23  4/27/23  4/7/23  3/20/23   2/16/23   1/31/23   12/28/22   11/23/22   9/22/22   6/3/22 \n\n* AS OF 5/11/23, PUMP GREASE TRAP EVERY 2 WEEKS & MINI AUGER GREASE LINE.\n* AS OF 11/15/22, PUMP GREASE TRAP MONTHLY UNTIL PLUMBING ISSUES ARE RESOLVED. (SEE NOTE OF 10/28/22) RECOMMENDATION DISCUSSED W/ DIANNE LEEMAN AT ELDER CARE. (tlc)\n* PREVIOUS REMINDER SCHEDULE WAS EVERY 3-6 MONTHS.\n\nLAST ORDER DATE:\n9/5/24 (MINI AUGERED GREASE LINE)\n8/21/24 (MINI AUGERED GREASE LINE)\n8/7/27 (MINI AUGERED GREASE LINE)\n7/24/24  (MINI AUGERED GREASE LINE)\n7/10/24  (MINI AUGERED GREASE LINE)\n6/26/24 (MINI AUGERED GREASE LINE)\n6/13/24  (MINI AUGERED GREASE LINE)\n5/29/24 (MINI AUGERED GREASE LINE)\n5/15/24 (MINI AUGERED GREASE LINE)\n5/1/24 (MINI AUGERED GREASE LINE)\n4/17/24 (MINI AUGERED GREASE LINE)\n3/20/24 (MINI AUGER GREASE LINE)\n3/6/24 (MINI AUGER GREASE LINE)\n2/21/24 (MINI AUGER GREASE LINE)\n2/7/24 (MINI AUGER GREASE LINE)\n1/24/24 (MINI AUGER GREASE LINE)\n1/9/24 (MINI AUGER GREASE LINE)\n12/21/23 (MINI AUGER GREASE LINE)\n12/6/23 (MINI AUGER GREASE LINE)\n11/22/23 (MINI AUGER GREASE LINE)\n11/8/23 (MINI AUGER GREASE LINE)\n10/25/23 (MINI AUGER GREASE LINE)\n10/11/23 (MINI AUGER GREASE LINE)\n9/27/23 (MINI AUGER GREASE LINE)\n9/13/23 (MINI AUGER GREASE LINE)\n8/30/23 (MINI AUGER GREASE LINE)\n8/1/23 (MINI AUGER GREASE LINE)\n7/19/23 (MINI AUGERED GREASE LINE)\n6/21/23 (MINI AUGERED GREASE LINE)\n6/8/23 (MINI AUGERED GREASE LINE)\n5/25/23 (MINI AUGERED GREASE LINE)\n5/15/23 (MINI AUGERED GREASE LINE)\n5/11/23 (MINI AUGERED OUTLET LINE FROM GREASE TRAP)\n4/27/23 (MINI AUGERED INLET & OUTLET FROM GREASE TRAP)\n3/8/23 (MINI AUGERED INLET & OUTLET FROM GREASE TRAP)\n2/17/23 (MINI AUGERED OUTLET PIPE)\n10/28/22 (SERVICE CALL + TRAVEL TIME)  \n9/15/22 (MINI AUGER DRAIN - NO NOTES)\n6/17/22 (SERVICE CALL + TRAVEL TIME)\n5/26/22 (SERVICE CALL + TRAVEL TIME)\n8/15/19 (JETTER - BILLED MIDCOAST ENERGY SYSTEMS)\n4/23/18 (JET 4 LINE TO KITCHEN + AFTER BUSINESS HOURS CHARGE-BILLED MIDCOAST ENERGY SYSTEMS)\n\nNOTES:  \n\n* ON 8/16/23, DANIEL NOTED NOT TO CHARGE FOR THE AUGER BECAUSE THE AUGER CABLE SNAPPED.  \n\n* ON 7/5/23, WE INADVERTENTLY CHARGED FOR MINI AUGERING THE GREASE LINE, BUT IT NEVER GOT DONE.  THEREFORE, WE DID NOT CHARGE FOR MINI AUGERING ON 7/19/23.\n\n* ON 5/15/23, JOSH HASKELL MINI AUGERED THE GREASE LINE CLEAN AND CLEAR.\n\n* ON 5/11/23, JEFF MINI AUGERED THE OUTLET LINE OF THE GREASE TRAP PAST 20'.  HE NOTED, ALL CLEAR.\n\n* ON 3/8/23, JEFF MINI AUGERED THE INLET & OUTLET LINES FROM GREASE TRAP AND CLEARED AT APPROX 5' OUT.  HE ALSO CLEARED THE BATHROOM TOILET.\n\n* ON 2/17/23, JEFF MINI AUGERED THE OUTLET PIPE FROM THE GREASE TRAP.\n\n*10/28/22 -  RECEIVED E-MAIL COMMUNICATION FROM CHRISSA BATES, DIRECTOR OF OPERATIONS, REQUESTING SCHEDULING OF PUMP OUTS & CLEARING OF GREASE TRAP ON A REGULAR SCHEDULE TO AVOID HAVING TO CALL INTERSTATE SEPTIC WITH EMERGENCY OVERFLOW SITUATIONS IN THE FUTURE. SHE REPORTS THAT THE GREASE TRAP ISSUE IS NOT LIKELY TO BE RESOLVED UNTIL (WE) EXECUTE (OUR) PLANS FOR RE-PLUMBING (OUR) HODGDON GREEN HOME, HOPEFULLY NEXT YEAR.  (tlc)\n\n* ON 10/28/22, ROY STATED THE GREASE TRAP WAS CLOGGED UP.  HE HAD TO REMOVE THE GREASE BUILD-UP.  HE DIDN'T USE THE AUGER OR JETTER, SO HE CHARGED A SERVICE CALL.\n\n* ON 6/17/22, JEFF NOTED THERE WAS NO FLOOR DRAIN.  IT'S A SMALL GREASE TRAP - RAN LOTS OF WATER AND ALSO DISHWASTER TWICE.  ALL WENT OUT WELL.\n\n* ON 5/26/22, ROY NOTED THERE WAS A LARGE AMOUNT OF LARD AT BOTTOM OF THE INLET HOLE TO THE OUTLET.  HE RAN A LARGE AMOUNT OF WATER AFTER MOVING THE LARD.  HE USED THE TOILET AUGER ON THE OUTLET LINE.\n\n* ON 8/15/19, JEFF JET AND CLEARED THE BLOCKAGE.  ALSO, HE JET OUT TO THE MAIN.\n\n* ON 4/23/18, JEFF JET THE 4 LINE CONNECTED THE KITCHEN AND CLEARED GREASE.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"5c6960f4-7c50-4c22-92c2-f205ae5a3d59","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"4671d97f-d8c4-41c7-afd8-ba0399940e64","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":700,"notes":"vessel pauline t","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"d601ac08-9ea8-46dd-802a-26120611e48e","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"bf3d3b84-d23d-4db2-88a7-aee363b1409d","tank_name":"A: Outside Tank","tank_type":"Septic Tank","volume_gallons":2000,"notes":"Outdoor near office, processing water","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"72772d4b-23e6-4227-89d0-e34512035fef","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"45a15434-46b0-4dd6-a594-06af17bcb0b1","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1000,"notes":"","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"de8cf64f-cd3f-4bc8-87e5-f7a4f8db365c","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","tank_name":"Pump Station out back","tank_type":"Pump Chamber","volume_gallons":500,"notes":"TANK SIZE/TYPE: ?-500 GALLON SEPARATE PUMP STATION (OUT BACK)\n\nNOTE:  ON 8/16/19, JEFF NOTED THAT (2) PUMP STATION LINES T TOGETHER AND ARE 2 GRAY PVC PIPE.  THERE WAS NO WAY FOR JEFF TO GAIN ACCESS THROUGH THE PUMP LINE.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"01a45750-70b4-4863-9dce-51baebc9488b","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","tank_name":"E) Exterior Grease w/ filter","tank_type":"Grease Trap","volume_gallons":1500,"notes":"E.)  TANK SIZE:  1,500 GALLON GREASE W/OUTLET FILTER & SEPARATE PUMP STATION (RISER OVER OUTLET - PUMP THROUGH OUTLET COVER)\n\n(SERVICES BATHROOM OFF OF GYM & BACK SIDE OF KITCHEN, PER BILL REINHARDT W/GEORGE HALL & SONS)\n\nLAST PUMPED:  2/19/26, 7/21/25 (+FILTER), 7/23/20 \n\n* NOTIFY ANNUALLY TO CLEAN FILTER (FEB. OR APR. 2027)\n* NOTIFY IN FEB. OR APRIL 2027 TO SEE IF THE TANK NEEDS TO PUMPED.\n\nLAST ORDER DATE:  8/15/23 (SERVICE CALL - CLEANED FILTER)","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"0034b1fd-78bd-4473-a47a-ce16374d2f58","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"a8e2e284-7485-4b3c-879b-93b567297723","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1000,"notes":"no tank info","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"85470c16-8259-4c4d-835c-d43e66426477","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"b7808834-d1cc-45f0-b3ce-3540eb616a98","tank_name":"Septic","tank_type":"Septic Tank","volume_gallons":1000,"notes":"TANK SIZE:  1,000 GALLONS  W/ OUTLET FILTER \r\n\r\nLAST PUMPED: 3/11/24  4/26/19   8/2/11 (BILLED RAN MECHANICAL)   6/24/11 (+INSPECTED)   7/18/08   9/19/02   9/20/99   7/3/97 \r\n\r\n* NOTIFY ANNUALLY TO CLEAN FILTER (APR '25)\r\n* NOTIFY IN 5 YEARS TO PUMP (APR. '29).\r\n\r\nLAST ORDER DATE:\r\n3/11/24 (JETTER )\r\n10/11/22 (SERVICE CALL)\r\n7/11/22 (SERVICE CALL)  \r\n8/14/20 (SERVICE CALL)\r\n3/2/00 (JETTER FIELD DRAIN)\r\n\r\nNOTES:  \r\n*ON 3/11/24 CLYDE JET FROM DAYLIGHT TO THE HOUSE.\r\n\r\n*ON 3/11/24 , ROY NOTED THAT THERE IS A FILTER CLYDE JET FROM THE DAYLIGHT TO THE HOUSE .\r\n\r\n* ON 10/11/22, JEFF CLEARED AN INLET CLOG.\r\n\r\n* ON 7/11/22, JEFF OPENED UP THE PIPE AND FLUSHED 6 TIMES.  HE NOTED THAT ALL WENT OUT GREAT.  HE DID NOT ENCOUNTER A CLOG ON 7/11/22.\r\n\r\n* ON 8/14/20, JEFF NOTED THAT THE INLET WAS CLOGGED.  HE CLEARED THE BLOCKAGE.\r\n\r\n* ON 4/26/19, DAREN NOTED THAT THE INLET WAS CLOGGED.\r\n\r\n(ACCT. PREV. UNDER: WILLIAM MACFAYDEN - DECEASED)\r\n\r\nPREVIOUS OWNER:  WILBUR CHADWICK (JEANINE'S FATHER)","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"8b341547-6bb7-46dc-a06e-a7145c52f22b","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"0fcb7a79-1933-4946-8b6d-4ae912e053e4","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1000,"notes":"","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"6bd738f4-0ef4-4833-953d-9cbac5e91c1b","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"d36587e4-7bd8-4a30-bc60-7acce4ec6e51","tank_name":"A.) Manhole","tank_type":"Septic Tank","volume_gallons":1000,"notes":"NOTE: 1/6/25 - VINCE TO CK THE WEATHER - NEEDS TO WARM UP - WILL CALL BACK ON 1/7/25 OR AFTER - WILL LOOK @ FORECAST BEFORE SCHEDULING. (TLC)\n------------------\n* NOTIFY IN 3 MONTHS (JAN. '25) TO PUMP MANHOLE & JET DRAIN LINES, MANHOLE, PUMP STATION & TRENCHES, AS OF 11/17/2011 UNTIL FURTHER NOTICE. SCHEDULE ON A MONDAY - CALL 2 MONTHS IN ADVANCE TO COORD. W/ MID-COAST SOLID WASTE STAFF (THEY ARE USUALLY OFF ON A MONDAY). ASK FOR VINCENT OR DAVE WHEN SCHEDULING. (REMINDER WILL GENERATE UNDER \"90 UNION ST.\") (tlc)\n\nLAST PUMPED: 10/21/24 (500 GALS)\n\nLAST ORDER DATE:  \n11/25/24 (5 HOURS JETTER 1 HOUR ARDY)\n10/21/24 (JET DRAIN LINES)\n10/26/23 (JET LEACHATE LINE)\n3/30/20 (JETTER & CAMERA)\n\nNOTES:  \n\n* ON 10/26/23, CJ JET THE LEACHATE LINE TO APPROX 120' TWICE.\n\n* ON 3/30/20, JEFF TRIED TO JET AND WAS ABLE TO GET THROUGH JUST ONCE.  THE CAMERA SHOWED THE LINE IS SQUISHED.  HE USED THE ARDY TO MARK THE SPOT (IT'S APPROX 7' DEEP).","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"5b2af1e7-5798-4c6d-8cf5-8b58d01fe6dd","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"d617264e-18c2-4a3e-95e7-c103acf6bc7a","tank_name":"Septic","tank_type":"Septic Tank","volume_gallons":1000,"notes":"B.)  TANK SIZE & TYPE:  1,000 GALLON HOLDING TANK @ DERMATOLOGY\n\nLAST PUMPED:  5/27/20   11/26/19 \n\n* WILL CALL AS NEEDED FOR PUMPING.\n\nTANK LOCATION:  APPROX. 40 FT BEHIND MANHOLE W/ 2 CEMENT COVERS\n\n* THERE ARE CLEANOUTS OUTSIDE OF THE BUILDING, PER ANDY ON 12/18/19. \n \n* AUTO. SCHEDULE TO JET DRAINS EVERY 2 WEEKS BEGINNING ON 11/1/22.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"b533380f-f2a2-48b0-be56-1444ce7b9ff8","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"2cf682d9-79ca-4994-bb0c-69602fc718ec","tank_name":"Septic","tank_type":"Septic Tank","volume_gallons":100,"notes":"TANK SIZE:  100 GALLON STRAINER BASKET INSIDE PUMP STATION\r\n\r\nLAST PUMPED:  12/27/23 (100 GALS.)  5/31/23  (10 GALS)   6/8/22   6/9/21   3/12/21   12/14/20   9/17/20   6/23/20 (PUMPED 10 GALS.)   5/13/20   3/23/20   12/23/19   9/20/19   6/3/19   11/7/18   1/31/17   2/25/16\r\n\r\n* AS OF 6/8/22, CALL BOB WAREHEIM IN 5 MONTHS (MAY '24) TO SEE IF HE WOULD LIKE THE STRAINER BASKET PUMPED.  \r\n* PREVIOUS SCHEDULE - NOTIFY IN 3 MONTHS TO PUMP STRAINER BASKET.\r\n\r\nLAST ORDER DATE:\r\n12/12/24 (JETTER) NO NOTES\r\n8/8/24 (JETTER+$100 ON CALL FEE)-NO NOTES\r\n9/1/23 (JETTER)\r\n8/31/23 (AUGER TOILET & FLOOR DRAINS + $100 EMERGENCY AFTER BUSINESS HOURS CHARGE)\r\n12/8/21 (SERVICE CALL - STRAINER BASKET DID NOT NEED TO BE PUMPED)\r\n9/8/21 (SERVICE CALL - STRAINER BASKET DID NOT NEED TO BE PUMPED)\r\n8/11/21 (SERVICE CALL - NO NOTES)  \r\n5/13/20 (PUMPED APPROX 1,000 GALS. WHILE LINE TO NEW HEALTH CARE BUILDING BESIDE THE SUSSMAN HOUSE WAS BEING TIED IN)\r\n11/4/18 (JETTER + WEEKEND CHARGE)\r\n\r\nNOTES:  \r\n\r\n* ON 12/27/23, TYLER STATED THE STRAINER BASKET WAS VERY DIRTY AND ALMOST PLUGGED.\r\n\r\n* ON 9/1/23, JOSH HASKELL FINALLY WAS ABLE TO CLEAR A MASSIVE PAPER CLOG.  IT TOOK 2 HOURS TO DO SO.\r\n\r\n* ON 8/31/23, JOSH HALLOWELL AUGERED A TOILET DRAIN AND FLOOR DRAIN.  HE ATTEMPTED TO AUGER A 2ND TOILET DRAIN, BUT THE HEAD NURSE CALLED THE JOB OFF.\r\n\r\n* ON 11/7/18, TYLER RECOMMENDS PUMPING THE STRAINER BASKET EVERY 6 MONTHS INSTEAD OF ANNUALLY.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"c33a94a5-5504-45fd-8e18-425705c343cd","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"4b27468b-2232-4303-ac79-052a80dd388b","tank_name":"Septic Tank","tank_type":"Septic Tank","volume_gallons":1000,"notes":"tank size:  1,000 gallon concrete w/outlet filter\n* need 1 extra length of hose.\nlast pumped:  2/15/23   10/16/19   5/22/15   6/6/11 (+inspected)   5/12/08\n* notify annually to clean filter (june '25).\n* notify in 3 years to pump (apr. '26).\nlast order date:  \n6/4/24 (service call - cleaned filter)\n4/22/21 (inspection & cleaned filter)\nnote:  the system was installed in 2004.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"326a39c8-ce9f-4de6-b92b-6b7021ce3c03","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"922d87fa-0104-4b3f-8601-2b0b3b981e65","tank_name":"A.) Grease Tank","tank_type":"Grease Trap","volume_gallons":1000,"notes":"A.) Tank Size/Type:  1,000 Gallon Grease (w/ manhole cover)\n\nLast Pumped:  9/12/25, 5/10/24   11/29/23 (pumped a total of 1,500 gallons from the grease tank and main st pump station) 10/6/22   2/14/20   8/12/19\n\n* Notify to Pump in 6 months (March 2026), \ntank location: parking lot behind buildings - hatch in parking lot.","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"7d4210ea-7301-4db8-8502-8a15212472f1","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"},{"property_id":"bf3d3b84-d23d-4db2-88a7-aee363b1409d","tank_name":"C: Inside Tanks","tank_type":"Septic Tank","volume_gallons":4000,"notes":"Two Upright Tanks Indoors Approx. 2500 Each","imported_from":"tanktrack","filter":"unknown","riser":"unknown","id":"c391c554-f385-4e57-abff-35fde5710d3f","created_at":"2026-03-15T22:31:35.746Z","updated_at":"2026-03-15T22:31:35.746Z"}],
-  vehicles: [{"name":"2017 Mack","capacity_gallons":4400,"color":"#81b6b6","default_tech_id":null,"plate":"","sort_order":0,"id":"16d4db35-1d59-4fb9-8daa-3d5101f45375","created_at":"2026-03-14T20:15:49.957Z","updated_at":"2026-03-14T20:16:27.716Z"},{"name":"2016 Mack","capacity_gallons":4400,"color":"#1565c0","default_tech_id":null,"plate":"","sort_order":0,"id":"129ebf19-b26d-4f62-894b-016ec624df63","created_at":"2026-03-14T20:16:04.206Z","updated_at":"2026-03-14T20:16:04.206Z"},{"name":"2014 Mack","capacity_gallons":4400,"color":"#21c115","default_tech_id":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","plate":"","sort_order":0,"id":"140f1d5e-f640-462a-915a-c64af2f55ae2","created_at":"2026-03-14T20:16:19.400Z","updated_at":"2026-03-14T20:31:39.599Z"},{"name":"2004 Kenworth","capacity_gallons":4200,"color":"#5115c1","default_tech_id":null,"plate":"","sort_order":0,"id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","created_at":"2026-03-14T20:16:40.847Z","updated_at":"2026-03-14T20:16:40.847Z"},{"name":"Service Truck","capacity_gallons":0,"color":"#878c92","default_tech_id":null,"plate":"","sort_order":0,"id":"eeddf5aa-5819-4295-a8a6-7337726c9957","created_at":"2026-03-14T20:16:52.661Z","updated_at":"2026-03-14T20:16:52.661Z"},{"name":"Box Truck","capacity_gallons":0,"color":"#737425","default_tech_id":null,"plate":"","sort_order":0,"id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","created_at":"2026-03-14T20:17:11.519Z","updated_at":"2026-03-14T20:17:11.519Z"}],
-  invoices: [{"invoice_number":"1","job_id":"9a1dcd39-d5dc-492b-8faf-03f1e0c47289","customer_id":"5ffba3f2-cc02-42d1-8eeb-8ec3dc4410e9","property_id":"0240a0d3-0e5e-426f-ba62-8af811cffa27","svc_date":"2026-03-16","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Everett Spear","property_address":"120 Summer St","property_city":"Rockland","notes":"","id":"20d1ac8b-bb8c-43de-9081-c4ed8dd4d328","created_at":"2026-03-15T23:05:30.037Z","updated_at":"2026-03-15T23:05:30.038Z"},{"invoice_number":"2","job_id":"f31abc16-3322-4422-bd47-199b5819f0a0","customer_id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","svc_date":"2026-03-16","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"drain clearing","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"O' Hara Corporation","property_address":"117 Tillson Ave","property_city":"Rockland","notes":"","id":"1b0a2890-6d1c-4fc0-a58a-c541126cbc91","created_at":"2026-03-15T23:05:30.050Z","updated_at":"2026-03-15T23:05:30.050Z"},{"invoice_number":"3","job_id":"af1ccd57-abd9-45d8-bf53-582fd54a6496","customer_id":"8ac709c0-2cfc-4301-988a-91c5aab46261","property_id":"98ee646d-8d0a-4336-9de4-99bb1f9b0b78","svc_date":"2026-03-16","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"CITY SEWER","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"GOOD CALL 43, LLC (OWNER: CRAIG CALL)","property_address":"43 Broad St. (4 UNIT APT. BLDG.)","property_city":"Rockland","notes":"","id":"2fe8bb3b-e491-4c88-944b-8c467158c517","created_at":"2026-03-15T23:05:30.060Z","updated_at":"2026-03-15T23:05:30.060Z"},{"invoice_number":"4","job_id":"43a34b66-11dc-41d5-b069-ff230ebd4c90","customer_id":"2810410e-4d90-4eeb-9fa4-700ce3006c9c","property_id":"db2e740f-d11c-483c-8c71-5d1be610f7a2","svc_date":"2026-03-16","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","gallons_pumped":0,"job_codes":"GREASE TANK","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"SAMOSET RESORT","property_address":"220 Warrenton St","property_city":"Rockport","notes":"","id":"86443c91-b6ca-4d16-abe3-15c6d438b527","created_at":"2026-03-15T23:05:30.071Z","updated_at":"2026-03-15T23:05:30.071Z"},{"invoice_number":"5","job_id":"b650e5de-e459-4d3c-bcf5-f24972fe8a95","customer_id":"124da965-a6f6-43f4-8c11-776cd1375c48","property_id":"79f9bdf7-3082-44ce-8823-c7a0a7bb47a5","svc_date":"2026-03-16","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"aac46ea4-ad9c-4660-812d-0d44313f93d3","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Richard and Lacey Wilshire","property_address":"99 Sennebec Rd","property_city":"Union","notes":"","id":"7f035864-2cc2-43be-9026-de1fd356843b","created_at":"2026-03-15T23:05:30.079Z","updated_at":"2026-03-15T23:05:30.079Z"},{"invoice_number":"6","job_id":"8f0b7983-c9ad-4af7-bc4f-54087d9ff7d2","customer_id":"d986a5e0-e0ec-49bc-ba90-6890e816481c","property_id":"9ecefe46-016b-4396-b31d-0d27ec25da8c","svc_date":"2026-03-16","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"aac46ea4-ad9c-4660-812d-0d44313f93d3","gallons_pumped":0,"job_codes":"Septic","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"1.) Stephen \"Steve\" Stinson","property_address":"111 Old Rockland St","property_city":"Rockport","notes":"","id":"78004209-eb57-47f2-8948-5f3477f3a8f6","created_at":"2026-03-15T23:05:30.086Z","updated_at":"2026-03-15T23:05:30.086Z"},{"invoice_number":"7","job_id":"5ae0ca5d-2582-417b-8439-9deb153c1eca","customer_id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","svc_date":"2026-03-16","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"aac46ea4-ad9c-4660-812d-0d44313f93d3","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"O' Hara Corporation","property_address":"117 Tillson Ave","property_city":"Rockland","notes":"","id":"095e3442-aa26-4c63-8c30-5ba295669337","created_at":"2026-03-15T23:05:30.095Z","updated_at":"2026-03-15T23:05:30.095Z"},{"invoice_number":"8","job_id":"568825d2-b752-453b-8075-7a6623e823fc","customer_id":"467dc6fc-d800-48d5-8165-0a6dc6b80da4","property_id":"8698b62c-b0b7-48ab-a0d3-219962535c35","svc_date":"2026-03-16","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","driver_id":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","gallons_pumped":0,"job_codes":"City Sewer","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"2.)  John & Stephanie Clapp, III (Buyers)","property_address":"43 Gleason St","property_city":"Thomaston","notes":"","id":"2f581b91-6a93-48bd-9f9e-e5f0076ad2e6","created_at":"2026-03-15T23:05:30.103Z","updated_at":"2026-03-15T23:05:30.103Z"},{"invoice_number":"9","job_id":"f77b56ce-0f0e-42b9-b267-4a173cd88594","customer_id":"704151c3-19fb-4826-8d5c-363932bdf906","property_id":"b916c866-787c-419c-b179-36646df216ca","svc_date":"2026-03-16","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","driver_id":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Valerie Landsburg","property_address":"31 Talbot Ave","property_city":"Rockland","notes":"","id":"5dc5db1c-1758-4949-9543-86b8b50cb806","created_at":"2026-03-15T23:05:30.112Z","updated_at":"2026-03-15T23:05:30.112Z"},{"invoice_number":"10","job_id":"ea31fb0f-fd9b-47c8-8957-291cdc1026f6","customer_id":"40ee25a5-19b5-4bf1-8c71-d0c19e6bcec1","property_id":"2033ec9f-d361-4f8c-a880-0ad89b828247","svc_date":"2026-03-16","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","driver_id":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Jane Rothschild","property_address":"21 Penobscot Ave","property_city":"Camden","notes":"","id":"66611ec1-a5a0-41a0-a762-509169c20ac3","created_at":"2026-03-15T23:05:30.118Z","updated_at":"2026-03-15T23:05:30.118Z"},{"invoice_number":"11","job_id":"7f5280bc-43d3-404e-8b3b-6683e397313f","customer_id":"8423d71f-c541-432e-93a1-abb11760b610","property_id":"ae0696f0-b3e3-43bc-b6cb-525b634a38ea","svc_date":"2026-03-17","vehicle_id":"16d4db35-1d59-4fb9-8daa-3d5101f45375","driver_id":"1940d691-3b28-4d03-931e-dd7a82464c43","gallons_pumped":0,"job_codes":"Primary B Left","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"6.) Vinalhaven Treatment Plant","property_address":"Off of Sands Rd","property_city":"Vinalhaven","notes":"","id":"7dc5b248-81d0-4dcf-b862-c0a8da4567c3","created_at":"2026-03-15T23:05:30.126Z","updated_at":"2026-03-15T23:05:30.126Z"},{"invoice_number":"12","job_id":"cc599e06-6fc1-46c7-b465-f102206f4cc4","customer_id":"6cf0d12c-057a-40e9-b4af-afc04de86974","property_id":"1371a5d4-1e3f-4146-b58e-93111caf3c0d","svc_date":"2026-03-17","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Tom Mellor","property_address":"13 Booker St","property_city":"Thomaston","notes":"","id":"7606942a-38ae-4af3-aad1-94bd09afba99","created_at":"2026-03-15T23:05:30.138Z","updated_at":"2026-03-15T23:05:30.138Z"},{"invoice_number":"13","job_id":"b363896c-b731-48f1-ba3f-d5c9d5cfdde8","customer_id":"45d348a9-7fa2-4a8d-8b25-7d2522944c69","property_id":"3ecc6788-6265-410e-8f2b-179586f1f8a0","svc_date":"2026-03-17","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"fffc57cf-8a2a-48c0-beea-db680be951d1","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Gary C and Shasta Minery","property_address":"21 Elementary School Rd","property_city":"Tenants Harbor","notes":"","id":"d672f365-23c6-4e4d-905b-080eefb8646a","created_at":"2026-03-15T23:05:30.146Z","updated_at":"2026-03-15T23:05:30.146Z"},{"invoice_number":"14","job_id":"29cc8eda-b48c-4946-8de8-b128221a6d0a","customer_id":"4eede18b-ed3c-42f7-83e4-be4f61e334b9","property_id":"b2188c59-1a8f-4190-8ef2-fc3fc4c99f84","svc_date":"2026-03-17","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"fffc57cf-8a2a-48c0-beea-db680be951d1","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Elijah MacDougall & Alexis Davis","property_address":"20 Passanen Ln","property_city":"Saint George","notes":"","id":"e9762041-df8f-4b2e-a26f-327e472e9750","created_at":"2026-03-15T23:05:30.153Z","updated_at":"2026-03-15T23:05:30.153Z"},{"invoice_number":"15","job_id":"6ff10464-e2d6-4d82-a30e-0fbbde8812be","customer_id":"0262c3dd-555a-43b8-b002-e68f61c90fc6","property_id":"11c1cbf9-70b8-4311-bb8b-3a346d26b0bc","svc_date":"2026-03-18","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"aac46ea4-ad9c-4660-812d-0d44313f93d3","gallons_pumped":0,"job_codes":"Interior Grease","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"1.) Elder Green","property_address":"6 Hodgdon St (Group Home)","property_city":"Damariscotta","notes":"","id":"250893c6-978c-469c-840f-be346e554063","created_at":"2026-03-15T23:05:30.161Z","updated_at":"2026-03-15T23:05:30.161Z"},{"invoice_number":"16","job_id":"976b6f2d-908e-4966-9ba8-d570af8e03a9","customer_id":"2642985e-ce06-4964-9f26-01709125a9b5","property_id":"4671d97f-d8c4-41c7-afd8-ba0399940e64","svc_date":"2026-03-19","vehicle_id":"16d4db35-1d59-4fb9-8daa-3d5101f45375","driver_id":"1940d691-3b28-4d03-931e-dd7a82464c43","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Pauline T","property_address":"79 Mechanic St","property_city":"Rockland","notes":"","id":"f21bb497-62a5-43c4-aa88-5365a88910c0","created_at":"2026-03-15T23:05:30.168Z","updated_at":"2026-03-15T23:05:30.168Z"},{"invoice_number":"17","job_id":"d4bd4be2-8690-427f-b86b-3d4a3eab8a7e","customer_id":"74b8fb32-097f-49a0-88a2-c6506df1f7c9","property_id":"bf3d3b84-d23d-4db2-88a7-aee363b1409d","svc_date":"2026-03-19","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","gallons_pumped":0,"job_codes":"A: Outside Tank","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"American Unagi","property_address":"1 Pie Lane","property_city":"Waldoboro","notes":"","id":"2767f6c6-52bd-4981-884c-0993cfa7b0e5","created_at":"2026-03-15T23:05:30.176Z","updated_at":"2026-03-15T23:05:30.176Z"},{"invoice_number":"18","job_id":"16e71527-cfef-473f-8ec6-50a42c71e54e","customer_id":"24d22d3c-ff57-49e9-a20c-b63711efa423","property_id":"45a15434-46b0-4dd6-a594-06af17bcb0b1","svc_date":"2026-03-19","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"aac46ea4-ad9c-4660-812d-0d44313f93d3","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Christina Goosens","property_address":"191 Payson Rd","property_city":"Union","notes":"","id":"100eabac-b7ec-471a-917f-8a256aaeaace","created_at":"2026-03-15T23:05:30.183Z","updated_at":"2026-03-15T23:05:30.183Z"},{"invoice_number":"19","job_id":"3d29e6bc-e925-4ded-91fc-912997c7e1da","customer_id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","svc_date":"2026-03-20","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","gallons_pumped":0,"job_codes":"Pump Station out back","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"3.) Ash Point School","property_address":"54 Ash Point Dr (New School)","property_city":"Owls Head","notes":"","id":"fb21adc4-31a0-43ba-abdb-ed720d7ba0c2","created_at":"2026-03-15T23:05:30.191Z","updated_at":"2026-03-15T23:05:30.191Z"},{"invoice_number":"20","job_id":"03b39b5e-cdaa-4552-bf61-847b75b42a41","customer_id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","svc_date":"2026-03-20","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","gallons_pumped":0,"job_codes":"E) Exterior Grease w/ filter","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"3.) Ash Point School","property_address":"54 Ash Point Dr (New School)","property_city":"Owls Head","notes":"","id":"f66b808f-4a0b-439f-a14a-b431fca2973e","created_at":"2026-03-15T23:05:30.198Z","updated_at":"2026-03-15T23:05:30.199Z"},{"invoice_number":"21","job_id":"0b4cbbb3-b76e-4044-afd5-7e4ee7a7d9ff","customer_id":"08163e99-8bd1-4759-9a3d-454f04a95516","property_id":"a8e2e284-7485-4b3c-879b-93b567297723","svc_date":"2026-03-20","vehicle_id":"129ebf19-b26d-4f62-894b-016ec624df63","driver_id":"fffc57cf-8a2a-48c0-beea-db680be951d1","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Kate Brigham","property_address":"2740 Western Rd","property_city":"Warren","notes":"","id":"7717fd8c-05df-4fd5-943f-87ff231e8291","created_at":"2026-03-15T23:05:30.207Z","updated_at":"2026-03-15T23:05:30.207Z"},{"invoice_number":"22","job_id":"1b4a629e-6f72-4ce1-a038-63cd0b2faa3c","customer_id":"2e109fcf-ac08-4c05-b5be-ece2fa1976cf","property_id":"a89abc2d-d55a-43be-b65b-2f2579f3fffe","svc_date":"2026-03-20","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","driver_id":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","gallons_pumped":0,"job_codes":"D) Exterior Grease w/ filter","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"3.) Ash Point School","property_address":"54 Ash Point Dr (New School)","property_city":"Owls Head","notes":"","id":"e60603b4-db10-42ed-9b68-6d7fb93db3d4","created_at":"2026-03-15T23:05:30.214Z","updated_at":"2026-03-15T23:05:30.214Z"},{"invoice_number":"23","job_id":"2ee6e442-08b0-4f8f-99f6-762ba11ff2ef","customer_id":"08163e99-8bd1-4759-9a3d-454f04a95516","property_id":"a8e2e284-7485-4b3c-879b-93b567297723","svc_date":"2026-03-20","vehicle_id":"eeddf5aa-5819-4295-a8a6-7337726c9957","driver_id":"b2a44ce6-4a8f-485f-90a9-8777723e15ef","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Kate Brigham","property_address":"2740 Western Rd","property_city":"Warren","notes":"","id":"4219097a-69b0-4578-ad28-a23a9951cfe5","created_at":"2026-03-15T23:05:30.220Z","updated_at":"2026-03-15T23:05:30.220Z"},{"invoice_number":"24","job_id":"a6e1d8b4-d458-47e8-9463-02ee7d113505","customer_id":"be484865-d860-459b-ad20-32812a31c8ba","property_id":"b7808834-d1cc-45f0-b3ce-3540eb616a98","svc_date":"2026-03-23","vehicle_id":null,"driver_id":null,"gallons_pumped":0,"job_codes":"Septic","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Suzanne MacFayden (Residence)","property_address":"476 Wottons Mill Rd","property_city":"Union","notes":"","id":"9a6bec28-451f-438b-86ee-80d92110eebc","created_at":"2026-03-15T23:05:30.228Z","updated_at":"2026-03-15T23:05:30.228Z"},{"invoice_number":"25","job_id":"986765c2-bc59-4aa5-aa58-821da472cb85","customer_id":"a6d54fbe-c034-4722-ae88-cd02a371ab2c","property_id":"0fcb7a79-1933-4946-8b6d-4ae912e053e4","svc_date":"2026-03-23","vehicle_id":null,"driver_id":null,"gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Janet & Greg McElroy","property_address":"134 Bellevue St","property_city":"Owls Head","notes":"","id":"594a2ef4-793d-47b1-90a6-5abdfa3b4fcc","created_at":"2026-03-15T23:05:30.236Z","updated_at":"2026-03-15T23:05:30.236Z"},{"invoice_number":"26","job_id":"8ea67ea5-014e-4a19-880d-5e16b8079d6e","customer_id":"9c10445e-9e96-4e65-bf28-d2040abfe9a5","property_id":"d36587e4-7bd8-4a30-bc60-7acce4ec6e51","svc_date":"2026-03-23","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"A.) Manhole","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"MID-COAST SOLID WASTE","property_address":"90 UNION ST (OFFICE / TRANSFER STATION)","property_city":"ROCKPORT","notes":"","id":"76809bb3-61c6-4e71-a038-2847d4f2b5a8","created_at":"2026-03-15T23:05:30.244Z","updated_at":"2026-03-15T23:05:30.244Z"},{"invoice_number":"27","job_id":"8a7e8852-b1c8-4c05-a676-04146630b5fc","customer_id":"8423d71f-c541-432e-93a1-abb11760b610","property_id":"ae0696f0-b3e3-43bc-b6cb-525b634a38ea","svc_date":"2026-03-24","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","gallons_pumped":0,"job_codes":"Priamry C Right","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"6.) Vinalhaven Treatment Plant","property_address":"Off of Sands Rd","property_city":"Vinalhaven","notes":"","id":"f66e4432-c872-4c33-8fe6-4430c121543b","created_at":"2026-03-15T23:05:30.251Z","updated_at":"2026-03-15T23:05:30.251Z"},{"invoice_number":"28","job_id":"e06b10b2-1b73-46c8-9cce-c19c1ba1ed52","customer_id":"a7b6f93a-8b76-47ce-8b74-bb4df343de83","property_id":"d617264e-18c2-4a3e-95e7-c103acf6bc7a","svc_date":"2026-03-25","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"Septic","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"8.) PBMC (Dermatology)","property_address":"6 Glen Cove Drive","property_city":"Rockport","notes":"","id":"483cbb92-fa76-4530-aca5-382b664e47c2","created_at":"2026-03-15T23:05:30.259Z","updated_at":"2026-03-15T23:05:30.259Z"},{"invoice_number":"29","job_id":"31adb11c-acb1-4516-998f-aa8e58efb865","customer_id":"fc07a297-4aed-43c7-9db3-ace03eb757d5","property_id":"35e28916-7e82-4479-b9bf-4fa945ba0b0e","svc_date":"2026-03-25","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Vicki Doudera","property_address":"18 Trim St","property_city":"Camden","notes":"","id":"46f483d3-5b1c-4920-8b2a-ed85af662279","created_at":"2026-03-15T23:05:30.270Z","updated_at":"2026-03-15T23:05:30.270Z"},{"invoice_number":"30","job_id":"79534fb4-1868-4b52-bacc-1164508b1c90","customer_id":"9dbd7c44-fff8-4b17-8f36-bacbe3943c25","property_id":"dfa34865-1d3c-40bd-88bc-23f864df64e4","svc_date":"2026-03-25","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"2.) PBMC (Emergency Room Hallway)","property_address":"6 Glen Cove Dr","property_city":"Rockport","notes":"","id":"5299beb1-529b-465b-a342-35576b7a3695","created_at":"2026-03-15T23:05:30.277Z","updated_at":"2026-03-15T23:05:30.277Z"},{"invoice_number":"31","job_id":"00f22e05-8f3d-4703-ad3e-f95fb8fcb249","customer_id":"acf85ac7-7d5b-4a38-a7eb-9a36cf5d5960","property_id":"2cf682d9-79ca-4994-bb0c-69602fc718ec","svc_date":"2026-03-25","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"fffc57cf-8a2a-48c0-beea-db680be951d1","gallons_pumped":0,"job_codes":"Septic","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"6.) SUSSMAN HOUSE","property_address":"4 Anchor Dr","property_city":"Rockport","notes":"","id":"c14ac32d-d370-4b8e-80bb-197f2904040f","created_at":"2026-03-15T23:05:30.284Z","updated_at":"2026-03-15T23:05:30.284Z"},{"invoice_number":"32","job_id":"6903fb96-8a99-4af4-8fe7-f7980eeb2390","customer_id":"f098526d-6b8c-4265-ba07-eb7f8602de6b","property_id":"4b27468b-2232-4303-ac79-052a80dd388b","svc_date":"2026-03-25","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"fffc57cf-8a2a-48c0-beea-db680be951d1","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Emily Sontag","property_address":"4 Acorn Ln","property_city":"Rockport","notes":"","id":"0f0da2a9-42b4-4ec5-b409-8c629028fbe0","created_at":"2026-03-15T23:05:30.291Z","updated_at":"2026-03-15T23:05:30.291Z"},{"invoice_number":"33","job_id":"3c07eb25-c468-47bc-8e36-25f5af637cf4","customer_id":"34f5924e-a4d0-40c6-8f12-8c1a5d962227","property_id":"922d87fa-0104-4b3f-8601-2b0b3b981e65","svc_date":"2026-03-25","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"fffc57cf-8a2a-48c0-beea-db680be951d1","gallons_pumped":0,"job_codes":"A.) Grease Tank","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Bayview Management","property_address":"18 & 24 Central Street","property_city":"Rockport","notes":"","id":"a6c457ba-35c1-4230-aac0-c2135136b957","created_at":"2026-03-15T23:05:30.299Z","updated_at":"2026-03-15T23:05:30.299Z"},{"invoice_number":"34","job_id":"028dd715-3772-4ac0-acd8-beddefe25862","customer_id":"74b8fb32-097f-49a0-88a2-c6506df1f7c9","property_id":"bf3d3b84-d23d-4db2-88a7-aee363b1409d","svc_date":"2026-03-26","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","gallons_pumped":0,"job_codes":"C: Inside Tanks","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"American Unagi","property_address":"1 Pie Lane","property_city":"Waldoboro","notes":"","id":"51f509d1-e43c-45ff-81d6-d669d5092e23","created_at":"2026-03-15T23:05:30.307Z","updated_at":"2026-03-15T23:05:30.307Z"},{"invoice_number":"35","job_id":"d3b95df7-c941-42d1-82d8-016ac42eb972","customer_id":"5ffba3f2-cc02-42d1-8eeb-8ec3dc4410e9","property_id":"0240a0d3-0e5e-426f-ba62-8af811cffa27","svc_date":"2026-03-15","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Everett Spear","property_address":"120 Summer St","property_city":"Rockland","notes":"","id":"c121f03a-aba6-46c4-b15c-3a8f9f549d6c","created_at":"2026-03-15T23:05:30.314Z","updated_at":"2026-03-15T23:05:30.314Z"},{"invoice_number":"36","job_id":"f98219d9-f9a4-45aa-ade1-e98a5f2a032d","customer_id":"929d838b-e2d1-4a1b-b807-a5ed6f70e573","property_id":"e96291a8-c2aa-4356-a53a-2b3ca6098743","svc_date":"2026-03-15","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"drain clearing","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"O' Hara Corporation","property_address":"117 Tillson Ave","property_city":"Rockland","notes":"","id":"f8d5e370-8a87-489e-9c74-bf0eaa46b024","created_at":"2026-03-15T23:05:30.322Z","updated_at":"2026-03-15T23:05:30.322Z"},{"invoice_number":"37","job_id":"682ee293-cf93-4c67-8074-2ecc8a4adb69","customer_id":"8ac709c0-2cfc-4301-988a-91c5aab46261","property_id":"98ee646d-8d0a-4336-9de4-99bb1f9b0b78","svc_date":"2026-03-15","vehicle_id":"dfbc2371-708f-4b99-b1b4-e74bad3492f7","driver_id":"1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b","gallons_pumped":0,"job_codes":"CITY SEWER","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"GOOD CALL 43, LLC (OWNER: CRAIG CALL)","property_address":"43 Broad St. (4 UNIT APT. BLDG.)","property_city":"Rockland","notes":"","id":"046f6082-8f9a-44da-b373-d9702945cbe1","created_at":"2026-03-15T23:05:30.331Z","updated_at":"2026-03-15T23:05:30.331Z"},{"invoice_number":"38","job_id":"eb8e405c-feea-49f1-be90-31b6f4de9df9","customer_id":"2810410e-4d90-4eeb-9fa4-700ce3006c9c","property_id":"db2e740f-d11c-483c-8c71-5d1be610f7a2","svc_date":"2026-03-15","vehicle_id":"140f1d5e-f640-462a-915a-c64af2f55ae2","driver_id":"f71d2a24-03b2-436b-9d51-2d4a875fd031","gallons_pumped":0,"job_codes":"GREASE TANK","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"SAMOSET RESORT","property_address":"220 Warrenton St","property_city":"Rockport","notes":"","id":"23c6b93b-7440-4d53-8480-525568d45770","created_at":"2026-03-15T23:05:30.342Z","updated_at":"2026-03-15T23:05:30.342Z"},{"invoice_number":"39","job_id":"d35ddb1f-a126-48a2-a7ae-8ee030f0cbb3","customer_id":"124da965-a6f6-43f4-8c11-776cd1375c48","property_id":"79f9bdf7-3082-44ce-8823-c7a0a7bb47a5","svc_date":"2026-03-15","vehicle_id":"0af2343a-04c4-4a3c-94bf-9daa0855c143","driver_id":"aac46ea4-ad9c-4660-812d-0d44313f93d3","gallons_pumped":0,"job_codes":"Septic Pump","complete":false,"line_items":[],"subtotal":0,"tax_rate":0,"tax_amount":0,"total":0,"status":"draft","payment_status":"unpaid","payment_method":"","amount_paid":0,"billing_company":"Richard and Lacey Wilshire","property_address":"99 Sennebec Rd","property_city":"Union","notes":"","id":"fd261d56-75b2-4759-b527-d7090a8e7f07","created_at":"2026-03-15T23:05:30.348Z","updated_at":"2026-03-15T23:05:30.348Z"}],
-  service_categories: [{"id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Septic Truck Services","code":"Septic","sort_order":1,"created_at":"2026-03-15T23:30:54.775Z"},{"id":"c4708965-4338-4b81-8fce-c963b8046b16","name":"Box Truck Services","code":"Box Tru","sort_order":2,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"fe8b090a-bf1d-465c-8414-62346fb5dee5","name":"Service Truck","code":"Service","sort_order":3,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Additional Services","code":"Additio","sort_order":4,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"General","code":"Gen","sort_order":5,"created_at":"2026-03-15T23:30:54.785Z"}],
-  service_products: [{"id":"2351ce18-965b-450e-b2bf-71e4600377c2","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Pumping","price":250,"job_code":"","is_pump_job":true,"is_tank_job":true,"sort_order":1,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"5f136be3-25fc-4f3b-86c9-477d50fac1f8","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Septic Tank Waste Disposal","price":140,"job_code":"Su","is_pump_job":false,"is_tank_job":false,"sort_order":2,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"ed6cf3ac-a3d4-4848-9d11-1f181a0edb89","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Holding Tank Waste Disposal","price":130,"job_code":"Hu","is_pump_job":false,"is_tank_job":false,"sort_order":3,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"ad051153-3cbd-4da4-a223-f0a33a408a68","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Grease Tank Waste Disposal","price":160,"job_code":"Gu","is_pump_job":false,"is_tank_job":false,"sort_order":4,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"80c72630-51b7-45dc-a599-c7154f3decb4","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Treatment Plant Waste Disposal","price":140,"job_code":"Tp","is_pump_job":false,"is_tank_job":false,"sort_order":5,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"0726b544-e06c-420c-814a-94d1973cf5d5","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Liquid Seaweed Waste Disposal","price":130,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":6,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"21af9ed2-bd7b-4907-b8e1-48ff71bbece8","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Brewery Waste Disposal","price":140,"job_code":"Bw","is_pump_job":false,"is_tank_job":false,"sort_order":7,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"95e0d225-397c-4f10-b584-4f3ac4328fa0","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Non Septic/Non Hazardous Liquids Disposal","price":140,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":8,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"2829f78f-d632-4cc0-9492-33ad913dd6fa","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Extra Hose","price":10,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":9,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"6ac15ddb-bf6c-4959-9250-67c5b433ce44","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Expedited Service","price":150,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":10,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"d8cb578c-a149-4d46-9043-546a49533bbc","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Interior Grease Trap","price":260,"job_code":"Ig","is_pump_job":true,"is_tank_job":true,"sort_order":11,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"7eccfd3f-eff7-45fd-b501-8666b45b3e6a","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Less Than 100 Gallons Pump Out","price":250,"job_code":"","is_pump_job":true,"is_tank_job":true,"sort_order":12,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"1d7043b8-1516-486b-a955-ff66d845dfa5","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"On Call Fee(pump truck)","price":150,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":13,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"fdbe8b78-c035-4346-a6f2-6c5e04ecc43c","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Difficult Waste Disposal","price":200,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":14,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"41c0139a-1248-4cd1-852d-3de8cf07c4ad","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Pump Truck Standby","price":315,"job_code":"Sb","is_pump_job":false,"is_tank_job":false,"sort_order":15,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"c7b4eb1d-8e0f-4e78-8158-50e8e73fc74b","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Vinal Haven, North Haven, Islesboro Septic Pumping","price":640,"job_code":"Ip","is_pump_job":true,"is_tank_job":true,"sort_order":16,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"918edcbf-da00-4411-8187-5099bf6c7c5f","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Pump Wet Well","price":250,"job_code":"Ww","is_pump_job":true,"is_tank_job":true,"sort_order":17,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"b5e565f9-92df-4c3e-a5f8-17058470435a","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Brewery Waste Disposal","price":145,"job_code":"","is_pump_job":true,"is_tank_job":false,"sort_order":18,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"31ea9bcb-bc8e-4458-b554-e5fdfed1f6e5","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Flat Rate Island Price","price":3000,"job_code":"","is_pump_job":true,"is_tank_job":false,"sort_order":19,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"1fe1bbcf-a099-4df3-a851-3f7d65832dc6","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"North Haven Treatment Plant Pumping Flat Rate No Disposal","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":20,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"4e349679-2124-4ba4-b8ec-4c4d507acafb","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"North Haven Treatment Plant Pumping Flat Rate With Disposal","price":2825,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":21,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"c6d3e5f7-0f90-46df-aa3f-627f0dd44800","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Vinalhaven Treatment Plant Pumping","price":315,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":22,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"d5fe5c6c-c82a-445d-8e2d-5f52fefdcaa8","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Ferry Service Pumping","price":260,"job_code":"","is_pump_job":true,"is_tank_job":false,"sort_order":23,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"86e8e490-f08b-4b65-9ced-cb05a3046cfd","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Vinalhaven Inspection","price":1200,"job_code":"Vi","is_pump_job":false,"is_tank_job":false,"sort_order":24,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"c1605382-0e83-4c02-ab8b-6074b0177c52","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Inspection (North Haven, Islesboro Inspection)","price":495,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":25,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"186e058f-769d-44a8-bd44-f8604d94ceaa","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Lobster/Fish Waste Pumping","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":26,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"a67f5802-d3b3-4392-8810-f5b82e73b1c3","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Lobster/Fish Waste Disposal","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":27,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"6d1d42ef-f06e-4ec0-b621-a9ccd06c87ab","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Island Transporter Island Jobs Flat Rate","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":28,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"9176d7d1-c5c2-4285-99bd-d7d22dd61cb2","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Vault Toilet Pumping","price":0,"job_code":"Vt","is_pump_job":false,"is_tank_job":false,"sort_order":29,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"0ffaa7e5-3399-4ede-8b3e-9c92eb3ed8f4","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Vault Toilet Disposal","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":30,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"c77d9518-9397-4e36-8df7-e640389d5db2","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Island Standby Pumping (North Haven, Vinalhaven, Islesboro)","price":0,"job_code":"","is_pump_job":true,"is_tank_job":true,"sort_order":31,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"4c623221-882b-48e7-bcad-5ebd80045974","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Island Sewer Inspection","price":0,"job_code":"Is","is_pump_job":false,"is_tank_job":false,"sort_order":32,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"7184425f-52f8-4ebd-9392-d49b6ee41e3d","category_id":"617df698-01e6-4e18-aa80-8daa383c17c0","name":"Contracted Pumping","price":0,"job_code":"Co","is_pump_job":false,"is_tank_job":false,"sort_order":33,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"73aa25a0-b089-4d74-a801-d3cf987c7cda","category_id":"c4708965-4338-4b81-8fce-c963b8046b16","name":"Drain Clearing (islands)","price":550,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":1,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"c16ebc27-a9a1-404c-ade6-7a12213e9008","category_id":"c4708965-4338-4b81-8fce-c963b8046b16","name":"Drain Clearing","price":275,"job_code":"Dc","is_pump_job":true,"is_tank_job":true,"sort_order":2,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"c1042ad6-e0b6-43f1-9b2e-ebe7c5cf5c02","category_id":"c4708965-4338-4b81-8fce-c963b8046b16","name":"On Call Fee(box truck)","price":100,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":3,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"d9c516fd-ec06-4125-bf46-92d97c7f12f6","category_id":"c4708965-4338-4b81-8fce-c963b8046b16","name":"Additional Hour Drain Clearing","price":250,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":4,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"3a1ff7c9-c5f7-4f15-bcf4-6e15abd2aeaa","category_id":"fe8b090a-bf1d-465c-8414-62346fb5dee5","name":"Sewer Line Inspection","price":350,"job_code":"Eli","is_pump_job":false,"is_tank_job":false,"sort_order":1,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"58ca9790-719e-4b6e-b83b-196fa103a188","category_id":"fe8b090a-bf1d-465c-8414-62346fb5dee5","name":"Septic System Inspection","price":340,"job_code":"I","is_pump_job":false,"is_tank_job":false,"sort_order":2,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"e474f80d-06fd-47bc-b107-1e03f84bee6e","category_id":"fe8b090a-bf1d-465c-8414-62346fb5dee5","name":"Camera","price":250,"job_code":"C","is_pump_job":false,"is_tank_job":false,"sort_order":3,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"3dd01d69-daf4-4957-aff2-a1bdd68a68bc","category_id":"fe8b090a-bf1d-465c-8414-62346fb5dee5","name":"Steamer","price":250,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":4,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"1c9b7325-0b61-43a2-876c-f76551358084","category_id":"fe8b090a-bf1d-465c-8414-62346fb5dee5","name":"Flex Shaft","price":250,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":5,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"69459ef9-3756-42ce-8441-e5a1658e6c81","category_id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Digging","price":20,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":1,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"af21b376-125b-4115-bda0-f5d25385c46b","category_id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Service Call","price":0,"job_code":"Sc","is_pump_job":false,"is_tank_job":false,"sort_order":2,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"0f80e805-8799-4357-8f4b-1035162bd50a","category_id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Filter Cleaning","price":0,"job_code":"Fc","is_pump_job":false,"is_tank_job":false,"sort_order":3,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"9834b76c-e44e-40c2-abd9-b11e02c34466","category_id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Radio Locate","price":0,"job_code":"Rl","is_pump_job":false,"is_tank_job":false,"sort_order":4,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"2b1a7fbe-5669-41f7-9c8e-7a714256b835","category_id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Jack Hammer","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":5,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"7d224115-8041-4350-a125-dfe071b175d2","category_id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Rootx Application","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":6,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"54687a0b-1713-45fe-be33-4927c234f10e","category_id":"ce5c3ac1-e282-4d68-ba88-676d75c87d40","name":"Automatic Filter Cleaning","price":0,"job_code":"Af","is_pump_job":false,"is_tank_job":false,"sort_order":7,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"6c9a5b85-ef0d-48ef-b755-61e71cded6fd","category_id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"Town Contract","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":1,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"e706da3e-54a4-4e55-9ad8-089bff7d14b4","category_id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"POTW","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":2,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"560d71f1-c274-4e96-ae9d-cebccd438ddf","category_id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"Semi Annual Sales and Use Tax Due","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":3,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"61d020d5-b586-4a29-8813-b341b8a8d876","category_id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"Quarterly DEP Disposal Report Due","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":4,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"cd2eeb3c-e837-453d-80b1-1a02555355dc","category_id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"Annual Signatory Letter to Rockland Waste Water","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":5,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"afb14ed6-2395-4eb4-bdc4-eab249264b4e","category_id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"ME Lab Reminder to Schedule Effluent Test","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":6,"created_at":"2026-03-15T23:30:54.785Z"},{"id":"a19c05b9-a7ad-4fac-9845-390db5639a5c","category_id":"4f7b99a2-5277-44cb-908f-f5541f5e91aa","name":"Mid-Coast Solid Waste Reminder","price":0,"job_code":"","is_pump_job":false,"is_tank_job":false,"sort_order":7,"created_at":"2026-03-15T23:30:54.785Z"}],
-  waste_sites: [{"name":"Interstate Septic Systems","address":"10 Gordon Dr","city":"Rockland","state":"ME","zip":"04841","contact_name":"","contact_phone":"","notes":"","is_default":true,"id":"a712273d-aa6f-4111-8bbf-4160e265ef24","created_at":"2026-03-14T21:22:43.520Z","updated_at":"2026-03-14T22:22:29.632Z","contact_email":"","state_license":"s-2006, dg g3 3553","waste_permit":"","disposal_rate":0,"hours_of_operation":"","certification_text":"","directions":""}],
-  geocode_cache: [{"id":"5706c23c-397b-4adb-a687-5a2e4b811aa4","address":"92 Patricia Ln, Spruce Head, ME","lat":43.9927409,"lng":-69.1731918},{"id":"f91a1f7c-aaec-41bc-9694-07a8098174f9","address":"6 Dodge Mountain Rd, Rockland, ME","lat":44.1325728,"lng":-69.1277074},{"id":"01ace698-e7b8-4097-9ace-7979fcdcb31b","address":"10 Winding Way, Rockport, ME","lat":44.134185,"lng":-69.105034},{"id":"f8b441e1-09c5-4d2a-92b4-ecd394c047a6","address":"5 Lighthouse Rd, Owls Head, ME","lat":44.084115,"lng":-69.0551306},{"id":"dced9ba8-d4ae-4448-846e-84ef0ef18da5","address":"104 Main St, Rockland, ME","lat":44.0996954,"lng":-69.1099196},{"id":"3ad5700b-8215-4d61-8494-04b485e70545","address":"2966 Atlantic Hwy, Waldoboro, ME","lat":44.109765,"lng":-69.3292486},{"id":"1da3d8bb-3f51-436e-b39c-cf130f94bbf6","address":"23 Wadsworth St, Thomaston, ME","lat":44.0764028,"lng":-69.1904585},{"id":"486fd735-e6c1-445b-a072-0d4796fcf2e5","address":"22 Pascal Ave, Rockport, ME","lat":44.1862587,"lng":-69.0751612},{"id":"b1afe5c2-c0f6-498c-9d94-7c81b373b74b","address":"33 Elm St, Camden, ME","lat":44.2092175,"lng":-69.0657255},{"id":"936567c5-c6ca-4dab-9e8f-eee632c8a764","address":"190 Union St, Rockport, ME","lat":44.191964,"lng":-69.071995},{"id":"7bcb3673-4a15-42a8-a9a6-b2d91c13e199","address":"88 Washington St, Camden, ME","lat":44.2137848,"lng":-69.0733987},{"id":"c30b5586-9eb4-44d7-90ff-d288afa2c883","address":"85 Beechwood St, Thomaston, ME","lat":44.0846389,"lng":-69.1801898},{"id":"974df6dc-14ae-4288-9b9a-3c61ffd46ef7","address":"250 Camden St, Rockland, ME","lat":44.1233932,"lng":-69.0995791},{"id":"104237d6-1afa-4abb-a298-ecf206716c7a","address":"15 River Rd, Cushing, ME","lat":44.0200585,"lng":-69.24465},{"id":"884a78a5-77c5-4909-a601-76755bc1ec59","address":"574 West St, Rockport, ME","lat":44.1829517,"lng":-69.1306374},{"id":"31a6cb1c-8244-412f-a111-b889c27c7ef6","address":"11 Mountain St, Camden, ME","lat":44.2130871,"lng":-69.0658997},{"id":"f091215b-843a-44c0-bf67-2e5008d3da15","address":"40 Knox St, Thomaston, ME","lat":44.0761463,"lng":-69.1816348},{"id":"cb9dda40-b3ae-4aec-8e69-b575010a1d7b","address":"44 Mechanic St, Rockland, ME","lat":44.0937291,"lng":-69.1073987},{"id":"5ab23105-c545-4f2c-a20d-fdcdb6211bee","address":"365 Main St, Rockland, ME","lat":44.1035655,"lng":-69.1089905},{"id":"a6078593-f677-4c54-99c7-9cae53cdd44d","address":"9 Clark Island Rd, Saint George, ME","lat":44.0115356,"lng":-69.1816837},{"id":"b3964541-76b1-4dcd-a41a-066519a8cd4c","address":"15 Spruce Head Rd, South Thomaston, ME","lat":44.0518044,"lng":-69.125461},{"id":"971b00f8-bcb0-451e-91ec-4c1b8e2002f1","address":"48 Sea St, Camden, ME","lat":44.2098356,"lng":-69.0593898},{"id":"aad4c42d-48ba-4f94-9657-446140c84b5e","address":"100 Limerock St, Rockland, ME","lat":44.1044872,"lng":-69.1146836},{"id":"9bd76940-dcde-43bf-9284-6a2a6a6ad775","address":"10 Gordon Drive, Rockland, ME","lat":44.0906458,"lng":-69.1179047},{"id":"9b8bc262-38ad-4d47-b376-e6944e5c8aef","address":"10 Gordon Dr, Rockland, ME","lat":44.0906458,"lng":-69.1179047},{"id":"6b5fdea2-959a-4dba-9f4a-b0d770cde5c7","address":"156 Wallston Rd, Tenants Harbor, ME","lat":43.9711136,"lng":-69.2274026},{"id":"d1caf9f2-8824-4f8e-a75e-80c4bbc2110a","address":"77 Port Clyde Rd, Saint George, ME","lat":43.9270653,"lng":-69.2592178}],
-  reminders: [{"message":"truck to wards monday for inspection","due_date":"2026-03-16","due_time":"08:00","assigned_users":["ca0d1315-b206-4ee4-81e6-a4052ccf8331"],"status":"pending","id":"882870f8-29e9-4f8d-a4d7-4201eee80821","created_at":"2026-03-15T16:17:48.694Z","updated_at":"2026-03-15T16:17:48.694Z"},{"message":"find ur probe","due_date":"2026-03-16","due_time":"07:00","assigned_users":["40fe9102-bf08-41db-81da-4a294504aeb1"],"status":"pending","id":"6ab0828d-b1f0-4db7-a7b4-8b57abb74742","created_at":"2026-03-15T16:18:15.958Z","updated_at":"2026-03-15T16:18:15.958Z"}],
-  service_due_notices: [{"customer_id":"0114fcdc-196e-42f9-8354-e278cc8686a9","property_id":"8a7ae9a6-42d1-403e-82d2-9faefc065bef","job_id":"f104160c-3b99-4a0a-b3d6-56bea68b9e61","service_type":"Pumping","due_date":"2029-03-15","method":"email","status":"pending","email_enabled":true,"interval_value":3,"interval_unit":"years","id":"3510c07d-8918-4cfa-a38f-29fd99088839","created_at":"2026-03-15T17:13:34.261Z","updated_at":"2026-03-15T17:13:34.261Z"},{"customer_id":"1f21cc92-1d48-497c-b02a-22801d068f10","property_id":"9f307160-ed62-45a2-a457-940f305e1a72","job_id":"3af7f50c-4338-4e8a-ab28-8abf8983aee1","service_type":"Pumping","due_date":"2029-03-15","method":"email","status":"pending","email_enabled":true,"interval_value":3,"interval_unit":"years","id":"078c96e5-200d-4607-8d6c-16b9f51fffca","created_at":"2026-03-15T18:04:14.426Z","updated_at":"2026-03-15T18:04:14.426Z"}]
+  "customers": [],
+  "jobs": [],
+  "users": [
+    {
+      "name": "Tyler",
+      "phone": "2075422259",
+      "username": "tyler",
+      "password_hash": "$2b$10$B1no5ua7ONjO.mHB6mFHwOuvgpxQP5810IM.segUgmvmpaMwNmxcG",
+      "role": "admin",
+      "id": "b2a44ce6-4a8f-485f-90a9-8777723e15ef",
+      "created_at": "2026-03-14T20:27:15.262Z",
+      "updated_at": "2026-03-14T20:27:15.262Z"
+    },
+    {
+      "name": "Clyde Collins",
+      "phone": "",
+      "username": "clyde.collins",
+      "role": "tech",
+      "id": "1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b",
+      "created_at": "2026-03-15T22:08:30.262Z",
+      "updated_at": "2026-03-15T22:08:30.262Z"
+    },
+    {
+      "name": "Dan Greiner",
+      "phone": "",
+      "username": "dan.greiner",
+      "role": "tech",
+      "id": "f71d2a24-03b2-436b-9d51-2d4a875fd031",
+      "created_at": "2026-03-15T22:08:30.263Z",
+      "updated_at": "2026-03-15T22:08:30.263Z"
+    },
+    {
+      "name": "Roy Grotton",
+      "phone": "",
+      "username": "roy.grotton",
+      "role": "tech",
+      "id": "aac46ea4-ad9c-4660-812d-0d44313f93d3",
+      "created_at": "2026-03-15T22:08:30.263Z",
+      "updated_at": "2026-03-15T22:08:30.263Z"
+    },
+    {
+      "name": "Josh Hallowell",
+      "phone": "",
+      "username": "josh.hallowell",
+      "role": "tech",
+      "id": "fffc57cf-8a2a-48c0-beea-db680be951d1",
+      "created_at": "2026-03-15T22:08:30.263Z",
+      "updated_at": "2026-03-15T22:08:30.263Z"
+    },
+    {
+      "name": "Chris",
+      "phone": "",
+      "username": "chris",
+      "role": "tech",
+      "id": "1940d691-3b28-4d03-931e-dd7a82464c43",
+      "created_at": "2026-03-15T22:08:30.263Z",
+      "updated_at": "2026-03-15T22:08:30.263Z"
+    }
+  ],
+  "properties": [],
+  "tanks": [],
+  "vehicles": [
+    {
+      "name": "2017 Mack",
+      "capacity_gallons": 4400,
+      "color": "#81b6b6",
+      "default_tech_id": null,
+      "plate": "",
+      "sort_order": 0,
+      "id": "16d4db35-1d59-4fb9-8daa-3d5101f45375",
+      "created_at": "2026-03-14T20:15:49.957Z",
+      "updated_at": "2026-03-14T20:16:27.716Z"
+    },
+    {
+      "name": "2016 Mack",
+      "capacity_gallons": 4400,
+      "color": "#1565c0",
+      "default_tech_id": null,
+      "plate": "",
+      "sort_order": 0,
+      "id": "129ebf19-b26d-4f62-894b-016ec624df63",
+      "created_at": "2026-03-14T20:16:04.206Z",
+      "updated_at": "2026-03-14T20:16:04.206Z"
+    },
+    {
+      "name": "2014 Mack",
+      "capacity_gallons": 4400,
+      "color": "#21c115",
+      "default_tech_id": "b2a44ce6-4a8f-485f-90a9-8777723e15ef",
+      "plate": "",
+      "sort_order": 0,
+      "id": "140f1d5e-f640-462a-915a-c64af2f55ae2",
+      "created_at": "2026-03-14T20:16:19.400Z",
+      "updated_at": "2026-03-14T20:31:39.599Z"
+    },
+    {
+      "name": "2004 Kenworth",
+      "capacity_gallons": 4200,
+      "color": "#5115c1",
+      "default_tech_id": null,
+      "plate": "",
+      "sort_order": 0,
+      "id": "0af2343a-04c4-4a3c-94bf-9daa0855c143",
+      "created_at": "2026-03-14T20:16:40.847Z",
+      "updated_at": "2026-03-14T20:16:40.847Z"
+    },
+    {
+      "name": "Service Truck",
+      "capacity_gallons": 0,
+      "color": "#878c92",
+      "default_tech_id": null,
+      "plate": "",
+      "sort_order": 0,
+      "id": "eeddf5aa-5819-4295-a8a6-7337726c9957",
+      "created_at": "2026-03-14T20:16:52.661Z",
+      "updated_at": "2026-03-14T20:16:52.661Z"
+    },
+    {
+      "name": "Box Truck",
+      "capacity_gallons": 0,
+      "color": "#737425",
+      "default_tech_id": null,
+      "plate": "",
+      "sort_order": 0,
+      "id": "dfbc2371-708f-4b99-b1b4-e74bad3492f7",
+      "created_at": "2026-03-14T20:17:11.519Z",
+      "updated_at": "2026-03-14T20:17:11.519Z"
+    }
+  ],
+  "invoices": [],
+  "service_categories": [
+    {
+      "id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Septic Truck Services",
+      "code": "Septic",
+      "sort_order": 1,
+      "created_at": "2026-03-15T23:30:54.775Z"
+    },
+    {
+      "id": "c4708965-4338-4b81-8fce-c963b8046b16",
+      "name": "Box Truck Services",
+      "code": "Box Tru",
+      "sort_order": 2,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "fe8b090a-bf1d-465c-8414-62346fb5dee5",
+      "name": "Service Truck",
+      "code": "Service",
+      "sort_order": 3,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Additional Services",
+      "code": "Additio",
+      "sort_order": 4,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "General",
+      "code": "Gen",
+      "sort_order": 5,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    }
+  ],
+  "service_products": [
+    {
+      "id": "2351ce18-965b-450e-b2bf-71e4600377c2",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Pumping",
+      "price": 250,
+      "job_code": "",
+      "is_pump_job": true,
+      "is_tank_job": true,
+      "sort_order": 1,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "5f136be3-25fc-4f3b-86c9-477d50fac1f8",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Septic Tank Waste Disposal",
+      "price": 140,
+      "job_code": "Su",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 2,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "ed6cf3ac-a3d4-4848-9d11-1f181a0edb89",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Holding Tank Waste Disposal",
+      "price": 130,
+      "job_code": "Hu",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 3,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "ad051153-3cbd-4da4-a223-f0a33a408a68",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Grease Tank Waste Disposal",
+      "price": 160,
+      "job_code": "Gu",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 4,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "80c72630-51b7-45dc-a599-c7154f3decb4",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Treatment Plant Waste Disposal",
+      "price": 140,
+      "job_code": "Tp",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 5,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "0726b544-e06c-420c-814a-94d1973cf5d5",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Liquid Seaweed Waste Disposal",
+      "price": 130,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 6,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "21af9ed2-bd7b-4907-b8e1-48ff71bbece8",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Brewery Waste Disposal",
+      "price": 140,
+      "job_code": "Bw",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 7,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "95e0d225-397c-4f10-b584-4f3ac4328fa0",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Non Septic/Non Hazardous Liquids Disposal",
+      "price": 140,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 8,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "2829f78f-d632-4cc0-9492-33ad913dd6fa",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Extra Hose",
+      "price": 10,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 9,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "6ac15ddb-bf6c-4959-9250-67c5b433ce44",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Expedited Service",
+      "price": 150,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 10,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "d8cb578c-a149-4d46-9043-546a49533bbc",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Interior Grease Trap",
+      "price": 260,
+      "job_code": "Ig",
+      "is_pump_job": true,
+      "is_tank_job": true,
+      "sort_order": 11,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "7eccfd3f-eff7-45fd-b501-8666b45b3e6a",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Less Than 100 Gallons Pump Out",
+      "price": 250,
+      "job_code": "",
+      "is_pump_job": true,
+      "is_tank_job": true,
+      "sort_order": 12,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "1d7043b8-1516-486b-a955-ff66d845dfa5",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "On Call Fee(pump truck)",
+      "price": 150,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 13,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "fdbe8b78-c035-4346-a6f2-6c5e04ecc43c",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Difficult Waste Disposal",
+      "price": 200,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 14,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "41c0139a-1248-4cd1-852d-3de8cf07c4ad",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Pump Truck Standby",
+      "price": 315,
+      "job_code": "Sb",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 15,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "c7b4eb1d-8e0f-4e78-8158-50e8e73fc74b",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Vinal Haven, North Haven, Islesboro Septic Pumping",
+      "price": 640,
+      "job_code": "Ip",
+      "is_pump_job": true,
+      "is_tank_job": true,
+      "sort_order": 16,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "918edcbf-da00-4411-8187-5099bf6c7c5f",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Pump Wet Well",
+      "price": 250,
+      "job_code": "Ww",
+      "is_pump_job": true,
+      "is_tank_job": true,
+      "sort_order": 17,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "b5e565f9-92df-4c3e-a5f8-17058470435a",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Brewery Waste Disposal",
+      "price": 145,
+      "job_code": "",
+      "is_pump_job": true,
+      "is_tank_job": false,
+      "sort_order": 18,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "31ea9bcb-bc8e-4458-b554-e5fdfed1f6e5",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Flat Rate Island Price",
+      "price": 3000,
+      "job_code": "",
+      "is_pump_job": true,
+      "is_tank_job": false,
+      "sort_order": 19,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "1fe1bbcf-a099-4df3-a851-3f7d65832dc6",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "North Haven Treatment Plant Pumping Flat Rate No Disposal",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 20,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "4e349679-2124-4ba4-b8ec-4c4d507acafb",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "North Haven Treatment Plant Pumping Flat Rate With Disposal",
+      "price": 2825,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 21,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "c6d3e5f7-0f90-46df-aa3f-627f0dd44800",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Vinalhaven Treatment Plant Pumping",
+      "price": 315,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 22,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "d5fe5c6c-c82a-445d-8e2d-5f52fefdcaa8",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Ferry Service Pumping",
+      "price": 260,
+      "job_code": "",
+      "is_pump_job": true,
+      "is_tank_job": false,
+      "sort_order": 23,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "86e8e490-f08b-4b65-9ced-cb05a3046cfd",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Vinalhaven Inspection",
+      "price": 1200,
+      "job_code": "Vi",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 24,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "c1605382-0e83-4c02-ab8b-6074b0177c52",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Inspection (North Haven, Islesboro Inspection)",
+      "price": 495,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 25,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "186e058f-769d-44a8-bd44-f8604d94ceaa",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Lobster/Fish Waste Pumping",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 26,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "a67f5802-d3b3-4392-8810-f5b82e73b1c3",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Lobster/Fish Waste Disposal",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 27,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "6d1d42ef-f06e-4ec0-b621-a9ccd06c87ab",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Island Transporter Island Jobs Flat Rate",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 28,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "9176d7d1-c5c2-4285-99bd-d7d22dd61cb2",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Vault Toilet Pumping",
+      "price": 0,
+      "job_code": "Vt",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 29,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "0ffaa7e5-3399-4ede-8b3e-9c92eb3ed8f4",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Vault Toilet Disposal",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 30,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "c77d9518-9397-4e36-8df7-e640389d5db2",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Island Standby Pumping (North Haven, Vinalhaven, Islesboro)",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": true,
+      "is_tank_job": true,
+      "sort_order": 31,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "4c623221-882b-48e7-bcad-5ebd80045974",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Island Sewer Inspection",
+      "price": 0,
+      "job_code": "Is",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 32,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "7184425f-52f8-4ebd-9392-d49b6ee41e3d",
+      "category_id": "617df698-01e6-4e18-aa80-8daa383c17c0",
+      "name": "Contracted Pumping",
+      "price": 0,
+      "job_code": "Co",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 33,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "73aa25a0-b089-4d74-a801-d3cf987c7cda",
+      "category_id": "c4708965-4338-4b81-8fce-c963b8046b16",
+      "name": "Drain Clearing (islands)",
+      "price": 550,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 1,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "c16ebc27-a9a1-404c-ade6-7a12213e9008",
+      "category_id": "c4708965-4338-4b81-8fce-c963b8046b16",
+      "name": "Drain Clearing",
+      "price": 275,
+      "job_code": "Dc",
+      "is_pump_job": true,
+      "is_tank_job": true,
+      "sort_order": 2,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "c1042ad6-e0b6-43f1-9b2e-ebe7c5cf5c02",
+      "category_id": "c4708965-4338-4b81-8fce-c963b8046b16",
+      "name": "On Call Fee(box truck)",
+      "price": 100,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 3,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "d9c516fd-ec06-4125-bf46-92d97c7f12f6",
+      "category_id": "c4708965-4338-4b81-8fce-c963b8046b16",
+      "name": "Additional Hour Drain Clearing",
+      "price": 250,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 4,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "3a1ff7c9-c5f7-4f15-bcf4-6e15abd2aeaa",
+      "category_id": "fe8b090a-bf1d-465c-8414-62346fb5dee5",
+      "name": "Sewer Line Inspection",
+      "price": 350,
+      "job_code": "Eli",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 1,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "58ca9790-719e-4b6e-b83b-196fa103a188",
+      "category_id": "fe8b090a-bf1d-465c-8414-62346fb5dee5",
+      "name": "Septic System Inspection",
+      "price": 340,
+      "job_code": "I",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 2,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "e474f80d-06fd-47bc-b107-1e03f84bee6e",
+      "category_id": "fe8b090a-bf1d-465c-8414-62346fb5dee5",
+      "name": "Camera",
+      "price": 250,
+      "job_code": "C",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 3,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "3dd01d69-daf4-4957-aff2-a1bdd68a68bc",
+      "category_id": "fe8b090a-bf1d-465c-8414-62346fb5dee5",
+      "name": "Steamer",
+      "price": 250,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 4,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "1c9b7325-0b61-43a2-876c-f76551358084",
+      "category_id": "fe8b090a-bf1d-465c-8414-62346fb5dee5",
+      "name": "Flex Shaft",
+      "price": 250,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 5,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "69459ef9-3756-42ce-8441-e5a1658e6c81",
+      "category_id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Digging",
+      "price": 20,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 1,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "af21b376-125b-4115-bda0-f5d25385c46b",
+      "category_id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Service Call",
+      "price": 0,
+      "job_code": "Sc",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 2,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "0f80e805-8799-4357-8f4b-1035162bd50a",
+      "category_id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Filter Cleaning",
+      "price": 0,
+      "job_code": "Fc",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 3,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "9834b76c-e44e-40c2-abd9-b11e02c34466",
+      "category_id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Radio Locate",
+      "price": 0,
+      "job_code": "Rl",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 4,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "2b1a7fbe-5669-41f7-9c8e-7a714256b835",
+      "category_id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Jack Hammer",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 5,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "7d224115-8041-4350-a125-dfe071b175d2",
+      "category_id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Rootx Application",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 6,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "54687a0b-1713-45fe-be33-4927c234f10e",
+      "category_id": "ce5c3ac1-e282-4d68-ba88-676d75c87d40",
+      "name": "Automatic Filter Cleaning",
+      "price": 0,
+      "job_code": "Af",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 7,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "6c9a5b85-ef0d-48ef-b755-61e71cded6fd",
+      "category_id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "Town Contract",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 1,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "e706da3e-54a4-4e55-9ad8-089bff7d14b4",
+      "category_id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "POTW",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 2,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "560d71f1-c274-4e96-ae9d-cebccd438ddf",
+      "category_id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "Semi Annual Sales and Use Tax Due",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 3,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "61d020d5-b586-4a29-8813-b341b8a8d876",
+      "category_id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "Quarterly DEP Disposal Report Due",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 4,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "cd2eeb3c-e837-453d-80b1-1a02555355dc",
+      "category_id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "Annual Signatory Letter to Rockland Waste Water",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 5,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "afb14ed6-2395-4eb4-bdc4-eab249264b4e",
+      "category_id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "ME Lab Reminder to Schedule Effluent Test",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 6,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    },
+    {
+      "id": "a19c05b9-a7ad-4fac-9845-390db5639a5c",
+      "category_id": "4f7b99a2-5277-44cb-908f-f5541f5e91aa",
+      "name": "Mid-Coast Solid Waste Reminder",
+      "price": 0,
+      "job_code": "",
+      "is_pump_job": false,
+      "is_tank_job": false,
+      "sort_order": 7,
+      "created_at": "2026-03-15T23:30:54.785Z"
+    }
+  ],
+  "waste_sites": [
+    {
+      "name": "Interstate Septic Systems",
+      "address": "10 Gordon Dr",
+      "city": "Rockland",
+      "state": "ME",
+      "zip": "04841",
+      "contact_name": "",
+      "contact_phone": "",
+      "notes": "",
+      "is_default": true,
+      "id": "a712273d-aa6f-4111-8bbf-4160e265ef24",
+      "created_at": "2026-03-14T21:22:43.520Z",
+      "updated_at": "2026-03-14T22:22:29.632Z",
+      "contact_email": "",
+      "state_license": "s-2006, dg g3 3553",
+      "waste_permit": "",
+      "disposal_rate": 0,
+      "hours_of_operation": "",
+      "certification_text": "",
+      "directions": ""
+    }
+  ],
+  "geocode_cache": [],
+  "reminders": [],
+  "service_due_notices": []
 };

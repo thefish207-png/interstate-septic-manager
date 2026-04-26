@@ -5,10 +5,109 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Interstate Septic Manager</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles-dark.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #findBar {
+      position: fixed; top: 10px; right: 14px; z-index: 99998;
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+      display: none; align-items: center; gap: 6px;
+      padding: 6px 8px; font-size: 13px;
+    }
+    #findBar.visible { display: flex; }
+    #findBar input {
+      background: var(--surface-hover); color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 8px; font-size: 13px; width: 220px; outline: none;
+    }
+    #findBar input:focus { border-color: var(--primary-light); }
+    #findBar .find-count { color: var(--text-light); font-size: 12px; min-width: 52px; text-align: center; }
+    #findBar button {
+      background: var(--surface-hover); color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 3px 8px; cursor: pointer; font-size: 13px; line-height: 1;
+    }
+    #findBar button:hover { background: var(--border); }
+  </style>
+  <script>
+    // Apply persisted theme before body renders to avoid flash
+    try {
+      if (localStorage.getItem('ism_theme') === 'dark') {
+        document.documentElement.classList.add('dark-theme-pre');
+      }
+    } catch(e) {}
+  </script>
+  <style>html.dark-theme-pre { background: #1a1d23; }</style>
 </head>
 <body>
+
+  <div id="findBar" role="dialog" aria-label="Find on page">
+    <input id="findInput" type="text" placeholder="Find…" autocomplete="off">
+    <span class="find-count" id="findCount">0/0</span>
+    <button id="findPrev" title="Previous (Shift+Enter)">&#9650;</button>
+    <button id="findNext" title="Next (Enter)">&#9660;</button>
+    <button id="findClose" title="Close (Esc)">&times;</button>
+  </div>
+  <script>
+    (function() {
+      const bar = document.getElementById('findBar');
+      const input = document.getElementById('findInput');
+      const count = document.getElementById('findCount');
+      function open() {
+        bar.classList.add('visible');
+        input.focus();
+        input.select();
+      }
+      function close() {
+        bar.classList.remove('visible');
+        count.textContent = '0/0';
+        if (window.api && window.api.stopFindInPage) window.api.stopFindInPage();
+      }
+      function search(findNext) {
+        const text = input.value;
+        if (!text) { count.textContent = '0/0'; if (window.api) window.api.stopFindInPage(); return; }
+        if (window.api && window.api.findInPage) window.api.findInPage(text, { findNext, forward: true });
+      }
+      function searchPrev() {
+        const text = input.value;
+        if (!text) return;
+        if (window.api && window.api.findInPage) window.api.findInPage(text, { findNext: true, forward: false });
+      }
+      document.addEventListener('keydown', e => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+          e.preventDefault();
+          open();
+          return;
+        }
+        if (e.key === 'Escape' && bar.classList.contains('visible')) {
+          e.preventDefault();
+          close();
+        }
+      });
+      input.addEventListener('input', () => search(false));
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (e.shiftKey) searchPrev(); else search(true);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          close();
+        }
+      });
+      document.getElementById('findNext').addEventListener('click', () => search(true));
+      document.getElementById('findPrev').addEventListener('click', searchPrev);
+      document.getElementById('findClose').addEventListener('click', close);
+      if (window.api && window.api.onFindInPageResult) {
+        window.api.onFindInPageResult(r => {
+          if (!r || !r.matches) { count.textContent = '0/0'; return; }
+          count.textContent = (r.activeMatch || 0) + '/' + r.matches;
+        });
+      }
+    })();
+  </script>
 
   <!-- LOGIN SCREEN -->
   <div id="loginScreen" class="auth-screen" style="display:none;">
@@ -66,42 +165,33 @@
     <div class="sidebar-header">
       <h2>ISM</h2>
       <div class="subtitle">Interstate Septic Manager</div>
+      <button id="sidebarCustomizeBtn" class="sidebar-customize-btn" title="Customize sidebar" aria-label="Customize sidebar"><span id="sidebarCustomizeIcon">&#128274;</span></button>
     </div>
-    <div class="sidebar-nav">
-      <button class="nav-item" data-page="dashboard">
-        <span class="nav-icon">&#9632;</span> Dashboard
-      </button>
-      <button class="nav-item active" data-page="schedule">
-        <span class="nav-icon">&#128197;</span> Schedule
-      </button>
-      <button class="nav-item" data-page="customers">
-        <span class="nav-icon">&#128101;</span> Customers
-      </button>
-      <button class="nav-item" data-page="invoices">
-        <span class="nav-icon">&#128196;</span> Invoices
-      </button>
-      <button class="nav-item" data-page="disposal">
-        <span class="nav-icon">&#128666;</span> Disposals
-      </button>
-      <button class="nav-item" data-page="sdn">
-        <span class="nav-icon">&#128197;</span> Service Due
-      </button>
-      <button class="nav-item" data-page="reports">
-        <span class="nav-icon">&#128200;</span> Reports
-      </button>
+    <div class="sidebar-nav" id="sidebarNav">
+      <button class="nav-item" data-page="dashboard"><span class="nav-icon">&#9632;</span> Dashboard</button>
       <div class="nav-divider"></div>
-      <button class="nav-item" data-page="dep">
-        <span class="nav-icon">&#128203;</span> DEP Reports
-      </button>
-      <button class="nav-item" data-page="vehicles">
-        <span class="nav-icon">&#128666;</span> Vehicles
-      </button>
-      <button class="nav-item" data-page="reminders">
-        <span class="nav-icon">&#128276;</span> Reminders
-      </button>
-      <button class="nav-item" data-page="settings">
-        <span class="nav-icon">&#9881;</span> Settings
-      </button>
+      <button class="nav-item" data-page="schedule"><span class="nav-icon">&#128197;</span> Schedule</button>
+      <button class="nav-item" data-page="jobs"><span class="nav-icon">&#128221;</span> Jobs</button>
+      <button class="nav-item" data-page="sdn"><span class="nav-icon">&#128197;</span> Service Due</button>
+      <button class="nav-item" data-page="afc"><span class="nav-icon">&#128388;</span> Filter Cleanings</button>
+      <button class="nav-item" data-page="disposal"><span class="nav-icon">&#128666;</span> Disposals</button>
+      <div class="nav-divider"></div>
+      <button class="nav-item" data-page="customers"><span class="nav-icon">&#128101;</span> Customers</button>
+      <button class="nav-item" data-page="messenger"><span class="nav-icon">&#128172;</span> Messenger</button>
+      <button class="nav-item" data-page="reminders"><span class="nav-icon">&#128276;</span> Reminders</button>
+      <div class="nav-divider"></div>
+      <button class="nav-item" data-page="invoices"><span class="nav-icon">&#128196;</span> Invoices</button>
+      <button class="nav-item" data-page="reports"><span class="nav-icon">&#128200;</span> Reports</button>
+      <div class="nav-divider"></div>
+      <button class="nav-item" data-page="motive"><span class="nav-icon">&#128663;</span> Motive</button>
+      <div class="nav-divider"></div>
+      <button class="nav-item" data-page="settings"><span class="nav-icon">&#9881;</span> Settings</button>
+      <button class="nav-item" data-page="trash"><span class="nav-icon">&#128465;</span> Recycling Bin</button>
+      <div id="sidebarHiddenDrawer" class="sidebar-hidden-drawer" style="display:none;">
+        <div class="sidebar-hidden-label">Hidden — click to restore</div>
+        <div id="sidebarHiddenList"></div>
+      </div>
+      <button id="sidebarResetBtn" class="sidebar-reset-btn" style="display:none;" title="Reset to default order">Reset to default</button>
     </div>
     <div class="sidebar-user" id="sidebarUser" style="display:none;">
       <div class="sidebar-user-info">
@@ -117,10 +207,45 @@
 
   <!-- Main Content -->
   <div class="main-content">
+    <div class="popup-topbar" id="popupTopbar" style="display:none;">
+      <span>&#128203; ISM</span>
+      <span class="popup-topbar-title" id="popupTopbarTitle"></span>
+      <button class="popup-topbar-refresh" onclick="popupRefresh()">&#8635; Refresh</button>
+      <button class="popup-topbar-dock" onclick="dockToMain()" title="Dock back to main window">&#8671; Dock</button>
+    </div>
+    <div class="tab-bar" id="tabBar" style="display:none;">
+      <div class="tab-list" id="tabList"></div>
+    </div>
     <div class="top-bar">
       <h1 id="pageTitle">Schedule</h1>
       <div class="top-bar-actions" id="pageActions"></div>
+      <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Toggle dark/light theme" style="margin-left:8px;">&#9790;</button>
     </div>
+    <script>
+      function applyTheme(mode) {
+        if (mode === 'dark') {
+          document.body.classList.add('dark-theme');
+          var btn = document.getElementById('themeToggleBtn');
+          if (btn) btn.innerHTML = '&#9728;';
+        } else {
+          document.body.classList.remove('dark-theme');
+          var btn = document.getElementById('themeToggleBtn');
+          if (btn) btn.innerHTML = '&#9790;';
+        }
+        document.documentElement.classList.remove('dark-theme-pre');
+      }
+      function toggleTheme() {
+        var isDark = document.body.classList.contains('dark-theme');
+        var next = isDark ? 'light' : 'dark';
+        try { localStorage.setItem('ism_theme', next); } catch(e) {}
+        applyTheme(next);
+      }
+      (function() {
+        var saved = 'light';
+        try { saved = localStorage.getItem('ism_theme') || 'light'; } catch(e) {}
+        applyTheme(saved);
+      })();
+    </script>
 
     <div class="page-content">
 
@@ -189,6 +314,9 @@
       <!-- SCHEDULE -->
       <div id="page-schedule" class="page active"></div>
 
+      <!-- JOBS (master list) -->
+      <div id="page-jobs" class="page"></div>
+
       <!-- INVOICES -->
       <div id="page-invoices" class="page"></div>
 
@@ -215,6 +343,45 @@
 
       <!-- SETTINGS -->
       <div id="page-settings" class="page"></div>
+
+      <!-- RECYCLING BIN -->
+      <div id="page-trash" class="page"></div>
+
+      <!-- AUTOMATIC FILTER CLEANINGS -->
+      <div id="page-afc" class="page"></div>
+      <!-- FACEBOOK MESSENGER -->
+      <div id="page-messenger" class="page" style="padding:0;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:#1a1a2e;border-bottom:1px solid #333;flex-shrink:0;">
+          <button class="motive-nav-btn" onclick="messengerGo(-1)" title="Back">&#9664;</button>
+          <button class="motive-nav-btn" onclick="messengerGo(1)" title="Forward">&#9654;</button>
+          <button class="motive-nav-btn" onclick="messengerReload()" title="Reload">&#x21bb;</button>
+          <button class="motive-nav-btn" onclick="messengerHome()" style="padding:4px 10px;font-size:11px;font-weight:700;">&#128172; Messenger</button>
+          <span id="messengerUrl" style="flex:1;font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+        </div>
+        <webview id="messengerWebview"
+          src="https://www.messenger.com"
+          partition="persist:messenger"
+          style="flex:1;width:100%;border:none;"
+          allowpopups>
+        </webview>
+      </div>
+
+      <div id="page-motive" class="page" style="padding:0;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:#1a1a2e;border-bottom:1px solid #333;flex-shrink:0;">
+          <button class="motive-nav-btn" onclick="motiveGo(-1)" title="Back">&#9664;</button>
+          <button class="motive-nav-btn" onclick="motiveGo(1)" title="Forward">&#9654;</button>
+          <button class="motive-nav-btn" onclick="motiveReload()" title="Reload">&#x21bb;</button>
+          <button class="motive-nav-btn" onclick="motiveHome()" title="Fleet View" style="padding:4px 10px;font-size:11px;font-weight:700;">&#128663; Fleet View</button>
+          <span id="motiveUrl" style="flex:1;font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+        </div>
+        <webview id="motiveWebview"
+          src="https://app.gomotive.com/en-US/#/fleetview/map"
+          partition="persist:motive"
+          useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          style="flex:1;width:100%;border:none;"
+          allowpopups>
+        </webview>
+      </div>
 
     </div>
   </div>

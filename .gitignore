@@ -1,6 +1,33 @@
 node_modules/
 pwa/
 
+# Build output
+dist/
+out/
+*.exe
+*.dmg
+
+# Claude Code working directory
+.claude/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+.vscode/
+.idea/
+
+# Local secrets / sessions (just in case they ever land in repo dir)
+supabase-session.json
+.env
+.env.local
+
+# Backup files and stray business data
+*.backup_*
+*.backup
+Disposal_Record_*.pdf
+
 # Temp debug/seed scripts (not part of the app)
 debug_auth.js
 debug_read.js

@@ -26,15 +26,280 @@ let allCustomers = [];
 let allJobs = [];
 let currentUser = null; // { id, name, role, username }
 
+// ===== POPUP MODE =====
+const _popupParams = new URLSearchParams(window.location.search);
+const _isPopup = _popupParams.get('popup') === '1';
+const _popupPage = _popupParams.get('page') || 'schedule';
+const _popupId   = _popupParams.get('id') || null;
+
+function popoutPage(page, title) {
+  window.api.openPopupWindow({ page, title: 'ISM — ' + title });
+}
+
+function popupRefresh() {
+  navigateTo(_popupPage);
+}
+
 // ===== INIT =====
 document.addEventListener('DOMContentLoaded', () => {
   checkAuth();
+  installCustomTooltip();
+  installZoomIndicator();
+  initSidebarCustomization();
 });
 
-// ===== AUTH =====
+// ===== Sidebar customization (lock/unlock, drag reorder, hide/restore) =====
+const SIDEBAR_STORAGE_KEY = 'ism_sidebar_layout_v1';
+function loadSidebarLayout() {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    if (!raw) return { order: null, hidden: [] };
+    const parsed = JSON.parse(raw);
+    return { order: Array.isArray(parsed.order) ? parsed.order : null, hidden: Array.isArray(parsed.hidden) ? parsed.hidden : [] };
+  } catch { return { order: null, hidden: [] }; }
+}
+function saveSidebarLayout(layout) {
+  try { localStorage.setItem(SIDEBAR_STORAGE_KEY, JSON.stringify(layout)); } catch {}
+}
+function getSidebarPages() {
+  return Array.from(document.querySelectorAll('.sidebar-nav .nav-item')).map(b => b.dataset.page);
+}
+function applySidebarLayout() {
+  const nav = document.getElementById('sidebarNav');
+  if (!nav) return;
+  const { order, hidden } = loadSidebarLayout();
+  const items = Array.from(nav.querySelectorAll('.nav-item'));
+  const byPage = new Map(items.map(el => [el.dataset.page, el]));
+  // If a saved order exists, remove dividers and append items in custom order
+  if (order && order.length) {
+    nav.querySelectorAll('.nav-divider').forEach(d => d.remove());
+    order.forEach(page => {
+      const el = byPage.get(page);
+      if (el) nav.insertBefore(el, document.getElementById('sidebarHiddenDrawer'));
+    });
+    // Any items not in saved order (new pages added later) — append at end
+    items.forEach(el => {
+      if (!order.includes(el.dataset.page)) {
+        nav.insertBefore(el, document.getElementById('sidebarHiddenDrawer'));
+      }
+    });
+  }
+  // Apply hidden state
+  items.forEach(el => {
+    el.style.display = hidden.includes(el.dataset.page) ? 'none' : '';
+  });
+  renderHiddenDrawer();
+}
+function renderHiddenDrawer() {
+  const { hidden } = loadSidebarLayout();
+  const drawer = document.getElementById('sidebarHiddenDrawer');
+  const list = document.getElementById('sidebarHiddenList');
+  const resetBtn = document.getElementById('sidebarResetBtn');
+  const unlocked = document.querySelector('.sidebar')?.classList.contains('unlocked');
+  if (!drawer || !list) return;
+  list.innerHTML = '';
+  hidden.forEach(page => {
+    const label = PAGE_LABELS[page] || page;
+    const chip = document.createElement('button');
+    chip.className = 'sidebar-hidden-chip';
+    chip.textContent = '＋ ' + label;
+    chip.addEventListener('click', () => restoreSidebarItem(page));
+    list.appendChild(chip);
+  });
+  drawer.style.display = (unlocked && hidden.length > 0) ? '' : 'none';
+  if (resetBtn) resetBtn.style.display = unlocked ? '' : 'none';
+}
+function hideSidebarItem(page) {
+  const layout = loadSidebarLayout();
+  if (!layout.hidden.includes(page)) layout.hidden.push(page);
+  saveSidebarLayout(layout);
+  applySidebarLayout();
+}
+function restoreSidebarItem(page) {
+  const layout = loadSidebarLayout();
+  layout.hidden = layout.hidden.filter(p => p !== page);
+  saveSidebarLayout(layout);
+  applySidebarLayout();
+}
+function persistCurrentOrder() {
+  const nav = document.getElementById('sidebarNav');
+  if (!nav) return;
+  const order = Array.from(nav.querySelectorAll('.nav-item')).map(b => b.dataset.page);
+  const layout = loadSidebarLayout();
+  layout.order = order;
+  saveSidebarLayout(layout);
+}
+function resetSidebarLayout() {
+  if (!confirm('Reset sidebar to default order and show all items?')) return;
+  localStorage.removeItem(SIDEBAR_STORAGE_KEY);
+  location.reload();
+}
+function attachSidebarDragHandlers() {
+  const nav = document.getElementById('sidebarNav');
+  if (!nav) return;
+  let dragEl = null;
+  nav.querySelectorAll('.nav-item').forEach(el => {
+    el.addEventListener('dragstart', (e) => {
+      if (!document.querySelector('.sidebar').classList.contains('unlocked')) { e.preventDefault(); return; }
+      dragEl = el;
+      el.classList.add('nav-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', el.dataset.page); } catch {}
+    });
+    el.addEventListener('dragend', () => {
+      el.classList.remove('nav-dragging');
+      nav.querySelectorAll('.drag-over-top,.drag-over-bottom').forEach(n => n.classList.remove('drag-over-top','drag-over-bottom'));
+      dragEl = null;
+      persistCurrentOrder();
+    });
+    el.addEventListener('dragover', (e) => {
+      if (!dragEl || dragEl === el) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      el.classList.toggle('drag-over-top', before);
+      el.classList.toggle('drag-over-bottom', !before);
+    });
+    el.addEventListener('dragleave', () => {
+      el.classList.remove('drag-over-top','drag-over-bottom');
+    });
+    el.addEventListener('drop', (e) => {
+      if (!dragEl || dragEl === el) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      // Remove all dividers on first reorder — layout is now fully custom
+      nav.querySelectorAll('.nav-divider').forEach(d => d.remove());
+      if (before) nav.insertBefore(dragEl, el);
+      else nav.insertBefore(dragEl, el.nextSibling);
+      el.classList.remove('drag-over-top','drag-over-bottom');
+    });
+  });
+}
+function injectSidebarHideButtons() {
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(el => {
+    if (el.querySelector('.nav-hide-btn')) return;
+    const btn = document.createElement('button');
+    btn.className = 'nav-hide-btn';
+    btn.type = 'button';
+    btn.title = 'Hide from sidebar';
+    btn.textContent = '×';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideSidebarItem(el.dataset.page);
+    });
+    el.appendChild(btn);
+  });
+}
+function toggleSidebarUnlock() {
+  const sidebar = document.querySelector('.sidebar');
+  const icon = document.getElementById('sidebarCustomizeIcon');
+  const unlocked = sidebar.classList.toggle('unlocked');
+  if (icon) icon.innerHTML = unlocked ? '&#128275;' : '&#128274;';
+  const btn = document.getElementById('sidebarCustomizeBtn');
+  if (btn) btn.title = unlocked ? 'Lock sidebar' : 'Customize sidebar';
+  // Only make items draggable while unlocked — otherwise the browser can
+  // intercept clicks as potential drags and swallow the navigation.
+  sidebar.querySelectorAll('.nav-item').forEach(el => {
+    if (unlocked) el.setAttribute('draggable', 'true');
+    else el.removeAttribute('draggable');
+  });
+  renderHiddenDrawer();
+}
+function initSidebarCustomization() {
+  applySidebarLayout();
+  injectSidebarHideButtons();
+  attachSidebarDragHandlers();
+  const btn = document.getElementById('sidebarCustomizeBtn');
+  if (btn) btn.addEventListener('click', toggleSidebarUnlock);
+  const resetBtn = document.getElementById('sidebarResetBtn');
+  if (resetBtn) resetBtn.addEventListener('click', resetSidebarLayout);
+}
+
+function installZoomIndicator() {
+  const el = document.createElement('div');
+  el.id = '__zoomBadge';
+  el.style.cssText = 'position:fixed;bottom:14px;right:14px;z-index:99998;padding:6px 12px;background:rgba(20,20,20,0.78);color:#fff;border:1px solid rgba(255,255,255,0.12);border-radius:999px;font-size:12px;font-weight:600;font-family:system-ui,sans-serif;letter-spacing:0.3px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 4px 14px rgba(0,0,0,0.35);opacity:0;transition:opacity 0.25s ease;pointer-events:none;';
+  el.textContent = '100%';
+  document.body.appendChild(el);
+  let hideTimer = null;
+  const show = (pct) => {
+    el.textContent = pct + '%';
+    el.style.opacity = pct === 100 ? '0.55' : '1';
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { el.style.opacity = '0'; }, 1500);
+  };
+  if (window.api && window.api.onZoomChanged) {
+    window.api.onZoomChanged(({ percent }) => show(percent));
+  }
+}
+
+// Custom tooltip for [data-tip] elements — renders above the cursor so it doesn't obscure the target.
+function installCustomTooltip() {
+  let tipEl = null;
+  function ensure() {
+    if (tipEl) return tipEl;
+    tipEl = document.createElement('div');
+    tipEl.id = '__customTip';
+    tipEl.style.cssText = 'position:fixed;z-index:99999;padding:6px 10px;background:#222;color:#fff;border:1px solid #555;border-radius:4px;font-size:12px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.4);display:none;';
+    document.body.appendChild(tipEl);
+    return tipEl;
+  }
+  document.addEventListener('mouseover', e => {
+    const t = e.target.closest('[data-tip]');
+    if (!t) return;
+    const el = ensure();
+    el.textContent = t.getAttribute('data-tip');
+    el.style.display = 'block';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!tipEl || tipEl.style.display === 'none') return;
+    const t = e.target.closest('[data-tip]');
+    if (!t) { tipEl.style.display = 'none'; return; }
+    const pad = 14;
+    let x = e.clientX + 12;
+    let y = e.clientY - tipEl.offsetHeight - pad;
+    if (y < 4) y = e.clientY + pad + 8;
+    if (x + tipEl.offsetWidth > window.innerWidth - 4) x = window.innerWidth - tipEl.offsetWidth - 4;
+    tipEl.style.left = x + 'px';
+    tipEl.style.top = y + 'px';
+  });
+  document.addEventListener('mouseout', e => {
+    if (!tipEl) return;
+    if (!e.relatedTarget || !e.relatedTarget.closest || !e.relatedTarget.closest('[data-tip]')) {
+      tipEl.style.display = 'none';
+    }
+  });
+}
+
+// ===== AUTH (Supabase) =====
 async function checkAuth() {
-  currentUser = { id: 1, name: 'Admin', role: 'admin', username: 'admin' };
-  enterApp();
+  // Check if Supabase is configured
+  const status = await window.api.cloudConfigStatus();
+  if (!status || !status.configured) {
+    // Fallback to legacy bypass if Supabase isn't set up yet
+    currentUser = { id: 1, name: 'Admin', role: 'owner', username: 'admin' };
+    enterApp();
+    return;
+  }
+
+  // Try to restore an existing session
+  const restore = await window.api.cloudRestoreSession();
+  if (restore && restore.success) {
+    currentUser = {
+      id: restore.user.id,
+      name: restore.user.name,
+      role: restore.user.role,
+      username: restore.user.username,
+      color: restore.user.color,
+      phone: restore.user.phone
+    };
+    enterApp();
+    return;
+  }
+
+  // No valid session — show login screen
+  showScreen('login');
 }
 
 function showScreen(screen) {
@@ -105,10 +370,35 @@ async function doLogin() {
     return;
   }
 
+  // Try Supabase login first
+  const cloudStatus = await window.api.cloudConfigStatus();
+  if (cloudStatus && cloudStatus.configured) {
+    const result = await window.api.cloudLogin(username, password);
+    if (result.success) {
+      currentUser = {
+        id: result.user.id,
+        name: result.user.name,
+        role: result.user.role,
+        username: result.user.username,
+        color: result.user.color,
+        phone: result.user.phone
+      };
+      localStorage.setItem('ism_saved_username', username);
+      // Don't save password to localStorage anymore — session is persisted on disk by main process
+      localStorage.removeItem('ism_saved_password');
+      errorEl.style.display = 'none';
+      enterApp();
+      return;
+    }
+    errorEl.textContent = result.error || 'Login failed.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  // Fallback to legacy local auth (only used if Supabase isn't configured)
   const result = await window.api.authLogin(username, password);
   if (result.success) {
     currentUser = result.data;
-    // Save credentials so they pre-fill next time
     localStorage.setItem('ism_saved_username', username);
     localStorage.setItem('ism_saved_password', password);
     enterApp();
@@ -121,6 +411,51 @@ async function doLogin() {
 function enterApp() {
   showScreen('app');
 
+  // Wire up auto-update notifications (idempotent — only attaches once)
+  if (window.api?.onUpdateAvailable && !window._updateListenersAttached) {
+    window._updateListenersAttached = true;
+    window.api.onUpdateAvailable((info) => {
+      try { showToast('New version v' + info.version + ' available — downloading…', 'info'); } catch {}
+    });
+    window.api.onUpdateReady((info) => {
+      // Persistent banner — clicking it triggers install
+      const existing = document.getElementById('updateReadyBanner');
+      if (existing) existing.remove();
+      const banner = document.createElement('div');
+      banner.id = 'updateReadyBanner';
+      banner.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1565c0;color:white;padding:14px 18px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.3);z-index:99999;font-size:14px;cursor:pointer;display:flex;gap:10px;align-items:center;max-width:360px;';
+      banner.innerHTML = '<strong>Update v' + info.version + ' ready</strong> <span style="opacity:.85;">Click to restart and install</span>';
+      banner.onclick = async () => {
+        banner.innerHTML = '<strong>Restarting…</strong>';
+        try { await window.api.installUpdateNow(); } catch (e) { banner.innerHTML = 'Install failed: ' + e.message; }
+      };
+      document.body.appendChild(banner);
+    });
+  }
+
+  if (_isPopup) {
+    // Popup window: hide sidebar, show minimal topbar
+    document.body.classList.add('popup-mode');
+    const topbar = document.getElementById('popupTopbar');
+    const titleEl = document.getElementById('popupTopbarTitle');
+    if (topbar) topbar.style.display = 'flex';
+    if (titleEl) {
+      const labels = { schedule:'Schedule', customers:'Customers', invoices:'Invoices',
+        disposal:'Disposals', sdn:'Service Due', reports:'Reports', dep:'DEP Reports',
+        vehicles:'Vehicles', reminders:'Reminders', settings:'Settings', dashboard:'Dashboard' };
+      titleEl.textContent = labels[_popupPage] || _popupPage;
+    }
+    setupNavigation();
+    // If it's a job detail popup, open that job; otherwise navigate to the page
+    if (_popupPage === 'job' && _popupId) {
+      navigateTo('customers'); // need app shell active
+      openJobDetail(_popupId);
+    } else {
+      navigateTo(_popupPage);
+    }
+    return;
+  }
+
   // Show user info in sidebar
   document.getElementById('sidebarUserName').textContent = currentUser.name;
   document.getElementById('sidebarUserRole').textContent = currentUser.role;
@@ -130,8 +465,50 @@ function enterApp() {
   applyPermissions();
 
   setupNavigation();
-  navigateTo('schedule');
+
+  // Show tab bar and open Schedule (on today's date) as default tab
+  const tabBarEl = document.getElementById('tabBar');
+  if (tabBarEl) tabBarEl.style.display = 'block';
+  scheduleDate = new Date();
+  scheduleView = 'day';
+  openTab('schedule');
+
+  // Keep schedule anchored on "today" when the app is re-shown after the
+  // clock has rolled to a new day (e.g. left running overnight / minimised to tray)
+  const rollToTodayIfStale = () => {
+    if (document.hidden) return;
+    const now = new Date();
+    if (scheduleView === 'day' && formatDate(scheduleDate) !== formatDate(now)) {
+      scheduleDate = now;
+      if (activeTabPage === 'schedule') loadSchedule();
+    }
+  };
+  document.addEventListener('visibilitychange', rollToTodayIfStale);
+  window.addEventListener('focus', rollToTodayIfStale);
+
+  // Listen for dock-page events from popup windows
+  if (window.api.onDockPage) {
+    window.api.onDockPage((page) => openTab(page));
+  }
+
+  // Highlight tab bar when a popup is dragged near it
+  if (window.api.onPopupNearTabbar) {
+    window.api.onPopupNearTabbar(({ near }) => {
+      const tabBarEl = document.getElementById('tabBar');
+      if (tabBarEl) tabBarEl.classList.toggle('tab-bar-drop-zone', near);
+    });
+  }
+
   updateReminderBadge();
+
+  // Warm the customer search cache in the background so the first
+  // "New Appointment" modal doesn't pay a ~1s IPC round-trip
+  setTimeout(() => {
+    try { _loadJobModalCustomers().catch(() => {}); } catch {}
+  }, 500);
+
+  // Start messenger badge listener — webview loads in background even if user never visits the tab
+  setTimeout(() => _initMessengerBadge(), 2000);
 
   // Listen for reminder alerts from main process
   if (window.api.onReminderAlert) {
@@ -145,6 +522,41 @@ function enterApp() {
       const name = data.customerName ? ` from ${data.customerName}` : '';
       showToast(`Customer confirmed${name} — reminders stopped.`, 'success', 8000);
       if (currentPage === 'sdn') loadServiceDueNotices();
+    });
+  }
+
+  // Live data broadcast — refresh current page when any window saves data
+  if (window.api.onDataChanged) {
+    let _refreshTimer = null;
+    window.api.onDataChanged(() => {
+      // Debounce — multiple saves in quick succession only trigger one refresh
+      clearTimeout(_refreshTimer);
+      _refreshTimer = setTimeout(() => {
+        // Don't refresh while a modal is open — it would destroy the user's in-progress edits
+        const modalOpen = document.getElementById('modalOverlay')?.classList.contains('active');
+        if (modalOpen) return;
+        const refreshMap = {
+          schedule: loadSchedule,
+          customers: loadCustomers,
+          invoices: loadInvoices,
+          disposal: loadDisposals,
+          sdn: loadServiceDueNotices,
+          reports: loadReports,
+          dep: loadDep,
+          vehicles: loadVehicles,
+          reminders: loadReminders,
+          dashboard: loadDashboard,
+        };
+        const fn = refreshMap[currentPage];
+        if (fn) fn();
+        // Schedule map overlay: refresh its internal state too when open, so
+        // manifest/job edits made from the day view (or any other surface)
+        // show up on the map without requiring a toggle-off/on.
+        if (currentPage === 'schedule' && scheduleMapVisible && typeof refreshMapData === 'function') {
+          refreshMapData();
+        }
+        updateReminderBadge();
+      }, 400);
     });
   }
 }
@@ -187,12 +599,25 @@ function applyPermissions() {
 }
 
 function isAdmin() {
-  return currentUser && currentUser.role === 'admin';
+  // 'owner' (cloud) and 'admin' (legacy) both grant admin privileges
+  return currentUser && (currentUser.role === 'owner' || currentUser.role === 'admin');
 }
 
-function doLogout() {
+function isOffice() {
+  return currentUser && currentUser.role === 'office';
+}
+
+function isOwnerOrOffice() {
+  return isAdmin() || isOffice();
+}
+
+async function doLogout() {
+  // Sign out of Supabase if applicable
+  try { await window.api.cloudLogout(); } catch {}
   currentUser = null;
   document.getElementById('sidebarUser').style.display = 'none';
+  // Clear saved credentials so the login screen is empty next time
+  localStorage.removeItem('ism_saved_password');
   // Reset nav visibility
   document.querySelectorAll('.nav-item').forEach(item => {
     item.style.display = '';
@@ -212,18 +637,200 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ===== NAVIGATION =====
+const PAGE_LABELS = {
+  dashboard:'Dashboard', schedule:'Schedule', jobs:'Jobs', customers:'Customers',
+  invoices:'Invoices', disposal:'Disposals', sdn:'Service Due', afc:'Filter Cleanings',
+  reports:'Reports', motive:'Motive', messenger:'Messenger',
+  dep:'DEP Reports', vehicles:'Vehicles',
+  reminders:'Reminders', settings:'Settings', trash:'Recycling Bin'
+};
+
 function setupNavigation() {
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.addEventListener('click', () => {
-      navigateTo(item.dataset.page);
+  // Event delegation on the sidebar-nav container so clicks always land on the
+  // right page even after drag-reordering rearranges the DOM.
+  const nav = document.getElementById('sidebarNav') || document.querySelector('.sidebar-nav');
+  if (nav && !nav._ismNavWired) {
+    nav._ismNavWired = true;
+    nav.addEventListener('click', (e) => {
+      // Ignore clicks on the inline hide button, reset button, or hidden-drawer chips
+      if (e.target.closest('.nav-hide-btn, .sidebar-reset-btn, .sidebar-hidden-chip')) return;
+      const item = e.target.closest('.nav-item');
+      if (!item || !nav.contains(item)) return;
+      const page = item.dataset.page;
+      if (!page) return;
+      if (_isPopup) navigateTo(page);
+      else openTab(page);
     });
-  });
+    nav.addEventListener('contextmenu', (e) => {
+      const item = e.target.closest('.nav-item');
+      if (!item || !nav.contains(item)) return;
+      e.preventDefault();
+      if (_isPopup) return;
+      const page = item.dataset.page;
+      const label = PAGE_LABELS[page] || page;
+      popoutPage(page, label);
+    });
+  }
+}
+
+// ===== TAB SYSTEM =====
+let openTabs = [];       // [{ page, label }]
+let activeTabPage = null;
+
+function openTab(page) {
+  const label = PAGE_LABELS[page] || page;
+  if (!openTabs.find(t => t.page === page)) {
+    openTabs.push({ page, label });
+  }
+  switchTab(page);
+}
+
+function switchTab(page) {
+  activeTabPage = page;
+  renderTabBar();
+  navigateTo(page);
+}
+
+function closeTab(page) {
+  const idx = openTabs.findIndex(t => t.page === page);
+  if (idx === -1) return;
+  openTabs.splice(idx, 1);
+
+  if (activeTabPage === page) {
+    // Switch to adjacent tab or show hub
+    const next = openTabs[Math.min(idx, openTabs.length - 1)];
+    if (next) {
+      switchTab(next.page);
+    } else {
+      activeTabPage = null;
+      renderTabBar();
+      loadHub();
+    }
+  } else {
+    renderTabBar();
+  }
+}
+
+function detachTab(page) {
+  const label = PAGE_LABELS[page] || page;
+  window.api.openPopupWindow({ page, title: 'ISM — ' + label });
+  closeTab(page);
+}
+
+function renderTabBar() {
+  const tabBar = document.getElementById('tabBar');
+  const tabList = document.getElementById('tabList');
+  if (!tabBar || !tabList) return;
+
+  tabBar.style.display = openTabs.length > 0 ? 'block' : 'none';
+
+  tabList.innerHTML = openTabs.map(t => `
+    <div class="tab-item${t.page === activeTabPage ? ' active' : ''}"
+         data-page="${t.page}"
+         id="tab-${t.page}"
+         onpointerdown="tabMouseDown(event, '${t.page}')">
+      <span class="tab-label" onclick="event.stopPropagation(); switchTab('${t.page}')">${t.label}</span>
+      <button class="tab-close" onpointerdown="event.stopPropagation()" onclick="event.stopPropagation(); closeTab('${t.page}')" title="Close">&times;</button>
+    </div>
+  `).join('');
+}
+
+// ===== TAB DRAG-TO-DETACH / REORDER =====
+let _tabDrag = null; // { page, startX, startY, ghost, detached, lastReorderIdx }
+
+function tabMouseDown(e, page) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+
+  // Don't switch tab yet — wait to see if this is a click or a drag
+  const idx = openTabs.findIndex(t => t.page === page);
+
+  // Capture on tabList (stable element that survives renderTabBar rebuilds)
+  const captureEl = document.getElementById('tabList');
+  if (!captureEl) return;
+
+  _tabDrag = { page, startX: e.clientX, startY: e.clientY, ghost: null, detached: false, origIdx: idx, target: captureEl, pointerId: e.pointerId, moved: false };
+
+  try { captureEl.setPointerCapture(e.pointerId); } catch {}
+  captureEl.addEventListener('pointermove', _tabDragMove);
+  captureEl.addEventListener('pointerup', _tabDragEnd);
+  captureEl.addEventListener('pointercancel', _tabDragEnd);
+}
+
+function _tabDragMove(e) {
+  if (!_tabDrag || _tabDrag.detached) return;
+  const dx = e.clientX - _tabDrag.startX;
+  const dy = e.clientY - _tabDrag.startY;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  if (dist < 6) return;
+
+  _tabDrag.moved = true;
+
+  const tabBarEl = document.getElementById('tabBar');
+  const tabBarRect = tabBarEl ? tabBarEl.getBoundingClientRect() : null;
+  const inTabBar = tabBarRect && e.clientY >= tabBarRect.top - 10 && e.clientY <= tabBarRect.bottom + 20;
+
+  if (inTabBar) {
+    // Reorder within tab bar by X position
+    const tabEls = [...document.querySelectorAll('#tabList .tab-item')];
+    let targetIdx = openTabs.length;
+    for (let i = 0; i < tabEls.length; i++) {
+      const r = tabEls[i].getBoundingClientRect();
+      if (e.clientX < r.left + r.width / 2) { targetIdx = i; break; }
+    }
+    const currentIdx = openTabs.findIndex(t => t.page === _tabDrag.page);
+    if (currentIdx !== -1 && targetIdx !== currentIdx && targetIdx !== currentIdx + 1) {
+      const tab = openTabs.splice(currentIdx, 1)[0];
+      const insertAt = targetIdx > currentIdx ? targetIdx - 1 : targetIdx;
+      openTabs.splice(Math.max(0, insertAt), 0, tab);
+      // Re-render but preserve pointer capture on tabList
+      renderTabBar();
+    }
+  } else if (dist > 30) {
+    // Dragged well outside the tab bar — detach as native OS window
+    _tabDrag.detached = true;
+    const page = _tabDrag.page;
+    _tabDragCleanup(e);
+    _tabDrag = null;
+    detachTab(page);
+  }
+}
+
+function _tabDragCleanup(e) {
+  if (!_tabDrag) return;
+  if (_tabDrag.target) {
+    _tabDrag.target.removeEventListener('pointermove', _tabDragMove);
+    _tabDrag.target.removeEventListener('pointerup', _tabDragEnd);
+    _tabDrag.target.removeEventListener('pointercancel', _tabDragEnd);
+    try { _tabDrag.target.releasePointerCapture(_tabDrag.pointerId); } catch {}
+  }
+  if (_tabDrag.ghost) _tabDrag.ghost.remove();
+  const origTab = document.getElementById('tab-' + _tabDrag.page);
+  if (origTab) origTab.style.opacity = '';
+}
+
+function _tabDragEnd(e) {
+  if (!_tabDrag) return;
+  const { page, moved } = _tabDrag;
+  _tabDragCleanup(e);
+  _tabDrag = null;
+  // If no drag movement, treat as a click — switch to the tab
+  if (!moved) switchTab(page);
+}
+
+// ===== RE-ATTACH (popup → main window tab) =====
+function dockToMain() {
+  if (!_isPopup) return;
+  if (window.api.dockToMain) {
+    window.api.dockToMain(_popupPage);
+  }
 }
 
 function navigateTo(page) {
   currentPage = page;
 
   // Clean up schedule map if leaving schedule
+  clearInterval(_motiveMapRefreshTimer);
   if (scheduleMapInstance) {
     scheduleMapInstance.remove();
     scheduleMapInstance = null;
@@ -244,6 +851,8 @@ function navigateTo(page) {
     dashboard: 'Dashboard',
     customers: 'Customers',
     schedule: 'Schedule',
+    jobs: 'Jobs',
+    motive: 'Motive',
     invoices: 'Invoices',
     vehicles: 'Vehicles',
     wastesites: 'Waste Sites',
@@ -256,10 +865,99 @@ function navigateTo(page) {
   };
   document.getElementById('pageTitle').textContent = titles[page] || page;
 
+  // Messenger page: ensure webview is loaded, no JS loader needed
+  if (page === 'messenger') {
+    const wv = document.getElementById('messengerWebview');
+    if (wv) {
+      const checkBlank = () => {
+        try {
+          const url = wv.getURL();
+          if (!url || url === 'about:blank') wv.loadURL('https://www.messenger.com');
+          const urlEl = document.getElementById('messengerUrl');
+          if (urlEl) urlEl.textContent = url || '';
+        } catch (_) {}
+      };
+      setTimeout(checkBlank, 300);
+      wv.addEventListener('did-navigate', () => {
+        const urlEl = document.getElementById('messengerUrl');
+        try { if (urlEl) urlEl.textContent = wv.getURL(); } catch (_) {}
+      });
+      wv.addEventListener('did-navigate-in-page', () => {
+        const urlEl = document.getElementById('messengerUrl');
+        try { if (urlEl) urlEl.textContent = wv.getURL(); } catch (_) {}
+      });
+      // Wire up unread badge detection (idempotent — safe to call multiple times)
+      wv.addEventListener('did-finish-load', () => _initMessengerBadge(), { once: true });
+      _initMessengerBadge(); // also try immediately in case already loaded
+    }
+    return;
+  }
+
+  // Motive page: ensure webview is loaded and live
+  if (page === 'motive') {
+    const wv = document.getElementById('motiveWebview');
+    if (wv) {
+      // Attach nav listeners exactly once
+      if (!wv._ismListenersAttached) {
+        wv._ismListenersAttached = true;
+        const updateUrl = () => {
+          const urlEl = document.getElementById('motiveUrl');
+          try { if (urlEl) urlEl.textContent = wv.getURL(); } catch (_) {}
+        };
+        wv.addEventListener('did-navigate', updateUrl);
+        wv.addEventListener('did-navigate-in-page', updateUrl);
+        wv.addEventListener('did-finish-load', () => {
+          wv._ismLastLoadedAt = Date.now();
+          updateUrl();
+        });
+      }
+
+      // Decide whether to reload. The fleet-view websocket can die silently
+      // when the tab's been inactive — so reload if:
+      //   - URL is blank (lost its page entirely)
+      //   - it's been more than 90 seconds since we last saw the tab active
+      //   - it's been more than 5 minutes since the last full load (session drift)
+      const now = Date.now();
+      const STALE_VISIT_MS  = 90 * 1000;       // 90s idle between visits
+      const STALE_LOAD_MS   = 5  * 60 * 1000;  // 5 min since last hard load
+      const lastVisit = wv._ismLastVisitAt || 0;
+      const lastLoad  = wv._ismLastLoadedAt || 0;
+      const idleTooLong  = lastVisit && (now - lastVisit) > STALE_VISIT_MS;
+      const loadTooOld   = !lastLoad  || (now - lastLoad)  > STALE_LOAD_MS;
+
+      setTimeout(() => {
+        try {
+          const url = wv.getURL();
+          const target = 'https://app.gomotive.com/en-US/#/fleetview/map';
+          if (!url || url === 'about:blank') {
+            wv.loadURL(target);
+          } else if (idleTooLong || loadTooOld) {
+            // Live data (fleet positions) can go stale — force a full reload
+            wv.reload();
+          }
+          const urlEl = document.getElementById('motiveUrl');
+          if (urlEl) urlEl.textContent = url || '';
+        } catch (_) {}
+      }, 200);
+
+      wv._ismLastVisitAt = now;
+
+      // While the tab is the active page, keep ticking the visit timestamp
+      // so rapid in-session tab-switches don't trigger needless reloads.
+      clearInterval(wv._ismVisitTicker);
+      wv._ismVisitTicker = setInterval(() => {
+        if (currentPage !== 'motive') { clearInterval(wv._ismVisitTicker); return; }
+        wv._ismLastVisitAt = Date.now();
+      }, 10 * 1000);
+    }
+    return;
+  }
+
   const loaders = {
     dashboard: loadDashboard,
     customers: loadCustomers,
     schedule: loadSchedule,
+    jobs: loadJobsList,
     invoices: loadInvoices,
     vehicles: loadVehicles,
     wastesites: loadWasteSites,
@@ -269,6 +967,8 @@ function navigateTo(page) {
     reminders: loadReminders,
     sdn: loadServiceDueNotices,
     settings: loadSettings,
+    trash: loadTrash,
+    afc: loadAFC,
   };
   if (loaders[page]) loaders[page]();
   updatePageActions(page);
@@ -388,6 +1088,79 @@ function showToast(message, type = '', duration = 3500) {
   setTimeout(() => toast.remove(), duration);
 }
 
+// ===== HUB (main window landing) =====
+async function loadHub() {
+  // Show the schedule page element as the active canvas
+  document.querySelectorAll('.page').forEach(p => { p.classList.remove('active'); p.style.display = ''; });
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+
+  const today = new Date();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const dateStr = today.toISOString().split('T')[0];
+
+  const [jobsRes, custRes] = await Promise.all([
+    window.api.getJobs({ date: dateStr }),
+    window.api.getCustomers('')
+  ]);
+  const todayJobs = jobsRes?.data || [];
+  const customers = custRes?.data || [];
+
+  const sections = [
+    { page:'schedule',  icon:'📅', label:'Schedule',    desc:'Day view, trucks, jobs' },
+    { page:'customers', icon:'👥', label:'Customers',   desc:'Accounts & properties' },
+    { page:'invoices',  icon:'📄', label:'Invoices',    desc:'Billing & payments' },
+    { page:'disposal',  icon:'🚛', label:'Disposals',   desc:'Waste disposal records' },
+    { page:'sdn',       icon:'📆', label:'Service Due', desc:'Upcoming service notices' },
+    { page:'reports',   icon:'📈', label:'Reports',     desc:'Revenue, A/R, P&L' },
+    { page:'dep',       icon:'📋', label:'DEP Reports', desc:'Compliance manifests' },
+    { page:'vehicles',  icon:'🚚', label:'Vehicles',    desc:'Fleet & truck settings' },
+    { page:'reminders', icon:'🔔', label:'Reminders',   desc:'Alerts & follow-ups' },
+    { page:'settings',  icon:'⚙️',  label:'Settings',   desc:'App configuration' },
+  ];
+
+  // Use schedule page as hub canvas
+  const page = document.getElementById('page-schedule');
+  page.classList.add('active');
+  document.getElementById('pageTitle').textContent = 'Interstate Septic Manager';
+  document.getElementById('pageActions').innerHTML = '';
+
+  page.innerHTML = `
+    <div style="padding:32px;max-width:960px;margin:0 auto;">
+      <div style="margin-bottom:28px;">
+        <div style="font-size:13px;color:var(--text-light);">${dayNames[today.getDay()]}, ${monthNames[today.getMonth()]} ${today.getDate()}, ${today.getFullYear()}</div>
+        <div style="display:flex;gap:24px;margin-top:12px;">
+          <div class="card" style="flex:1;padding:16px;text-align:center;">
+            <div style="font-size:28px;font-weight:800;color:var(--primary);">${todayJobs.length}</div>
+            <div style="font-size:12px;color:var(--text-light);">Jobs Today</div>
+          </div>
+          <div class="card" style="flex:1;padding:16px;text-align:center;">
+            <div style="font-size:28px;font-weight:800;color:#27ae60;">${todayJobs.filter(j=>j.status==='completed').length}</div>
+            <div style="font-size:12px;color:var(--text-light);">Completed</div>
+          </div>
+          <div class="card" style="flex:1;padding:16px;text-align:center;">
+            <div style="font-size:28px;font-weight:800;">${customers.length}</div>
+            <div style="font-size:12px;color:var(--text-light);">Customers</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Open a section</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
+        ${sections.map(s => `
+          <div onclick="popoutPage('${s.page}','${s.label}')"
+            style="background:var(--bg-white);border:1px solid var(--border);border-radius:8px;padding:16px;cursor:pointer;transition:box-shadow 0.15s,border-color 0.15s;"
+            onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)';this.style.borderColor='var(--primary)';"
+            onmouseout="this.style.boxShadow='';this.style.borderColor='var(--border)';">
+            <div style="font-size:24px;margin-bottom:8px;">${s.icon}</div>
+            <div style="font-weight:700;font-size:14px;">${s.label}</div>
+            <div style="font-size:11px;color:var(--text-light);margin-top:2px;">${s.desc}</div>
+          </div>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
 // ===== DASHBOARD =====
 async function loadDashboard() {
   const today = new Date().toISOString().split('T')[0];
@@ -490,8 +1263,9 @@ async function loadCustomers(search = '') {
   allCustomers = customers;
 
   page.innerHTML = `
-    <div class="search-bar">
-      <input type="text" id="customerSearch" placeholder="Search customers by name, phone, email, or property address..." value="${search}" oninput="debounceCustomerSearch()">
+    <div class="search-bar" style="display:flex;gap:8px;align-items:center;">
+      <input type="text" id="customerSearch" placeholder="Search customers by name, phone, email, or property address..." value="${search}" oninput="debounceCustomerSearch()" style="flex:1;">
+      <button class="btn btn-danger btn-sm" id="customersBulkDeleteBtn" onclick="bulkDeleteCustomers()" disabled>Delete Selected (0)</button>
     </div>
     ${customers.length === 0 ? `
       <div class="empty-state">
@@ -503,16 +1277,20 @@ async function loadCustomers(search = '') {
       <div class="card" style="padding:0;overflow:hidden;">
         <table class="data-table">
           <thead>
-            <tr><th>Name</th><th>Address</th><th>Email</th><th>Phone</th><th>Balance</th></tr>
+            <tr>
+              <th style="width:36px;"><input type="checkbox" id="customersSelectAll" onclick="_toggleAllCustomerCheckboxes(this.checked)"></th>
+              <th>Name</th><th>Address</th><th>Email</th><th>Phone</th><th>Balance</th>
+            </tr>
           </thead>
           <tbody>
             ${customers.map(c => `
-              <tr onclick="openCustomerDetail('${c.id}')">
-                <td><strong>${esc(c.name)}</strong></td>
-                <td style="font-size:12px;">${esc(c.primary_address || '')}</td>
-                <td>${esc(c.email || '')}</td>
-                <td>${esc(c.phone || '')}</td>
-                <td class="${(c.balance || 0) > 0 ? 'text-danger' : ''}">$${(c.balance || 0).toFixed(2)}</td>
+              <tr>
+                <td onclick="event.stopPropagation()"><input type="checkbox" class="customer-checkbox" data-id="${c.id}" onclick="_updateCustomerBulkBtn()"></td>
+                <td onclick="openCustomerDetail('${c.id}')"><strong>${esc(c.name)}</strong></td>
+                <td onclick="openCustomerDetail('${c.id}')" style="font-size:12px;">${esc(c.primary_address || '')}</td>
+                <td onclick="openCustomerDetail('${c.id}')">${esc(c.email || '')}</td>
+                <td onclick="openCustomerDetail('${c.id}')">${esc(c.phone_cell || c.phone || '')}</td>
+                <td onclick="openCustomerDetail('${c.id}')" class="${(c.balance || 0) > 0 ? 'text-danger' : ''}">$${(c.balance || 0).toFixed(2)}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -520,6 +1298,14 @@ async function loadCustomers(search = '') {
       </div>
     `}
   `;
+  // Restore focus & cursor position after DOM rebuild so typing isn't interrupted
+  if (search !== '') {
+    const searchEl = document.getElementById('customerSearch');
+    if (searchEl) {
+      searchEl.focus();
+      searchEl.setSelectionRange(search.length, search.length);
+    }
+  }
 }
 
 let customerSearchTimeout;
@@ -530,8 +1316,421 @@ function debounceCustomerSearch() {
   }, 300);
 }
 
+function _toggleAllCustomerCheckboxes(checked) {
+  document.querySelectorAll('.customer-checkbox').forEach(cb => { cb.checked = checked; });
+  _updateCustomerBulkBtn();
+}
+
+function _updateCustomerBulkBtn() {
+  const checked = document.querySelectorAll('.customer-checkbox:checked').length;
+  const btn = document.getElementById('customersBulkDeleteBtn');
+  if (btn) {
+    btn.textContent = `Delete Selected (${checked})`;
+    btn.disabled = checked === 0;
+  }
+  const total = document.querySelectorAll('.customer-checkbox').length;
+  const master = document.getElementById('customersSelectAll');
+  if (master) master.checked = total > 0 && checked === total;
+}
+
+let _bulkDeleteInProgress = false;
+async function bulkDeleteCustomers() {
+  if (_bulkDeleteInProgress) { showToast('Delete already running.', 'error'); return; }
+  const ids = Array.from(document.querySelectorAll('.customer-checkbox:checked')).map(cb => cb.dataset.id);
+  if (ids.length === 0) return;
+  if (!confirm(`Delete ${ids.length} customer${ids.length>1?'s':''}? This also removes their properties, tanks, and is permanent.`)) return;
+  _bulkDeleteInProgress = true;
+  _showBulkDeleteOverlay(`Deleting ${ids.length} customer${ids.length>1?'s':''}…`);
+  window.api.offBulkDeleteProgress();
+  window.api.onBulkDeleteProgress((p) => _updateBulkDeleteOverlay(p));
+  try {
+    await window.api.bulkDeleteCustomers(ids);
+    showToast(`Deleted ${ids.length} customer${ids.length>1?'s':''}.`, 'success');
+  } catch (err) {
+    console.error('Bulk delete failed:', err);
+    showToast('Bulk delete failed: ' + (err.message || err), 'error');
+  } finally {
+    window.api.offBulkDeleteProgress();
+    _hideBulkDeleteOverlay();
+    _bulkDeleteInProgress = false;
+  }
+  loadCustomers(document.getElementById('customerSearch')?.value || '');
+}
+
+function _showBulkDeleteOverlay(title) {
+  let overlay = document.getElementById('bulkDeleteOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'bulkDeleteOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div style="background:white;border-radius:10px;padding:24px;min-width:360px;max-width:440px;box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+      <div style="font-size:16px;font-weight:600;margin-bottom:12px;" id="bulkDelTitle">${esc(title)}</div>
+      <div style="font-size:12px;color:#666;margin-bottom:6px;" id="bulkDelMsg">Preparing…</div>
+      <div style="height:14px;background:#e0e0e0;border-radius:7px;overflow:hidden;">
+        <div id="bulkDelBar" style="height:100%;width:0%;background:linear-gradient(90deg,#c62828,#ef5350);transition:width 0.15s;"></div>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:#888;font-style:italic;">Please wait — do not close the app.</div>
+    </div>
+  `;
+}
+function _updateBulkDeleteOverlay(p) {
+  const msg = document.getElementById('bulkDelMsg');
+  const bar = document.getElementById('bulkDelBar');
+  if (!bar) return;
+  if (msg) msg.textContent = p.message || (p.stage || '');
+  if (p.total) {
+    const pct = Math.min(100, Math.round((p.current / p.total) * 100));
+    bar.style.width = pct + '%';
+  } else if (p.stage === 'saving' || p.stage === 'done') {
+    bar.style.width = '100%';
+  }
+}
+function _hideBulkDeleteOverlay() {
+  const overlay = document.getElementById('bulkDeleteOverlay');
+  if (overlay) overlay.remove();
+}
+
+// ===== JOBS MASTER LIST =====
+// Persistent filter state for Jobs tab — survives navigating away and back
+let _jobsListState = {
+  search: '',
+  period: 'all',      // all | past | today | week | month | future | custom
+  status: 'all',      // all | scheduled | in_progress | completed | cancelled
+  sort: 'oldest',     // newest | oldest — oldest so past is on top, future below, today in middle
+  dateFrom: '',
+  dateTo: '',
+};
+let _jobsListCache = null; // last fetched list, reused when only filter changes
+let _jobsListScrollToToday = true; // auto-scroll to today's section on next render
+
+async function loadJobsList(forceRefresh = true) {
+  const page = document.getElementById('page-jobs');
+  if (!page) return;
+  navHistory = [];
+
+  if (forceRefresh || !_jobsListCache) {
+    const { data } = await window.api.getJobs({});
+    _jobsListCache = data || [];
+  }
+
+  _jobsListScrollToToday = true; // landing on the tab → snap to today
+  _renderJobsList();
+}
+
+function _renderJobsList() {
+  const page = document.getElementById('page-jobs');
+  if (!page) return;
+
+  const s = _jobsListState;
+  const today = new Date().toISOString().split('T')[0];
+
+  // --- Build filtered view ---
+  let rows = (_jobsListCache || []).slice();
+
+  // Period filter
+  if (s.period !== 'all') {
+    const now = new Date();
+    const startOfToday = today;
+    if (s.period === 'today') {
+      rows = rows.filter(j => (j.scheduled_date || '') === startOfToday);
+    } else if (s.period === 'past') {
+      rows = rows.filter(j => (j.scheduled_date || '') < startOfToday);
+    } else if (s.period === 'future') {
+      rows = rows.filter(j => (j.scheduled_date || '') > startOfToday);
+    } else if (s.period === 'week') {
+      const d = new Date(now); d.setDate(d.getDate() - d.getDay()); // Sun
+      const from = d.toISOString().split('T')[0];
+      d.setDate(d.getDate() + 6);
+      const to = d.toISOString().split('T')[0];
+      rows = rows.filter(j => (j.scheduled_date || '') >= from && (j.scheduled_date || '') <= to);
+    } else if (s.period === 'month') {
+      const from = today.substring(0, 7) + '-01';
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const to = nextMonth.toISOString().split('T')[0];
+      rows = rows.filter(j => (j.scheduled_date || '') >= from && (j.scheduled_date || '') <= to);
+    } else if (s.period === 'custom') {
+      if (s.dateFrom) rows = rows.filter(j => (j.scheduled_date || '') >= s.dateFrom);
+      if (s.dateTo) rows = rows.filter(j => (j.scheduled_date || '') <= s.dateTo);
+    }
+  }
+
+  // Status filter
+  if (s.status !== 'all') {
+    rows = rows.filter(j => (j.status || 'scheduled') === s.status);
+  }
+
+  // Search — name, address, service, notes, manifest, invoice, tech
+  if (s.search.trim()) {
+    const q = s.search.trim().toLowerCase();
+    rows = rows.filter(j => {
+      const hay = [
+        j.customers?.name,
+        j.property?.address, j.property?.city, j.property?.state, j.property?.zip,
+        j.service_type, j.job_type, j.job_codes,
+        j.notes, j.internal_notes,
+        j.manifest_number, j.invoice_number,
+        j.users?.name, j.assigned_to_name,
+        j.status,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  // Sort
+  rows.sort((a, b) => {
+    const da = (a.scheduled_date || '') + ' ' + (a.scheduled_time || '');
+    const db = (b.scheduled_date || '') + ' ' + (b.scheduled_time || '');
+    return s.sort === 'oldest' ? da.localeCompare(db) : db.localeCompare(da);
+  });
+
+  const totalJobs = (_jobsListCache || []).length;
+
+  page.innerHTML = `
+    <div class="card" style="padding:10px 12px;margin-bottom:10px;">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <input type="text" id="jobsSearch" placeholder="Search customer, address, service, notes, manifest..."
+               value="${esc(s.search)}"
+               oninput="_onJobsSearch(this.value)"
+               style="flex:1;min-width:260px;padding:8px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+
+        <select onchange="_setJobsPeriod(this.value)" style="padding:7px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+          <option value="all" ${s.period==='all'?'selected':''}>All Time</option>
+          <option value="past" ${s.period==='past'?'selected':''}>Past</option>
+          <option value="today" ${s.period==='today'?'selected':''}>Today</option>
+          <option value="week" ${s.period==='week'?'selected':''}>This Week</option>
+          <option value="month" ${s.period==='month'?'selected':''}>This Month</option>
+          <option value="future" ${s.period==='future'?'selected':''}>Future</option>
+          <option value="custom" ${s.period==='custom'?'selected':''}>Custom Range…</option>
+        </select>
+
+        <select onchange="_setJobsStatus(this.value)" style="padding:7px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+          <option value="all" ${s.status==='all'?'selected':''}>All Statuses</option>
+          <option value="scheduled" ${s.status==='scheduled'?'selected':''}>Scheduled</option>
+          <option value="in_progress" ${s.status==='in_progress'?'selected':''}>In Progress</option>
+          <option value="completed" ${s.status==='completed'?'selected':''}>Completed</option>
+          <option value="cancelled" ${s.status==='cancelled'?'selected':''}>Cancelled</option>
+        </select>
+
+        <select onchange="_setJobsSort(this.value)" style="padding:7px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+          <option value="newest" ${s.sort==='newest'?'selected':''}>Newest First</option>
+          <option value="oldest" ${s.sort==='oldest'?'selected':''}>Oldest First</option>
+        </select>
+
+        <button class="btn btn-secondary btn-sm" onclick="_resetJobsFilters()" title="Clear all filters">Clear</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadJobsList(true)" title="Reload from disk">&#8635;</button>
+        <button class="btn btn-danger btn-sm" id="jobsBulkDeleteBtn" onclick="bulkDeleteJobs()" disabled>Delete Selected (0)</button>
+      </div>
+
+      ${s.period === 'custom' ? `
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+          <label style="font-size:12px;color:var(--text-light);">From</label>
+          <input type="date" value="${esc(s.dateFrom)}" onchange="_setJobsDate('from', this.value)"
+                 style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+          <label style="font-size:12px;color:var(--text-light);">To</label>
+          <input type="date" value="${esc(s.dateTo)}" onchange="_setJobsDate('to', this.value)"
+                 style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+        </div>
+      ` : ''}
+
+      <div style="font-size:12px;color:var(--text-light);margin-top:8px;">
+        Showing <strong>${rows.length}</strong> of ${totalJobs} job${totalJobs!==1?'s':''}
+      </div>
+    </div>
+
+    ${rows.length === 0 ? `
+      <div class="empty-state">
+        <div class="empty-icon">&#128221;</div>
+        <p>No jobs match these filters.</p>
+      </div>
+    ` : `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:36px;"><input type="checkbox" id="jobsSelectAll" onclick="_toggleAllJobCheckboxes(this.checked)"></th>
+              <th style="width:110px;">Date</th>
+              <th style="width:70px;">Time</th>
+              <th>Customer</th>
+              <th>Address</th>
+              <th>Service</th>
+              <th style="width:110px;">Status</th>
+              <th style="width:130px;">Tech</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${_renderJobsListRowsWithTodayDivider(rows, today)}
+          </tbody>
+        </table>
+      </div>
+    `}
+  `;
+
+  // Restore cursor position in search after re-render (preserve typing)
+  const searchEl = document.getElementById('jobsSearch');
+  if (searchEl && s.search) {
+    searchEl.focus();
+    try { searchEl.setSelectionRange(s.search.length, s.search.length); } catch(_) {}
+  }
+
+  // Auto-scroll to today's section on first landing (not on every filter change)
+  if (_jobsListScrollToToday) {
+    _jobsListScrollToToday = false;
+    requestAnimationFrame(() => {
+      const anchor = document.getElementById('jobsTodayAnchor');
+      if (anchor && anchor.scrollIntoView) {
+        anchor.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }
+    });
+  }
+}
+
+// Render rows and mark the first today-or-future row (oldest-first) /
+// today-or-past row (newest-first) with an invisible scroll anchor so
+// the Jobs tab lands the viewport on today.
+function _renderJobsListRowsWithTodayDivider(rows, today) {
+  const s = _jobsListState;
+  const oldestFirst = s.sort === 'oldest';
+  let anchorPlaced = false;
+  const parts = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const j = rows[i];
+    const d = j.scheduled_date || '';
+    let extra = '';
+    if (!anchorPlaced) {
+      const hit = oldestFirst ? (d >= today) : (d <= today);
+      if (hit) { extra = 'id="jobsTodayAnchor"'; anchorPlaced = true; }
+    }
+    parts.push(_renderJobsListRow(j, today, extra));
+  }
+
+  // If no row qualifies (e.g. only past jobs exist), append an invisible anchor at end
+  if (!anchorPlaced) {
+    parts.push(`<tr id="jobsTodayAnchor"><td colspan="8" style="height:0;padding:0;border:none;"></td></tr>`);
+  }
+
+  return parts.join('');
+}
+
+function _renderJobsListRow(j, today, extraAttrs = '') {
+  const status = j.status || 'scheduled';
+  const statusColor = {
+    scheduled: '#1565c0',
+    in_progress: '#e65100',
+    completed: '#2e7d32',
+    cancelled: '#757575',
+  }[status] || '#555';
+  const dateStr = j.scheduled_date || '';
+  let rowBg = '';
+  if (dateStr) {
+    if (dateStr === today) rowBg = 'background:#c8e6c9;';      // today — light green
+    else if (dateStr < today) rowBg = 'background:#fffde7;';   // past — light yellow
+    else rowBg = 'background:#e3f2fd;';                         // future — light blue
+  }
+
+  const addr = j.property
+    ? [j.property.address, j.property.city, j.property.state].filter(Boolean).join(', ')
+    : '';
+
+  const svc = j.service_type
+    || j.job_type
+    || (Array.isArray(j.job_codes) ? j.job_codes.join(', ') : (j.job_codes || ''))
+    || 'Pumping';
+
+  const techName = j.users?.name || j.assigned_to_name || '';
+
+  const custId = j.customer_id || j.customers?.id || '';
+  const custName = esc(j.customers?.name || '—');
+  const customerCell = custId
+    ? `<strong><a href="#" style="color:#1565c0;text-decoration:underline;" onclick="event.preventDefault();event.stopPropagation();openCustomerDetail('${custId}')">${custName}</a></strong>`
+    : `<strong>${custName}</strong>`;
+  const addressCell = custId && addr
+    ? `<a href="#" style="color:#1565c0;text-decoration:underline;" onclick="event.preventDefault();event.stopPropagation();openCustomerDetail('${custId}'${j.property_id ? ",'" + j.property_id + "'" : ''})">${esc(addr)}</a>`
+    : esc(addr);
+
+  return `
+    <tr style="cursor:pointer;${rowBg}" ${extraAttrs}>
+      <td onclick="event.stopPropagation()" style="width:36px;"><input type="checkbox" class="job-checkbox" data-id="${j.id}" onclick="_updateJobBulkBtn()"></td>
+      <td onclick="openJobDetail('${j.id}')" style="white-space:nowrap;">${esc(dateStr)}</td>
+      <td onclick="openJobDetail('${j.id}')" style="white-space:nowrap;color:var(--text-light);">${esc(j.scheduled_time || '')}</td>
+      <td onclick="openJobDetail('${j.id}')">${customerCell}${j.manifest_number ? ` <span style="color:var(--text-light);font-size:11px;">#${esc(j.manifest_number)}</span>` : ''}</td>
+      <td onclick="openJobDetail('${j.id}')" style="font-size:12px;">${addressCell}</td>
+      <td onclick="openJobDetail('${j.id}')" style="font-size:12px;">${esc(svc)}</td>
+      <td onclick="openJobDetail('${j.id}')"><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${statusColor}15;color:${statusColor};">${esc(formatStatus ? formatStatus(status) : status)}</span></td>
+      <td onclick="openJobDetail('${j.id}')" style="font-size:12px;">${esc(techName)}</td>
+    </tr>
+  `;
+}
+
+function _toggleAllJobCheckboxes(checked) {
+  document.querySelectorAll('.job-checkbox').forEach(cb => { cb.checked = checked; });
+  _updateJobBulkBtn();
+}
+
+function _updateJobBulkBtn() {
+  const checked = document.querySelectorAll('.job-checkbox:checked').length;
+  const btn = document.getElementById('jobsBulkDeleteBtn');
+  if (btn) {
+    btn.textContent = `Delete Selected (${checked})`;
+    btn.disabled = checked === 0;
+  }
+  const total = document.querySelectorAll('.job-checkbox').length;
+  const master = document.getElementById('jobsSelectAll');
+  if (master) master.checked = total > 0 && checked === total;
+}
+
+async function bulkDeleteJobs() {
+  if (_bulkDeleteInProgress) { showToast('Delete already running.', 'error'); return; }
+  const ids = Array.from(document.querySelectorAll('.job-checkbox:checked')).map(cb => cb.dataset.id);
+  if (ids.length === 0) return;
+  if (!confirm(`Delete ${ids.length} job${ids.length>1?'s':''}? This is permanent.`)) return;
+  _bulkDeleteInProgress = true;
+  _showBulkDeleteOverlay(`Deleting ${ids.length} job${ids.length>1?'s':''}…`);
+  window.api.offBulkDeleteProgress();
+  window.api.onBulkDeleteProgress((p) => _updateBulkDeleteOverlay(p));
+  try {
+    await window.api.bulkDeleteJobs(ids);
+    showToast(`Deleted ${ids.length} job${ids.length>1?'s':''}.`, 'success');
+  } catch (err) {
+    console.error('Bulk delete failed:', err);
+    showToast('Bulk delete failed: ' + (err.message || err), 'error');
+  } finally {
+    window.api.offBulkDeleteProgress();
+    _hideBulkDeleteOverlay();
+    _bulkDeleteInProgress = false;
+  }
+  loadJobsList(true);
+}
+
+let _jobsSearchTimer;
+function _onJobsSearch(value) {
+  _jobsListState.search = value;
+  clearTimeout(_jobsSearchTimer);
+  _jobsSearchTimer = setTimeout(_renderJobsList, 200);
+}
+function _setJobsPeriod(v) { _jobsListState.period = v; _renderJobsList(); }
+function _setJobsStatus(v) { _jobsListState.status = v; _renderJobsList(); }
+function _setJobsSort(v)   { _jobsListState.sort   = v; _renderJobsList(); }
+function _setJobsDate(which, v) {
+  if (which === 'from') _jobsListState.dateFrom = v;
+  else _jobsListState.dateTo = v;
+  _renderJobsList();
+}
+function _resetJobsFilters() {
+  _jobsListState = { search: '', period: 'all', status: 'all', sort: 'newest', dateFrom: '', dateTo: '' };
+  _renderJobsList();
+}
+
 function openCustomerModal(customer = null) {
-  const isEdit = !!customer;
+  // New customer — use the full unified contact + property + tanks form
+  if (!customer) {
+    openCustomerModalFromJob(false);
+    return;
+  }
+  const isEdit = true;
   const c = customer || {};
   openModal(isEdit ? 'Edit Customer' : 'New Customer', `
     <input type="hidden" id="customerId" value="${c.id || ''}">
@@ -541,8 +1740,18 @@ function openCustomerModal(customer = null) {
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>Phone</label>
-        <input type="text" id="customerPhone" value="${esc(c.phone || '')}" placeholder="(207) 555-1234">
+        <label>Cell Phone</label>
+        <input type="text" id="customerPhoneCell" value="${esc(c.phone_cell || c.phone || '')}" placeholder="(207) 555-1234">
+      </div>
+      <div class="form-group">
+        <label>Home Phone</label>
+        <input type="text" id="customerPhoneHome" value="${esc(c.phone_home || '')}" placeholder="(207) 555-1234">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Work Phone</label>
+        <input type="text" id="customerPhoneWork" value="${esc(c.phone_work || '')}" placeholder="(207) 555-1234">
       </div>
       <div class="form-group">
         <label>Email</label>
@@ -576,10 +1785,6 @@ function openCustomerModal(customer = null) {
         <option value="Phone" ${c.contact_method === 'Phone' ? 'selected' : ''}>Phone Call</option>
       </select>
     </div>
-    <div class="form-group">
-      <label>Notes</label>
-      <textarea id="customerNotes" placeholder="Private notes about this customer...">${esc(c.notes || '')}</textarea>
-    </div>
   `, `
     ${isEdit ? '<button class="btn btn-danger" onclick="deleteCustomer()">Delete</button>' : ''}
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -590,14 +1795,15 @@ function openCustomerModal(customer = null) {
 async function saveCustomer() {
   const data = {
     name: document.getElementById('customerName').value.trim(),
-    phone: document.getElementById('customerPhone').value.trim(),
+    phone_cell: document.getElementById('customerPhoneCell').value.trim(),
+    phone_home: document.getElementById('customerPhoneHome').value.trim(),
+    phone_work: document.getElementById('customerPhoneWork').value.trim(),
     email: document.getElementById('customerEmail').value.trim(),
     address: document.getElementById('customerAddress').value.trim(),
     city: document.getElementById('customerCity').value.trim(),
     state: document.getElementById('customerState').value.trim(),
     zip: document.getElementById('customerZip').value.trim(),
     contact_method: document.getElementById('customerContactMethod').value,
-    notes: document.getElementById('customerNotes').value.trim(),
   };
 
   const id = document.getElementById('customerId').value;
@@ -634,6 +1840,192 @@ async function deleteCustomer() {
   } else {
     showToast(result.error || 'Failed to delete.', 'error');
   }
+}
+
+// ===== CONTACT NOTES =====
+function renderContactNotes(notesLog, legacyNotes) {
+  const entries = Array.isArray(notesLog) ? [...notesLog] : [];
+
+  // Migrate old plain-text notes as first entry if no log yet
+  if (entries.length === 0 && legacyNotes) {
+    entries.push({ id: 'legacy', text: legacyNotes, created_at: null, author: '' });
+  }
+
+  if (entries.length === 0) {
+    return `<div style="font-size:12px;color:var(--text-light);padding:4px 0;">No notes yet.</div>`;
+  }
+
+  // Newest first
+  return [...entries].reverse().map(n => {
+    const dt = n.created_at ? new Date(n.created_at) : null;
+    const dateStr = dt ? dt.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' }) + ' @ ' +
+      dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+    return `
+      <div style="padding:7px 8px;margin-bottom:6px;background:#fafafa;border-left:3px solid #1565c0;border-radius:0 4px 4px 0;font-size:12px;position:relative;">
+        ${dateStr || n.author ? `<div style="font-size:10px;color:var(--text-light);margin-bottom:3px;font-weight:600;">${dateStr}${n.author ? (dateStr ? ' — ' : '') + esc(n.author) : ''}</div>` : ''}
+        <div style="white-space:pre-wrap;line-height:1.5;">${esc(n.text)}</div>
+        <button onclick="deleteContactNote('${n.customerId || ''}','${n.id}')" style="position:absolute;top:4px;right:4px;background:none;border:none;color:#ccc;cursor:pointer;font-size:14px;padding:0 3px;" title="Delete note">&times;</button>
+      </div>`;
+  }).join('');
+}
+
+function openAddNoteModal(customerId) {
+  openModal('Add Contact Note', `
+    <input type="hidden" id="noteCustomerId" value="${customerId}">
+    <div class="form-group">
+      <label>Note</label>
+      <textarea id="newNoteText" rows="5" placeholder="Enter note..." style="width:100%;"></textarea>
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveContactNote()">Save Note</button>
+  `);
+}
+
+async function saveContactNote() {
+  const customerId = document.getElementById('noteCustomerId').value;
+  const text = document.getElementById('newNoteText').value.trim();
+  if (!text) { showToast('Note cannot be empty.', 'error'); return; }
+
+  const { data: customer } = await window.api.getCustomer(customerId);
+  const existingLog = Array.isArray(customer.notes_log) ? customer.notes_log : [];
+
+  // Migrate legacy notes on first save
+  if (existingLog.length === 0 && customer.notes) {
+    existingLog.push({ id: crypto.randomUUID(), text: customer.notes, created_at: null, author: '', customerId });
+  }
+
+  const newEntry = {
+    id: crypto.randomUUID(),
+    text,
+    created_at: new Date().toISOString(),
+    author: currentUser?.name || '',
+    customerId,
+  };
+  existingLog.push(newEntry);
+
+  await window.api.saveCustomer({ id: customerId, notes_log: existingLog, notes: '' });
+  closeModal();
+  showToast('Note saved.', 'success');
+  openCustomerDetail(customerId, currentPropertyId);
+}
+
+async function deleteContactNote(customerId, noteId) {
+  if (!customerId || !noteId || noteId === 'legacy') return;
+  const { data: customer } = await window.api.getCustomer(customerId);
+  const log = (customer.notes_log || []).filter(n => n.id !== noteId);
+  await window.api.saveCustomer({ id: customerId, notes_log: log });
+  openCustomerDetail(customerId, currentPropertyId);
+}
+
+// ===== ADDITIONAL PROPERTY CONTACTS =====
+const CONTACT_ROLES = ['Owner', 'Co-Owner', 'Property Manager', 'Tenant', 'Realtor', 'Emergency Contact', 'Billing Contact', 'Other'];
+
+function renderAdditionalContacts(contacts, propertyId, customerId) {
+  if (!contacts || contacts.length === 0) {
+    return `<div style="font-size:12px;color:var(--text-light);">No additional contacts.</div>`;
+  }
+  return contacts.map(c => `
+    <div style="padding:7px 8px;margin-bottom:6px;background:#fafafa;border-left:3px solid #2e7d32;border-radius:0 4px 4px 0;font-size:12px;position:relative;">
+      <div style="font-weight:700;margin-bottom:2px;">${esc(c.name || '')}${c.role ? `<span style="font-size:10px;font-weight:400;color:var(--text-light);margin-left:6px;">${esc(c.role)}</span>` : ''}</div>
+      ${c.phone_cell ? `<div>${esc(c.phone_cell)} <span style="color:var(--text-light);font-size:10px;">(cell)</span></div>` : ''}
+      ${c.phone_home ? `<div>${esc(c.phone_home)} <span style="color:var(--text-light);font-size:10px;">(home)</span></div>` : ''}
+      ${c.phone_work ? `<div>${esc(c.phone_work)} <span style="color:var(--text-light);font-size:10px;">(work)</span></div>` : ''}
+      ${c.email ? `<div>${esc(c.email)}</div>` : ''}
+      ${c.notify !== false ? `<span style="font-size:10px;color:#2e7d32;">&#10003; Notifications ON</span>` : `<span style="font-size:10px;color:#9e9e9e;">Notifications OFF</span>`}
+      <div style="position:absolute;top:4px;right:4px;display:flex;gap:4px;">
+        <button onclick="openAdditionalContactModal('${propertyId}','${customerId}',${JSON.stringify(c).replace(/"/g,'&quot;')})" style="background:none;border:none;cursor:pointer;font-size:11px;color:#1565c0;padding:0 3px;" title="Edit">&#9998;</button>
+        <button onclick="deleteAdditionalContact('${propertyId}','${customerId}','${c.id}')" style="background:none;border:none;cursor:pointer;font-size:14px;color:#ccc;padding:0 3px;" title="Delete">&times;</button>
+      </div>
+    </div>`).join('');
+}
+
+function openAdditionalContactModal(propertyId, customerId, contact = null) {
+  const isEdit = !!contact;
+  const c = contact || {};
+  openModal(isEdit ? 'Edit Contact' : 'Add Contact', `
+    <input type="hidden" id="addlContactId" value="${c.id || ''}">
+    <input type="hidden" id="addlContactPropertyId" value="${propertyId}">
+    <input type="hidden" id="addlContactCustomerId" value="${customerId}">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Name *</label>
+        <input type="text" id="addlContactName" value="${esc(c.name || '')}" placeholder="Jane Smith">
+      </div>
+      <div class="form-group">
+        <label>Role</label>
+        <select id="addlContactRole">
+          <option value="">-- Select --</option>
+          ${CONTACT_ROLES.map(r => `<option value="${r}" ${c.role === r ? 'selected' : ''}>${r}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Cell Phone</label>
+        <input type="text" id="addlContactPhoneCell" value="${esc(c.phone_cell || '')}" placeholder="(207) 555-1234">
+      </div>
+      <div class="form-group">
+        <label>Home Phone</label>
+        <input type="text" id="addlContactPhoneHome" value="${esc(c.phone_home || '')}" placeholder="(207) 555-1234">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Work Phone</label>
+        <input type="text" id="addlContactPhoneWork" value="${esc(c.phone_work || '')}" placeholder="(207) 555-1234">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="addlContactEmail" value="${esc(c.email || '')}" placeholder="contact@email.com">
+      </div>
+    </div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="addlContactNotify" ${c.notify !== false ? 'checked' : ''}>
+        Send service notifications to this contact
+      </label>
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveAdditionalContact()">Save</button>
+  `);
+}
+
+async function saveAdditionalContact() {
+  const propertyId = document.getElementById('addlContactPropertyId').value;
+  const customerId = document.getElementById('addlContactCustomerId').value;
+  const name = document.getElementById('addlContactName').value.trim();
+  if (!name) { showToast('Name is required.', 'error'); return; }
+
+  const existingId = document.getElementById('addlContactId').value;
+  const entry = {
+    id: existingId || crypto.randomUUID(),
+    name,
+    role: document.getElementById('addlContactRole').value,
+    phone_cell: document.getElementById('addlContactPhoneCell').value.trim(),
+    phone_home: document.getElementById('addlContactPhoneHome').value.trim(),
+    phone_work: document.getElementById('addlContactPhoneWork').value.trim(),
+    email: document.getElementById('addlContactEmail').value.trim(),
+    notify: document.getElementById('addlContactNotify').checked,
+  };
+
+  const { data: property } = await window.api.getProperty(propertyId);
+  const contacts = Array.isArray(property.additional_contacts) ? property.additional_contacts : [];
+  const idx = contacts.findIndex(c => c.id === entry.id);
+  if (idx >= 0) contacts[idx] = entry; else contacts.push(entry);
+
+  await window.api.saveProperty({ id: propertyId, additional_contacts: contacts });
+  closeModal();
+  showToast(existingId ? 'Contact updated.' : 'Contact added.', 'success');
+  openCustomerDetail(customerId, propertyId);
+}
+
+async function deleteAdditionalContact(propertyId, customerId, contactId) {
+  const { data: property } = await window.api.getProperty(propertyId);
+  const contacts = (property.additional_contacts || []).filter(c => c.id !== contactId);
+  await window.api.saveProperty({ id: propertyId, additional_contacts: contacts });
+  openCustomerDetail(customerId, propertyId);
 }
 
 // ===== CUSTOMER DETAIL =====
@@ -695,16 +2087,22 @@ async function openCustomerDetail(id, selectedPropertyId = null) {
           <div style="font-size:13px;line-height:1.8;">
             ${customer.address ? `<div>${esc(customer.address)}</div>` : ''}
             ${customer.city || customer.state || customer.zip ? `<div>${esc(customer.city || '')}${customer.state ? ', ' + esc(customer.state) : ''} ${esc(customer.zip || '')}</div>` : ''}
-            ${customer.phone ? `<div style="margin-top:4px;"><strong>${esc(customer.phone)}</strong></div>` : ''}
+            ${(customer.phone_cell || customer.phone) ? `<div style="margin-top:4px;"><strong>${esc(customer.phone_cell || customer.phone)}</strong> <span style="font-size:11px;color:var(--text-light);">(cell)</span></div>` : ''}
+            ${customer.phone_home ? `<div><strong>${esc(customer.phone_home)}</strong> <span style="font-size:11px;color:var(--text-light);">(home)</span></div>` : ''}
+            ${customer.phone_work ? `<div><strong>${esc(customer.phone_work)}</strong> <span style="font-size:11px;color:var(--text-light);">(work)</span></div>` : ''}
             ${customer.email ? `<div>${esc(customer.email)}</div>` : ''}
             <div style="color:var(--text-light);font-size:12px;">E-Contact Method: ${esc(customer.contact_method || 'Email & Text')}</div>
           </div>
 
-          <details style="margin-top:12px;border-top:1px solid #eee;padding-top:8px;" ${customer.notes ? 'open' : ''}>
-            <summary style="cursor:pointer;font-weight:600;font-size:12px;color:var(--text-light);">Contact Notes &#128172;</summary>
-            <textarea style="width:100%;min-height:60px;margin-top:6px;font-size:12px;border:1px solid #ddd;border-radius:4px;padding:6px;resize:vertical;"
-              onblur="window.api.saveCustomer({id:'${id}',notes:this.value})">${esc(customer.notes || '')}</textarea>
-          </details>
+          <div style="margin-top:12px;border-top:1px solid #eee;padding-top:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span style="font-weight:700;font-size:12px;color:var(--text-light);">CONTACT NOTES</span>
+              <button class="btn btn-sm btn-primary" style="font-size:10px;padding:2px 8px;" onclick="openAddNoteModal('${id}')">+ Add Note</button>
+            </div>
+            <div id="contactNotesList_${id}" style="max-height:200px;overflow-y:auto;">
+              ${renderContactNotes(customer.notes_log, customer.notes)}
+            </div>
+          </div>
         </div>
 
         <!-- Other Linked Properties -->
@@ -823,6 +2221,17 @@ async function openCustomerDetail(id, selectedPropertyId = null) {
           <div style="font-weight:700;font-size:13px;margin-bottom:6px;">Directions</div>
           <textarea style="width:100%;min-height:60px;font-size:12px;border:1px solid #ddd;border-radius:4px;padding:8px;resize:vertical;"
             onblur="window.api.saveProperty({id:'${prop.id}',directions:this.value})">${esc(prop.directions || '')}</textarea>
+        </div>
+
+        <!-- Additional Contacts -->
+        <div class="card" style="padding:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-weight:700;font-size:13px;">&#128101; Additional Contacts</span>
+            <button class="btn btn-sm btn-primary" style="font-size:10px;padding:2px 8px;" onclick="openAdditionalContactModal('${prop.id}','${id}')">+ Add</button>
+          </div>
+          <div id="additionalContactsList_${prop.id}">
+            ${renderAdditionalContacts(prop.additional_contacts || [], prop.id, id)}
+          </div>
         </div>
         ` : `
         <div class="card" style="padding:24px;text-align:center;">
@@ -976,7 +2385,7 @@ async function openReassignPropertyModal(propertyId, currentOwnerId) {
       <label>New Owner *</label>
       <select id="reassignCustomerId" class="form-control">
         <option value="">-- Select Customer --</option>
-        ${others.map(c => `<option value="${c.id}">${esc(c.name)}${c.phone ? ' — ' + esc(c.phone) : ''}</option>`).join('')}
+        ${others.map(c => `<option value="${c.id}">${esc(c.name)}${(c.phone_cell || c.phone) ? ' — ' + esc(c.phone_cell || c.phone) : ''}</option>`).join('')}
       </select>
     </div>
   `, `
@@ -1049,6 +2458,8 @@ async function openCustomerAccounting(customerId, activeTab = 'activity') {
   document.getElementById('pageTitle').textContent = customer.name + ' — Accounting';
   document.getElementById('pageActions').innerHTML = `
     <button class="btn btn-secondary" onclick="openCustomerDetail('${customerId}')">&#8592; Back to ${esc(customer.name)}</button>
+    <button class="btn btn-primary" style="background:#006aff;" onclick="openSquarePayModal('${customerId}',${acctInfo.balance.toFixed(2)})">&#9654; Charge Square</button>
+    ${!customer.square_customer_id ? `<button class="btn btn-secondary" style="font-size:11px;" onclick="openSquareLinkModal('${customerId}')">Link Square</button>` : ''}
   `;
 
   // --- ACTIVITY TAB CONTENT ---
@@ -1080,7 +2491,9 @@ async function openCustomerAccounting(customerId, activeTab = 'activity') {
               statusCell = '<span style="background:#2e7d32;width:8px;height:100%;display:inline-block;border-radius:2px;">&nbsp;</span>';
             }
             const invLink = r.invId ? `<a href="#" onclick="event.preventDefault();openInvoiceModal(null,'${r.invId}')" style="color:#1565c0;font-weight:600;">${esc(r.invNum)}</a>` : '';
-            const delLink = r.paymentId ? `<a href="#" onclick="event.preventDefault();deletePaymentConfirm('${r.paymentId}','${customerId}')" style="color:#c62828;font-size:11px;" title="Delete">&#10005;</a>` : '';
+            const delLink = r.paymentId
+              ? `<a href="#" onclick="event.preventDefault();deletePaymentConfirm('${r.paymentId}','${customerId}')" style="color:#c62828;font-size:11px;" title="Delete payment">&#10005;</a>`
+              : (r.invId ? `<a href="#" onclick="event.preventDefault();deleteInvoiceConfirm('${r.invId}','${customerId}')" style="color:#c62828;font-size:11px;" title="Delete invoice">&#10005;</a>` : '');
             const balColor = r.balance > 0.01 ? '#c62828' : '#2e7d32';
             return `<tr style="background:${rowBg};"><td style="padding:8px 12px;">${r.date}</td><td style="padding:8px 12px;">${invLink}<div style="margin-top:2px;">${statusCell}</div></td><td style="padding:8px 12px;">${esc(r.desc)}</td><td style="padding:8px 12px;text-align:right;font-weight:600;">${r.invAmt !== '' ? '$' + parseFloat(r.invAmt).toFixed(2) : ''}</td><td style="padding:8px 12px;text-align:right;color:#2e7d32;font-weight:600;">${r.amtPaid !== '' ? '$' + parseFloat(r.amtPaid).toFixed(2) : ''}</td><td style="padding:8px 12px;text-align:right;font-weight:700;color:${balColor};">$${Math.abs(r.balance).toFixed(2)}</td><td style="padding:8px 4px;text-align:center;">${delLink}</td></tr>`;
           }).join('')}
@@ -1129,7 +2542,11 @@ async function openCustomerAccounting(customerId, activeTab = 'activity') {
 
   const stmtRows = [];
   monthInvoices.forEach(inv => {
-    let desc = inv.job_codes || 'Service';
+    let desc = '';
+    if (inv.line_items && inv.line_items.length > 0) {
+      desc = inv.line_items.map(li => esc(li.description || li.name || '')).filter(Boolean).join(', ');
+    }
+    if (!desc) desc = inv.service_type || inv.job_type || inv.job_codes || 'Pumping Service';
     if (stmtJobNotes[inv.id]) desc += '<br><em style="color:#555;font-size:11px;">Notes: ' + esc(stmtJobNotes[inv.id]) + '</em>';
     stmtRows.push({ date: inv.svc_date, invNum: inv.invoice_number || '', invId: inv.id, desc, payments: '', charges: parseFloat(inv.total) || 0 });
   });
@@ -1157,7 +2574,10 @@ async function openCustomerAccounting(customerId, activeTab = 'activity') {
       <input type="date" id="stmtTo" value="${stmtTo}" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
     </div>
     <div style="display:flex;gap:8px;margin-bottom:16px;">
-      <button class="acct-action-btn" style="background:#c62828;" onclick="showToast('Pay Now coming soon','info')">PAY NOW</button>
+      <button class="acct-action-btn" style="background:#006aff;" onclick="openSquarePayModal('${customerId}',${balanceDue.toFixed(2)})">
+        &#9654; PAY NOW${customer.square_customer_id ? '' : ' (link Square first)'}
+      </button>
+      ${!customer.square_customer_id ? `<button class="acct-action-btn" style="background:#555;font-size:10px;" onclick="openSquareLinkModal('${customerId}')">Link Square Acct</button>` : `<span style="font-size:11px;color:#2e7d32;align-self:center;">&#10003; Square linked</span>`}
       <button class="acct-action-btn" style="background:#2e7d32;" onclick="openSendStatementModal('${customerId}')">SEND STATEMENT</button>
       <button class="acct-action-btn" style="background:#1565c0;" onclick="exportStatementPdf('${customerId}')">EXPORT PDF</button>
     </div>
@@ -1330,6 +2750,13 @@ async function deletePaymentConfirm(paymentId, customerId) {
   openCustomerAccounting(customerId);
 }
 
+async function deleteInvoiceConfirm(invoiceId, customerId) {
+  if (!confirm('Delete this invoice? This cannot be undone.')) return;
+  await window.api.deleteInvoice(invoiceId);
+  showToast('Invoice deleted.', 'success');
+  openCustomerAccounting(customerId);
+}
+
 function openAddPaymentModal(customerId) {
   _openPaymentRefundModal(customerId, 'payment');
 }
@@ -1464,7 +2891,11 @@ async function _buildStatementHtml(customerId) {
 
   const stmtRows = [];
   monthInvoices.forEach(inv => {
-    let desc = inv.job_codes || 'Service';
+    let desc = '';
+    if (inv.line_items && inv.line_items.length > 0) {
+      desc = inv.line_items.map(li => li.description || li.name || '').filter(Boolean).join(', ');
+    }
+    if (!desc) desc = inv.service_type || inv.job_type || inv.job_codes || 'Pumping Service';
     if (jobNotes[inv.id]) desc += '<br><em style="color:#555;font-size:11px;">Notes: ' + jobNotes[inv.id] + '</em>';
     stmtRows.push({ date: inv.svc_date, invNum: inv.invoice_number || '', desc, payments: '', charges: parseFloat(inv.total) || 0 });
   });
@@ -1810,6 +3241,12 @@ function openPropertyModal(property = null) {
         </select>
       </div>
     </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Payment Due (days after service)</label>
+        <input type="number" id="propertyPaymentDueDays" value="${p.payment_due_days || ''}" min="0" placeholder="e.g. 30">
+      </div>
+    </div>
     <div class="form-group">
       <label>Directions</label>
       <textarea id="propertyDirections" placeholder="Directions to property...">${esc(p.directions || '')}</textarea>
@@ -1834,6 +3271,7 @@ async function saveProperty() {
     zip: document.getElementById('propertyZip').value.trim(),
     county: document.getElementById('propertyCounty').value.trim(),
     property_type: document.getElementById('propertyType').value,
+    payment_due_days: parseInt(document.getElementById('propertyPaymentDueDays').value) || null,
     directions: document.getElementById('propertyDirections').value.trim(),
     notes: document.getElementById('propertyNotes').value.trim(),
   };
@@ -2446,6 +3884,7 @@ async function loadSchedule() {
     scheduleBody = await buildMonthView(vehicles, users);
   }
 
+
   page.innerHTML = `
     <div class="schedule-toolbar">
       <div class="schedule-toolbar-left">
@@ -2459,8 +3898,7 @@ async function loadSchedule() {
       <div class="schedule-toolbar-right">
         <button class="btn btn-sm ${scheduleView === 'month' ? 'btn-primary' : 'btn-secondary'}" onclick="setScheduleView('month')">MONTH</button>
         <button class="btn btn-sm ${scheduleView === 'week' ? 'btn-primary' : 'btn-secondary'}" onclick="setScheduleView('week')">WEEK</button>
-        <button class="btn btn-sm ${scheduleView === 'day' ? 'btn-primary' : 'btn-secondary'}" onclick="setScheduleView('day')">DAY</button>
-        <button class="btn btn-secondary btn-sm" onclick="scheduleDate = new Date(); loadSchedule();">Today</button>
+        <button class="btn btn-sm ${scheduleView === 'day' ? 'btn-primary' : 'btn-secondary'}" onclick="scheduleDate = new Date(); setScheduleView('day');">DAY</button>
         <button class="btn btn-sm" style="background:#1565c0;color:#fff;" onclick="toggleScheduleMap()">&#128506; Map</button>
         <button class="btn btn-sm" style="background:linear-gradient(135deg,#7c4dff,#448aff);color:#fff;font-weight:700;" onclick="aiOptimizeDay()" title="AI-optimize routes, truck assignments, and dump points for the day">&#9889; AI Optimize</button>
         <button class="btn btn-sm" style="background:#e65100;color:#fff;" onclick="seedTestData()">+ Demo</button>
@@ -2556,6 +3994,15 @@ async function buildDayView(vehicles, users, dateStr) {
         </div>
 
         <div class="side-panel-section">
+          <h4>&#128221; Notes</h4>
+          <div class="draggable-chip" style="cursor:grab;border-left:3px solid #f9a825;background:#1a1600;"
+            onmousedown="onChipMouseDown(event, 'note', '')">
+            <span class="chip-icon" style="color:#f9a825;">&#128221;</span> Note
+          </div>
+          <div style="font-size:10px;color:var(--text-light);margin-top:2px;">Drag into a truck column</div>
+        </div>
+
+        <div class="side-panel-section">
           <h4>Waste Site</h4>
           <select class="side-panel-select" id="sidePanelWasteSite">
             <option value="">Select site...</option>
@@ -2567,18 +4014,22 @@ async function buildDayView(vehicles, users, dateStr) {
 
         <div class="side-panel-section">
           <h4>&#128100; Drivers</h4>
+          <div id="drivers-scoreboard-list">
           ${users.map(u => {
-            return '<div class="draggable-chip" style="cursor:grab;border-left: 3px solid ' + (u.color || '#1565c0') + ';"'
+            return '<div class="driver-scoreboard-item" data-user-id="' + u.id + '">'
+              + '<div class="draggable-chip" style="cursor:grab;border-left: 3px solid ' + (u.color || '#1565c0') + ';"'
               + ' onmousedown="onChipMouseDown(event, \'driver_change\', \'' + u.id + '\')">'
-              + '<span class="chip-icon" style="color:' + (u.color || '#1565c0') + ';">&#128100;</span> ' + esc(u.name)
+              + '<svg class="chip-icon" viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;margin-right:4px;fill:' + (u.color || '#1565c0') + ';"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>' + esc(u.name)
               + '</div>'
               + '<div class="driver-revenue-bar" style="margin:-4px 0 6px 0;">'
               + '<div style="height:5px;background:#e0e0e0;border-radius:3px;overflow:hidden;">'
               + '<div id="rev-bar-' + u.id + '" style="height:100%;width:0%;background:' + (u.color || '#1565c0') + ';border-radius:3px;transition:width 0.3s;"></div>'
               + '</div>'
               + '<div id="rev-amt-' + u.id + '" style="font-size:10px;color:var(--text-light);margin-top:1px;">$0.00</div>'
+              + '</div>'
               + '</div>';
           }).join('')}
+          </div>
           <div style="margin-top:8px;padding:8px;background:#e8f5e9;border-radius:6px;text-align:center;">
             <div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;">Day Total Revenue</div>
             <div id="rev-day-total" style="font-size:18px;font-weight:800;color:#2e7d32;">$0.00</div>
@@ -2649,27 +4100,23 @@ async function buildDayView(vehicles, users, dateStr) {
               <div class="truck-column" data-vehicle-id="${v.id}" style="background:${colBg};">
                 <div class="truck-column-header" style="border-top: 3px solid ${tc}; background:${colHeaderBg};">
                   <div class="truck-name">${esc(v.name)}</div>
-                  <div class="truck-capacity">${capacity ? capacity.toLocaleString() + ' Gallons' : ''}</div>
+                  <div class="truck-capacity">${capacity ? capacity.toLocaleString() + ' Gallons' : '&nbsp;'}</div>
                   <select class="truck-driver-select" style="background:${tech?.color || '#888'};"
                     onchange="changeTruckDriver('${v.id}', '${dateStr}', this.value); this.style.background = this.selectedOptions[0]?.dataset?.color || '#888';"
                     >
                     <option value="" data-color="#888" ${!activeTechId ? 'selected' : ''}>Unassigned</option>
                     ${users.map(u => `<option value="${u.id}" data-color="${u.color || '#1565c0'}" ${u.id === activeTechId ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
                   </select>
-                  ${plannedGallons > 0 ? `
-                    <div class="capacity-bar-container">
-                      <div class="capacity-bar">
-                        <div class="capacity-bar-fill ${barColor}" style="width: ${pct}%;"></div>
-                      </div>
-                      <div class="capacity-text">${disposedGallons.toLocaleString()} disposed / ${plannedGallons.toLocaleString()} planned &nbsp;|&nbsp; ${vehicleJobs.filter(j => j.status === 'completed').length}/${vehicleJobs.length} jobs</div>
+                  <div class="capacity-bar-container">
+                    <div class="capacity-bar">
+                      ${plannedGallons > 0 ? `<div class="capacity-bar-fill ${barColor}" style="width: ${pct}%;"></div>` : ''}
                     </div>
-                  ` : ''}
+                    <div class="capacity-text">${plannedGallons > 0 ? `${disposedGallons.toLocaleString()} disposed / ${plannedGallons.toLocaleString()} planned &nbsp;|&nbsp; ${vehicleJobs.filter(j => j.status === 'completed').length}/${vehicleJobs.length} jobs` : '&nbsp;'}</div>
+                  </div>
                 </div>
                 <div class="truck-jobs"
                   data-vehicle-id="${v.id}" data-date="${dateStr}">
-                  ${combined.length === 0 ? `
-                    <div class="truck-job-empty">No appointments</div>
-                  ` : combined.map((item, _cIdx) => {
+                  ${combined.length === 0 ? `` : combined.map((item, _cIdx) => {
                     if (item.type === 'job') {
                       const j = item.data;
                       const jobTanks = j.property?.tanks || [];
@@ -2679,9 +4126,29 @@ async function buildDayView(vehicles, users, dateStr) {
                         ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
                         : totalGal;
 
-                      // Check if this job would overflow — show alert BEFORE the job
+                      // Show dump alert BEFORE this job when either:
+                      //   (a) the previous item was a job flagged dump_after=true
+                      //       by the route optimizer (opportunistic mid-route dump),
+                      //   (b) adding this job would overflow capacity.
+                      // Look backward to find the most recent job item; manifests/
+                      // other non-job items shouldn't count.
+                      let prevJobItem = null;
+                      for (let pi = _cIdx - 1; pi >= 0; pi--) {
+                        if (combined[pi].type === 'job') { prevJobItem = combined[pi]; break; }
+                        if (combined[pi].type === 'manifest') break; // actual dump resets the chain
+                      }
+                      const flaggedDump = prevJobItem && prevJobItem.data && prevJobItem.data.dump_after;
+                      const overflowDump = capacity > 0 && runningForCapacity > 0 && runningForCapacity + actualGal > capacity;
                       let preAlert = '';
-                      if (capacity > 0 && runningForCapacity > 0 && runningForCapacity + actualGal > capacity) {
+                      if (flaggedDump && !overflowDump) {
+                        // Opportunistic dump — tank isn't overflowing but optimizer
+                        // decided this is a good place to empty (dump was on the way).
+                        preAlert = `<div class="manifest-suggestion" title="Route optimizer suggests dumping here — the transfer station is on the way">
+                          <span class="manifest-suggestion-icon">&#9888;</span>
+                          <span>Dump suggested — ${runningForCapacity.toLocaleString()} gal onboard (on-the-way) — Insert manifest</span>
+                        </div>`;
+                        runningForCapacity = 0;
+                      } else if (overflowDump) {
                         const remainingGal = capacity - runningForCapacity;
                         // Find candidate jobs AFTER this point that would fit in remaining capacity
                         const candidates = combined.slice(_cIdx + 1)
@@ -2747,7 +4214,7 @@ async function buildDayView(vehicles, users, dateStr) {
                             ${j.scheduled_time ? `<div class="job-time">${j.scheduled_time}</div>` : ''}
                             <div class="job-customer-name">${esc(j.customers?.name || 'N/A')}</div>
                             ${j.property ? `<div class="job-address-line"><span class="job-address-street">${esc(j.property.address || '')}</span>${j.property.city ? ' <span class="job-address-city">' + esc(j.property.city) + '</span>' : ''}</div>` : ''}
-                            ${j.customers?.phone ? `<div class="job-phone">${esc(j.customers.phone)}</div>` : ''}
+                            ${(j.customers?.phone_cell || j.customers?.phone) ? `<div class="job-phone">${esc(j.customers.phone_cell || j.customers.phone)}</div>` : ''}
                             <div style="display:flex;gap:4px;align-items:center;margin-top:4px;flex-wrap:wrap;">
                               ${j.loose_end ? '<span class="loose-end-badge" title="Loose End — needs follow-up">&#9888;</span>' : ''}
                               ${j.invoice_number ? `<span style="font-size:11px;color:var(--text-light);">Invoice # ${esc(j.invoice_number)}</span>` : ''}
@@ -2792,10 +4259,29 @@ async function buildDayView(vehicles, users, dateStr) {
                     } else if (item.type === 'driver_change') {
                       const si = item.data;
                       const driver = users.find(u => u.id === si.driver_id);
+                      const dcColor = driver?.color || '#1565c0';
                       return `
-                      <div class="schedule-driver-change" data-sort="${item.sort}">
-                        <span>New Driver: &#128100; ${esc(si.driver_name || driver?.name || 'Unknown')}</span>
-                        <button class="driver-change-remove" onclick="removeScheduleItem('${si.id}')">&times;</button>
+                      <div class="schedule-driver-change" data-sort="${item.sort}" style="background:${dcColor};border-color:${dcColor};color:#fff;">
+                        <span style="display:inline-flex;align-items:center;gap:6px;">New Driver:
+                          <svg viewBox="0 0 24 24" width="14" height="14" style="fill:#fff;"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+                          ${esc(si.driver_name || driver?.name || 'Unknown')}
+                        </span>
+                        <button class="driver-change-remove" onclick="removeScheduleItem('${si.id}')" style="color:#fff;opacity:0.85;">&times;</button>
+                      </div>`;
+                    } else if (item.type === 'note') {
+                      const si = item.data;
+                      // Store text in a data attribute so edit can read it without quote issues
+                      const noteTextEscAttr = (si.note_text || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+                      return `
+                      <div class="schedule-note-card" data-sort="${item.sort}" data-item-id="${si.id}"
+                        data-vehicle-id="${si.vehicle_id}" data-date="${si.scheduled_date}"
+                        data-sort-order="${si.sort_order}" data-note-text="${noteTextEscAttr}">
+                        <span class="note-card-drag" onmousedown="onScheduleItemMouseDown(event, '${si.id}')" title="Drag to reorder">&#8801;</span>
+                        <span class="note-card-text">${esc(si.note_text || '')}</span>
+                        <div class="note-card-actions">
+                          <button class="note-card-btn" onclick="event.stopPropagation(); editNoteCard('${si.id}')" title="Edit">&#9998;</button>
+                          <button class="note-card-btn" onclick="event.stopPropagation(); removeScheduleItem('${si.id}')" title="Delete">&times;</button>
+                        </div>
                       </div>`;
                     }
                     return '';
@@ -2907,16 +4393,118 @@ function setScheduleView(view) {
   loadSchedule();
 }
 
+function editNoteCard(itemId) {
+  const card = document.querySelector(`.schedule-note-card[data-item-id="${itemId}"]`);
+  if (!card) return;
+  openNoteModal(
+    card.dataset.vehicleId,
+    card.dataset.date,
+    parseFloat(card.dataset.sortOrder),
+    itemId,
+    card.dataset.noteText || ''
+  );
+}
+
+function openNoteModal(vehicleId, dateStr, sortOrder, itemId, currentText) {
+  // Store pending context
+  window._pendingNote = { vehicleId, dateStr, sortOrder, itemId };
+
+  const overlay = document.createElement('div');
+  overlay.id = 'note-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#1e1e1e;border-radius:8px;padding:24px;width:400px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;font-size:16px;">${itemId ? 'Edit Note' : 'Add a Note'}</h3>
+        <button onclick="document.getElementById('note-modal-overlay').remove()" style="background:none;border:none;color:#888;font-size:20px;cursor:pointer;line-height:1;">&times;</button>
+      </div>
+      <textarea id="note-modal-text" rows="4"
+        style="width:100%;background:#111;border:1px solid #333;border-radius:4px;color:#fff;font-size:14px;padding:10px;resize:vertical;box-sizing:border-box;font-family:inherit;"
+        placeholder="Enter note…">${currentText ? currentText.replace(/</g,'&lt;') : ''}</textarea>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button class="btn btn-primary" style="flex:1;font-weight:700;" onclick="saveNoteCard()">SAVE</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('note-modal-overlay').remove()">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const ta = document.getElementById('note-modal-text');
+  if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; }
+  overlay.addEventListener('mousedown', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+async function saveNoteCard() {
+  const ctx = window._pendingNote;
+  if (!ctx) return;
+  const text = document.getElementById('note-modal-text')?.value?.trim();
+  if (!text) { showToast('Note cannot be empty.', 'error'); return; }
+  await window.api.saveScheduleItem({
+    ...(ctx.itemId ? { id: ctx.itemId } : {}),
+    vehicle_id: ctx.vehicleId,
+    scheduled_date: ctx.dateStr,
+    item_type: 'note',
+    note_text: text,
+    sort_order: ctx.sortOrder,
+  });
+  document.getElementById('note-modal-overlay')?.remove();
+  window._pendingNote = null;
+  _scheduleRestoreScroll();
+  loadSchedule();
+}
+
+async function editDayNote() {
+  const dateStr = formatDate(scheduleDate);
+  const noteRes = await window.api.getDayNote(dateStr);
+  const current = noteRes?.data?.text || '';
+
+  // Replace bar with inline editor
+  const bar = document.getElementById('day-note-bar');
+  if (!bar) return;
+  bar.innerHTML = `
+    <input id="day-note-input" type="text" value="${current.replace(/"/g,'&quot;')}"
+      style="flex:1;background:#0d1a0d;border:1px solid #2e7d32;color:#a5d6a7;font-size:13px;font-weight:600;padding:4px 8px;border-radius:4px;outline:none;"
+      onkeydown="if(event.key==='Enter')saveDayNote();if(event.key==='Escape')loadSchedule();"
+      placeholder="Enter a note for this day…">
+    <button class="btn btn-sm btn-primary" onclick="saveDayNote()" style="padding:4px 12px;">Save</button>
+    <button class="btn btn-sm btn-secondary" onclick="loadSchedule()" style="padding:4px 10px;">Cancel</button>
+  `;
+  bar.style.background = '#0d1a0d';
+  document.getElementById('day-note-input')?.focus();
+  const inp = document.getElementById('day-note-input');
+  if (inp) inp.selectionStart = inp.selectionEnd = inp.value.length;
+}
+
+async function saveDayNote() {
+  const inp = document.getElementById('day-note-input');
+  if (!inp) return;
+  const text = inp.value.trim();
+  const dateStr = formatDate(scheduleDate);
+  if (!text) {
+    await window.api.deleteDayNote(dateStr);
+  } else {
+    await window.api.saveDayNote({ date: dateStr, text });
+  }
+  loadSchedule();
+}
+
+async function deleteDayNote(dateStr) {
+  await window.api.deleteDayNote(dateStr);
+  loadSchedule();
+}
+
 // ===== SCHEDULE MAP VIEW =====
 let scheduleMapVisible = false;
 let scheduleMapInstance = null;
 let mapAllJobs = [];
+let mapAllScheduleItems = []; // manifests + driver_change + notes — we only render manifests in the route panel
 let mapAllVehicles = [];
 let mapAllWasteSites = [];
 let mapGeoCache = {};
 let mapVisibleTrucks = {}; // which trucks are toggled on
 let mapMarkerLayers = {}; // L.layerGroup per vehicle
 let mapWasteSiteLayer = null; // L.layerGroup for waste site markers
+let mapMotiveTruckLayer = null; // Motive live truck markers
+let _motiveMapRefreshTimer = null;
+let mapJobMarkers = {}; // job.id → L.marker, for hover highlight
 const MAP_HOME_BASE = { address: '10 Gordon Drive, Rockland, ME', lat: null, lng: null };
 
 async function toggleScheduleMap() {
@@ -2935,12 +4523,18 @@ async function toggleScheduleMap() {
   const { data: vehicles } = await window.api.getVehicles();
   const { data: cachedCoords } = await window.api.getGeocodeCache();
   const { data: wasteSites } = await window.api.getWasteSites();
+  const { data: schedItems } = await window.api.getScheduleItems(null, dateStr);
 
   mapAllJobs = jobs;
+  mapAllScheduleItems = (schedItems || []).filter(si => si.item_type === 'manifest');
   mapAllVehicles = vehicles;
   mapAllWasteSites = wasteSites;
   mapGeoCache = {};
-  cachedCoords.forEach(c => { mapGeoCache[c.address] = { lat: c.lat, lng: c.lng }; });
+  cachedCoords.forEach(c => {
+    // Preserve the `approximate` flag (true = city-level fallback, not a
+    // precise street-level fix) so map markers can show a visual warning.
+    mapGeoCache[c.address] = { lat: c.lat, lng: c.lng, approximate: !!c.approximate };
+  });
 
   // Init all trucks visible
   vehicles.forEach(v => { mapVisibleTrucks[v.id] = true; });
@@ -2984,22 +4578,40 @@ async function toggleScheduleMap() {
     if (txt) txt.textContent = (label || 'Geocoding addresses…') + ' ' + geoCompleted + ' / ' + totalGeoItems + ' — ' + pct + '%';
   }
 
-  // Helper to geocode an address
-  let uncachedCount = 0;
-  async function geocodeAddr(fullAddr) {
+  // Geocode an address via the main-process geocoding service. Main
+  // picks the provider (OSM / Mapbox / hybrid) based on Settings and
+  // keeps the Mapbox token out of this renderer context. Result is
+  // always cached to geocode_cache.json so subsequent runs skip the
+  // network entirely.
+  async function geocodeAddr(fullAddr, parts) {
     if (!fullAddr || mapGeoCache[fullAddr]) return;
-    uncachedCount++;
     try {
-      if (uncachedCount > 1) await new Promise(r => setTimeout(r, 1100));
-      const resp = await fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(fullAddr) + '&limit=1&countrycodes=us', {
-        headers: { 'User-Agent': 'InterstateSepticManager/1.0' }
+      const r = await window.api.geocodeAddress({
+        freeForm: fullAddr,
+        street: parts && parts.street,
+        city: parts && parts.city,
+        state: parts && parts.state,
       });
-      const data = await resp.json();
-      if (data && data.length > 0) {
-        mapGeoCache[fullAddr] = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-        await window.api.saveGeocodeCache({ address: fullAddr, lat: mapGeoCache[fullAddr].lat, lng: mapGeoCache[fullAddr].lng });
+      if (r && !r.notFound && typeof r.lat === 'number') {
+        mapGeoCache[fullAddr] = {
+          lat: r.lat,
+          lng: r.lng,
+          approximate: !!r.approximate,
+          provider: r.provider,
+          accuracy: r.accuracy,
+        };
+        await window.api.saveGeocodeCache({
+          address: fullAddr,
+          lat: r.lat,
+          lng: r.lng,
+          approximate: !!r.approximate,
+          provider: r.provider,
+          accuracy: r.accuracy,
+        });
+      } else if (r && r.notFound) {
+        console.log('[GEOCODE] Not found:', fullAddr, r.error || '');
       }
-    } catch (e) { console.log('Geocode error:', fullAddr, e); }
+    } catch (e) { console.log('Geocode IPC error:', fullAddr, e); }
   }
 
   // Geocode home base
@@ -3017,7 +4629,7 @@ async function toggleScheduleMap() {
     const state = j.property?.state || 'ME';
     const fullAddr = [addr, city, state].filter(Boolean).join(', ');
     if (!addr) continue;
-    await geocodeAddr(fullAddr);
+    await geocodeAddr(fullAddr, { street: addr, city, state });
     if (mapGeoCache[fullAddr]) {
       j._coords = mapGeoCache[fullAddr];
       j._fullAddr = fullAddr;
@@ -3032,7 +4644,7 @@ async function toggleScheduleMap() {
     const state = ws.state || 'ME';
     const fullAddr = [addr, city, state].filter(Boolean).join(', ');
     if (!addr) continue;
-    await geocodeAddr(fullAddr);
+    await geocodeAddr(fullAddr, { street: addr, city, state });
     if (mapGeoCache[fullAddr]) {
       ws._coords = mapGeoCache[fullAddr];
       ws._fullAddr = fullAddr;
@@ -3096,6 +4708,12 @@ async function toggleScheduleMap() {
   renderWasteSiteMarkers();
   renderMapRoutePanel();
   fitMapBounds();
+
+  // Live Motive truck layer
+  mapMotiveTruckLayer = L.layerGroup().addTo(map);
+  refreshMotiveTrucksOnMap();
+  clearInterval(_motiveMapRefreshTimer);
+  _motiveMapRefreshTimer = setInterval(refreshMotiveTrucksOnMap, 30000);
 }
 
 function buildGlobalJobNumberMap() {
@@ -3103,7 +4721,7 @@ function buildGlobalJobNumberMap() {
   const numMap = {};
   let counter = 1;
   mapAllVehicles.forEach(v => {
-    const vJobs = mapAllJobs.filter(j => j.vehicle_id === v.id && j._coords).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const vJobs = mapAllJobs.filter(j => j.vehicle_id === v.id && j._coords && j.status !== 'completed').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
     vJobs.forEach(j => { numMap[j.id] = counter++; });
   });
   return numMap;
@@ -3115,7 +4733,8 @@ function renderMapMarkers() {
 
   const jobNumMap = buildGlobalJobNumberMap();
 
-  // Clear all layers
+  // Clear all layers and marker lookup
+  mapJobMarkers = {};
   mapAllVehicles.forEach(v => {
     if (mapMarkerLayers[v.id]) mapMarkerLayers[v.id].clearLayers();
   });
@@ -3125,7 +4744,7 @@ function renderMapMarkers() {
     const layer = mapMarkerLayers[v.id];
     const color = v.color || '#1565c0';
     const capacity = v.capacity_gallons || 0;
-    const vJobs = mapAllJobs.filter(j => j.vehicle_id === v.id && j._coords).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const vJobs = mapAllJobs.filter(j => j.vehicle_id === v.id && j._coords && j.status !== 'completed').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
     let runGal = 0;
 
@@ -3145,19 +4764,37 @@ function renderMapMarkers() {
       runGal += jobGal;
 
       const num = jobNumMap[j.id] || '?';
-      const svgIcon = L.divIcon({
-        className: 'schedule-map-marker',
-        html: '<div style="background:' + color + ';color:white;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);">' + num + '</div>',
-        iconSize: [28, 28],
-        iconAnchor: [14, 14]
+      const isApprox = !!j._coords.approximate;
+      // Approximate markers: dashed yellow border + slight transparency,
+      // signalling "we dropped this on the town center because the exact
+      // address didn't geocode — driver should verify by phone/Directions."
+      const makeJobIcon = (size, fontSize, shadow) => L.divIcon({
+        className: 'schedule-map-marker' + (isApprox ? ' schedule-map-marker-approx' : ''),
+        html: '<div style="background:' + color + ';color:white;border-radius:50%;width:' + size + 'px;height:' + size + 'px;display:flex;align-items:center;justify-content:center;font-size:' + fontSize + 'px;font-weight:700;'
+          + (isApprox
+              ? 'border:2px dashed #f9a825;opacity:0.75;'
+              : 'border:2px solid white;')
+          + 'box-shadow:' + shadow + ';">' + num + (isApprox ? '<span style="position:absolute;top:-4px;right:-4px;background:#f9a825;color:#000;font-size:9px;width:12px;height:12px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;border:1px solid white;">~</span>' : '') + '</div>',
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2]
       });
-      const marker = L.marker([j._coords.lat, j._coords.lng], { icon: svgIcon });
+      const normalIcon = makeJobIcon(28, 11, '0 2px 6px rgba(0,0,0,0.3)');
+      const hoverIcon  = makeJobIcon(44, 16, '0 4px 12px rgba(0,0,0,0.5)');
+      const marker = L.marker([j._coords.lat, j._coords.lng], { icon: normalIcon });
+      marker._jobNormalIcon = normalIcon;
+      marker._jobHoverIcon  = hoverIcon;
+      mapJobMarkers[j.id] = marker;
       const isDone = j.status === 'completed';
       const custName = j.customers?.name || 'Unknown';
 
       let popupHtml = '<div style="min-width:180px;">'
         + '<strong>' + esc(custName) + '</strong><br>'
         + '<span style="font-size:12px;">' + esc(j._fullAddr) + '</span><br>'
+        + (isApprox
+            ? '<div style="margin-top:4px;padding:4px 6px;background:#fff8e1;border-left:3px solid #f9a825;font-size:11px;color:#5d4037;">'
+                + '<strong>~ Approximate location</strong> — this street didn&#39;t resolve to a precise coordinate, so the marker is placed near the town center. Verify the address before routing.'
+              + '</div>'
+            : '')
         + '<span style="color:' + color + ';font-weight:600;">' + esc(v.name) + '</span>'
         + ' #' + num
         + (isDone ? ' <span style="color:green;">&#10003;</span>' : '')
@@ -3229,6 +4866,192 @@ async function getOsrmDrivingDistance(lat1, lng1, lat2, lng2) {
   const fallback = { distance: _haversineDist(lat1, lng1, lat2, lng2), duration: 0, source: 'haversine' };
   _osrmCache.set(key, fallback);
   return fallback;
+}
+
+// Fetch a full NxN road-distance matrix in a single OSRM /table call.
+// points: [{lat, lng}, ...]  returns { distances[N][N] (miles), durations[N][N] (min), source }
+// Falls back to pairwise haversine if OSRM is unreachable.
+async function getOsrmDistanceMatrix(points) {
+  if (!points || points.length < 2) return null;
+  const coords = points.map(p => `${p.lng},${p.lat}`).join(';');
+  try {
+    const controller = new AbortController();
+    const to = setTimeout(() => controller.abort(), 8000);
+    const resp = await fetch(
+      `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=distance,duration`,
+      { signal: controller.signal }
+    );
+    clearTimeout(to);
+    const data = await resp.json();
+    if (data.code === 'Ok' && data.distances && data.durations) {
+      return {
+        distances: data.distances.map(row => row.map(m => (m == null ? Infinity : m * 0.000621371))),
+        durations: data.durations.map(row => row.map(s => (s == null ? Infinity : s / 60))),
+        source: 'osrm',
+      };
+    }
+  } catch (e) { /* fallback */ }
+  // Haversine fallback matrix
+  const N = points.length;
+  const distances = Array.from({ length: N }, () => new Array(N).fill(0));
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      if (i !== j) distances[i][j] = _haversineDist(points[i].lat, points[i].lng, points[j].lat, points[j].lng);
+    }
+  }
+  return { distances, durations: distances.map(r => r.map(() => 0)), source: 'haversine' };
+}
+
+// Nearest-neighbor route solver with capacity.
+// Seeds with the furthest-from-home job, then at each step picks the closest
+// remaining job (by road miles) that still fits in the truck. When nothing
+// fits, triggers a dump (onboard=0) and continues from the current position
+// to the closest remaining job regardless of fill. This is a greedy TSP
+// heuristic — not globally optimal, but matches how a driver actually thinks
+// about the route, and avoids the peninsula-hopping zigzag that pure
+// descending-distance-from-home produced.
+//
+// Input: home {lat,lng}, jobs [{...j, _coords, _gal}], capacity (gallons or 0)
+// Mutates nothing. Returns { sorted, matrixSource }.
+// ============================================================
+// ROUTE SOLVER — DO NOT MODIFY THIS FUNCTION WITHOUT APPROVAL
+// Nearest-neighbor TSP with capacity constraints, opportunistic
+// dumping, and farthest-first re-seeding after every dump.
+//
+// Rules locked in (tuned against real Maine coastal routes):
+//   • Seed each segment at the job farthest from home by road
+//   • After every dump (forced or opportunistic), re-seed farthest
+//   • Forced dump  → pick farthest remaining from home
+//   • Opportunistic dump fires when ALL of:
+//       - tank ≥ 40% full
+//       - detour via dump ≤ 5 + 10×fillPct miles
+//       - direct leg to next job ≥ 3 miles (don't dump before a nearby job)
+//       - next job is ≥ 2 miles from home (don't dump before a job that's
+//         already at the dump site — just grab it on the way in)
+//   • Near-home job deferred: if the only fitting job is within 2 road-miles
+//     of home but larger jobs are waiting that don't fit, force a dump first
+//     so the near-home job lands at the END of the next segment naturally
+// ============================================================
+async function _nearestNeighborRoute(home, jobs, capacity) {
+  if (jobs.length === 0) return { sorted: [], matrixSource: null };
+  // Clear any stale dump flags from prior runs; the solver is authoritative.
+  jobs.forEach(j => { j._dumpAfter = false; });
+  if (jobs.length === 1) return { sorted: [...jobs], matrixSource: null };
+
+  // Build points array: index 0 = home, 1..N = jobs
+  const pts = [home, ...jobs.map(j => j._coords)];
+  const matrix = await getOsrmDistanceMatrix(pts);
+  const D = matrix.distances;
+
+  // Seed: furthest-from-home job (row 0, excluding self)
+  let seedIdx = 0;
+  for (let i = 1; i < jobs.length; i++) {
+    if (D[0][i + 1] > D[0][seedIdx + 1]) seedIdx = i;
+  }
+
+  const sorted = [];
+  const remainingJobs = jobs.map((j, i) => ({ job: j, mIdx: i + 1 }));
+  let cur = remainingJobs.splice(seedIdx, 1)[0];
+  sorted.push(cur.job);
+  let onboard = cur.job._gal || 0;
+  let curMIdx = cur.mIdx;
+  // After any dump, the next pick re-seeds with farthest-from-home so each
+  // new segment starts at the extreme and works back — same as the initial seed.
+  let reseedNext = false;
+
+  while (remainingJobs.length > 0) {
+    // Pick nearest remaining that fits, OR re-seed with farthest if we just
+    // completed a dump (forced or opportunistic) on the previous iteration.
+    let bestIdx = -1;
+    let bestDist = reseedNext ? -Infinity : Infinity;
+    for (let i = 0; i < remainingJobs.length; i++) {
+      if (capacity > 0 && onboard + (remainingJobs[i].job._gal || 0) > capacity) continue;
+      const d = reseedNext
+        ? D[0][remainingJobs[i].mIdx]          // farthest from home
+        : D[curMIdx][remainingJobs[i].mIdx];   // nearest from current
+      if (reseedNext ? d > bestDist : d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    reseedNext = false;
+
+    // If the only job that fits right now is essentially at the dump site
+    // (within 2 road-miles of home) but larger jobs are still waiting that
+    // don't fit at the current load, prefer a forced dump instead. This keeps
+    // the near-home job for the END of the next segment (nearest-to-home pick
+    // in farthest-first ordering) rather than awkwardly starting the new
+    // segment with it. Practical example: a 50g Rockland job that only fits
+    // at 4,000g should not be pumped with a nearly-full truck (spill risk) —
+    // dump first, do the bigger jobs, pick it up last on the way back home.
+    if (bestIdx !== -1 && capacity > 0) {
+      const pickedDistFromHome = D[0][remainingJobs[bestIdx].mIdx];
+      if (pickedDistFromHome < 2.0) {
+        const hasWaitingJobs = remainingJobs.some((rj, i) =>
+          i !== bestIdx && onboard + (rj.job._gal || 0) > capacity
+        );
+        if (hasWaitingJobs) bestIdx = -1; // defer to forced dump
+      }
+    }
+
+    let forcedDump = false;
+    if (bestIdx === -1) {
+      // Nothing fits — forced dump. Empty, then re-seed farthest from home.
+      forcedDump = true;
+      onboard = 0;
+      curMIdx = 0;
+      bestDist = -Infinity;
+      for (let i = 0; i < remainingJobs.length; i++) {
+        const d = D[0][remainingJobs[i].mIdx];
+        if (d > bestDist) { bestDist = d; bestIdx = i; }
+      }
+      // Next pick after this forced-dump job also re-seeds farthest.
+      reseedNext = true;
+    }
+
+    // Opportunistic dump: even when the next job *fits*, if the direct leg
+    // from current → next would pass close to the dump anyway, dump now.
+    // The detour cost is cheap, and emptying the tank mid-route prevents a
+    // later dedicated out-and-back trip for a stranded job on a separate
+    // peninsula. Skip this check on forced dumps (already dumped) and when
+    // the tank is basically empty (nothing worth dumping).
+    //
+    // Rule: detour (via-dump vs direct) ≤ 5 + 10 × fillPct miles, tank ≥ 40%
+    // full, and the direct leg to the next job is ≥ 3 miles (don't dump when
+    // you're about to do a nearby job — grab it first).
+    let opportunisticDump = false;
+    if (
+      !forcedDump &&
+      capacity > 0 &&
+      sorted.length > 0 &&
+      onboard > 0 &&
+      bestIdx !== -1
+    ) {
+      const pickedMIdx = remainingJobs[bestIdx].mIdx;
+      const directMiles = D[curMIdx][pickedMIdx];
+      const viaDumpMiles = D[curMIdx][0] + D[0][pickedMIdx];
+      const detour = viaDumpMiles - directMiles;
+      const fillPct = onboard / capacity;
+      const allowedDetour = 5 + 10 * fillPct;
+      const nextDistFromHome = D[0][pickedMIdx];
+      if (fillPct >= 0.40 && detour <= allowedDetour && directMiles >= 3.0 && nextDistFromHome >= 2.0) {
+        opportunisticDump = true;
+        onboard = 0;
+        // Next pick after this opportunistic-dump job also re-seeds farthest
+        // so the new segment starts at the far extreme, not nearest to current.
+        reseedNext = true;
+      }
+    }
+
+    if (forcedDump || opportunisticDump) {
+      // Flag the previous job so the renderer inserts a dump marker after it.
+      sorted[sorted.length - 1]._dumpAfter = true;
+    }
+
+    const picked = remainingJobs.splice(bestIdx, 1)[0];
+    sorted.push(picked.job);
+    onboard += picked.job._gal || 0;
+    curMIdx = picked.mIdx;
+  }
+
+  return { sorted, matrixSource: matrix.source };
 }
 
 // Helper: get coords for a job from geocode lookup
@@ -3351,6 +5174,16 @@ async function optimizeTruckRoute(vehicleId) {
     return;
   }
 
+  // Pull any actual (user-placed) manifests on this truck for this date.
+  // Manifests are fixed segment boundaries — the driver has committed to
+  // dumping at that point in the route, so the optimizer can't cross them.
+  // We split the jobs into independent segments bounded by manifests, run
+  // nearest-neighbor TSP on each segment separately (each starts with an
+  // empty tank), and reassemble preserving manifest positions.
+  const vManifests = (mapAllScheduleItems || [])
+    .filter(si => si.vehicle_id === vehicleId && si.item_type === 'manifest')
+    .map(si => ({ type: 'manifest', data: si, sort: si.sort_order != null ? si.sort_order : 999 }));
+
   // Show progress bar under the truck header in the route panel
   const totalSteps = vJobs.length;
   let completedSteps = 0;
@@ -3397,67 +5230,89 @@ async function optimizeTruckRoute(vehicleId) {
     j._gal = Object.keys(pumped).length > 0
       ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
       : jobTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
-    j._distFromHome = _haversineDist(MAP_HOME_BASE.lat, MAP_HOME_BASE.lng, j._coords.lat, j._coords.lng);
   });
 
-  // Route logic: furthest job first (truck is empty/light), then work back
-  // toward home base picking the closest next job by drive time.
-  const remaining = [...vJobs];
-  const sorted = [];
-  let onboard = 0;
+  // Route logic: nearest-neighbor TSP seeded with the furthest-from-home job.
+  // OSRM /table gives us the full NxN road-miles matrix in one API call.
+  // First stop = the job with the longest road-distance from home (driver
+  // tackles the far extreme while the truck is empty). Every stop after that
+  // is the closest remaining job that still fits in the tank, measured by
+  // road miles from the *current* position — not from home. This naturally
+  // snakes back home as the far jobs get consumed, and eliminates the
+  // peninsula-hop zigzag that pure distance-from-home sorting produced.
+  //
+  // Manifest-aware segmenting: if the user has placed actual manifests, split
+  // jobs into segments at manifest boundaries and optimize each segment
+  // independently. Each segment starts with an empty tank (the preceding
+  // manifest physically empties the truck). Manifests keep their order but
+  // get renumbered into the final sort_order sequence.
+  updateProgress(0, 'Computing road distance matrix…');
 
-  // Step 1: Pick the furthest job from home base as the first stop
-  remaining.sort((a, b) => b._distFromHome - a._distFromHome);
-  const first = remaining.shift();
-  sorted.push(first);
-  onboard += first._gal;
-  updateProgress(1);
+  // Build segments: jobs split by manifests (by sort_order).
+  // mergedOrdered = jobs and manifests interleaved in sort_order.
+  const jobItems = vJobs.map(j => ({ type: 'job', data: j, sort: j.sort_order != null ? j.sort_order : 0 }));
+  const mergedOrdered = [...jobItems, ...vManifests].sort((a, b) => a.sort - b.sort);
 
-  // Step 2: From there, pick closest next job by drive time.
-  // Dump triggers: (a) capacity overflow, or (b) truck is 70%+ full AND we're near
-  // home base AND the next job would take us further away — smarter to dump now.
-  while (remaining.length > 0) {
-    const current = sorted[sorted.length - 1];
+  const segments = []; // array of { jobs: [...], manifestAfter: <manifest item or null> }
+  let currentSegJobs = [];
+  for (const item of mergedOrdered) {
+    if (item.type === 'manifest') {
+      segments.push({ jobs: currentSegJobs, manifestAfter: item });
+      currentSegJobs = [];
+    } else {
+      currentSegJobs.push(item.data);
+    }
+  }
+  segments.push({ jobs: currentSegJobs, manifestAfter: null });
 
-    // Check if any remaining job fits in the truck
-    const anyFits = capacity <= 0 || remaining.some(j => onboard + j._gal <= capacity);
-
-    if (!anyFits && capacity > 0) {
-      // DUMP — truck goes back to disposal (home area), resets empty.
-      // Pick the furthest remaining job from home base (same as initial logic).
-      onboard = 0;
-      remaining.forEach(j => {
-        j._distFromHome = _haversineDist(MAP_HOME_BASE.lat, MAP_HOME_BASE.lng, j._coords.lat, j._coords.lng);
-      });
-      remaining.sort((a, b) => b._distFromHome - a._distFromHome);
-      const next = remaining.shift();
-      sorted.push(next);
-      onboard += next._gal;
-      updateProgress(sorted.length);
+  // Optimize each segment independently.
+  let matrixSourceLabel = 'no-matrix';
+  const optimizedSegments = [];
+  for (const seg of segments) {
+    if (seg.jobs.length <= 1) {
+      // Nothing to optimize; still clear any stale dump flags
+      seg.jobs.forEach(j => { j._dumpAfter = false; });
+      optimizedSegments.push({ jobs: [...seg.jobs], manifestAfter: seg.manifestAfter });
       continue;
     }
-
-    // Normal pick: closest job by drive time that fits capacity
-    let bestIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      if (capacity > 0 && onboard + remaining[i]._gal > capacity) continue;
-      const dist = await getOsrmDrivingDistance(current._coords.lat, current._coords.lng, remaining[i]._coords.lat, remaining[i]._coords.lng);
-      if (dist.distance < bestDist) { bestDist = dist.distance; bestIdx = i; }
+    const { sorted: segSorted, matrixSource } = await _nearestNeighborRoute(
+      { lat: MAP_HOME_BASE.lat, lng: MAP_HOME_BASE.lng },
+      seg.jobs,
+      capacity
+    );
+    if (matrixSource) matrixSourceLabel = matrixSource;
+    // The last job of a segment is followed by an actual manifest (except the
+    // final segment). Clear any _dumpAfter flag on that last job — a real
+    // manifest is there, we don't want a redundant "suggested dump" marker.
+    if (seg.manifestAfter && segSorted.length > 0) {
+      segSorted[segSorted.length - 1]._dumpAfter = false;
     }
-
-    if (bestIdx === -1) bestIdx = 0; // safety fallback
-    const next = remaining.splice(bestIdx, 1)[0];
-    sorted.push(next);
-    onboard += next._gal;
-    updateProgress(sorted.length);
+    optimizedSegments.push({ jobs: segSorted, manifestAfter: seg.manifestAfter });
   }
 
-  // Save new sort_order sequentially
+  updateProgress(vJobs.length, 'Route computed (' + matrixSourceLabel + ')');
+
+  // Reassemble in order and renumber sort_order across jobs + manifests.
   updateProgress(totalSteps, 'Saving');
-  const savePromises = sorted.map((j, i) => {
-    return window.api.saveJob({ id: j.id, sort_order: (i + 1) * 10 });
-  });
+  const savePromises = [];
+  let sortIdx = 0;
+  for (const seg of optimizedSegments) {
+    for (const j of seg.jobs) {
+      sortIdx++;
+      savePromises.push(window.api.saveJob({
+        id: j.id,
+        sort_order: sortIdx * 10,
+        dump_after: !!j._dumpAfter,
+      }));
+    }
+    if (seg.manifestAfter) {
+      sortIdx++;
+      savePromises.push(window.api.saveScheduleItem({
+        id: seg.manifestAfter.data.id,
+        sort_order: sortIdx * 10,
+      }));
+    }
+  }
   await Promise.all(savePromises);
 
   // Remove progress bar
@@ -3467,6 +5322,7 @@ async function optimizeTruckRoute(vehicleId) {
   // Refresh
   const dateStr = formatDate(scheduleDate);
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
+  const { data: schedItemsRefresh } = await window.api.getScheduleItems(null, dateStr);
   jobs.forEach(j => {
     const addr = j.property?.address || '';
     const city = j.property?.city || '';
@@ -3475,11 +5331,16 @@ async function optimizeTruckRoute(vehicleId) {
     if (mapGeoCache[fullAddr]) { j._coords = mapGeoCache[fullAddr]; j._fullAddr = fullAddr; }
   });
   mapAllJobs = jobs;
+  mapAllScheduleItems = (schedItemsRefresh || []).filter(si => si.item_type === 'manifest');
   renderMapMarkers();
   renderMapRoutePanel();
 
   const v = mapAllVehicles.find(v => v.id === vehicleId);
-  showToast('Route optimized for ' + (v?.name || 'truck') + ' — furthest out first, working back home.', 'success');
+  const segCount = vManifests.length + 1;
+  const segNote = vManifests.length > 0
+    ? ' (' + segCount + ' segments around ' + vManifests.length + ' manifest' + (vManifests.length > 1 ? 's' : '') + ')'
+    : '';
+  showToast('Route optimized for ' + (v?.name || 'truck') + segNote + ' — farthest first, then nearest-neighbor back home.', 'success');
 }
 
 async function aiOptimizeDay() {
@@ -3526,12 +5387,25 @@ async function runAiOptimize() {
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
   const { data: vehicles } = await window.api.getVehicles();
   const { data: cachedCoords } = await window.api.getGeocodeCache();
+  const { data: allSchedItems } = await window.api.getScheduleItems(null, dateStr);
 
   // Only include jobs currently on selected trucks, plus unassigned jobs
   const selectedJobs = jobs.filter(j => selectedIds.includes(j.vehicle_id) || !j.vehicle_id);
   if (selectedJobs.length === 0) { showToast('No jobs on selected trucks.', 'info'); return; }
 
   const trucks = vehicles.filter(v => selectedIds.includes(v.id));
+
+  // Collect actual manifests per selected truck — these are fixed segment
+  // boundaries. Cross-truck reassignment doesn't touch them (a manifest stays
+  // on whatever truck it was placed on), but when we finalize each truck's
+  // route we split the truck's jobs into segments around its manifests.
+  const manifestsByTruck = {};
+  (allSchedItems || [])
+    .filter(si => si.item_type === 'manifest' && selectedIds.includes(si.vehicle_id))
+    .forEach(si => {
+      if (!manifestsByTruck[si.vehicle_id]) manifestsByTruck[si.vehicle_id] = [];
+      manifestsByTruck[si.vehicle_id].push(si);
+    });
 
   // --- AI OPTIMIZE PROGRESS BAR ---
   const totalAiJobs = selectedJobs.length;
@@ -3572,21 +5446,18 @@ async function runAiOptimize() {
   const homeAddr = MAP_HOME_BASE.address;
   if (!geoCache[homeAddr]) {
     try {
-      const resp = await fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(homeAddr) + '&limit=1&countrycodes=us', {
-        headers: { 'User-Agent': 'InterstateSepticManager/1.0' }
-      });
-      const data = await resp.json();
-      if (data && data.length > 0) {
-        geoCache[homeAddr] = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-        await window.api.saveGeocodeCache({ address: homeAddr, lat: geoCache[homeAddr].lat, lng: geoCache[homeAddr].lng });
+      const r = await window.api.geocodeAddress({ freeForm: homeAddr });
+      if (r && !r.notFound && typeof r.lat === 'number') {
+        geoCache[homeAddr] = { lat: r.lat, lng: r.lng, approximate: !!r.approximate, provider: r.provider, accuracy: r.accuracy };
+        await window.api.saveGeocodeCache({ address: homeAddr, lat: r.lat, lng: r.lng, approximate: !!r.approximate, provider: r.provider, accuracy: r.accuracy });
       }
     } catch(e) {}
   }
   const homeLat = geoCache[homeAddr]?.lat || 44.1;
   const homeLng = geoCache[homeAddr]?.lng || -69.1;
 
-  // Geocode all jobs (use cache, only fetch uncached)
-  let uncached = 0;
+  // Geocode all jobs (use cache, only fetch uncached — routed through the
+  // main-process provider service so the selected provider/tier wins)
   for (const j of selectedJobs) {
     const addr = j.property?.address || '';
     const city = j.property?.city || '';
@@ -3594,16 +5465,11 @@ async function runAiOptimize() {
     const fullAddr = [addr, city, state].filter(Boolean).join(', ');
     if (!addr) continue;
     if (!geoCache[fullAddr]) {
-      uncached++;
       try {
-        if (uncached > 1) await new Promise(r => setTimeout(r, 1100));
-        const resp = await fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(fullAddr) + '&limit=1&countrycodes=us', {
-          headers: { 'User-Agent': 'InterstateSepticManager/1.0' }
-        });
-        const data = await resp.json();
-        if (data && data.length > 0) {
-          geoCache[fullAddr] = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-          await window.api.saveGeocodeCache({ address: fullAddr, lat: geoCache[fullAddr].lat, lng: geoCache[fullAddr].lng });
+        const r = await window.api.geocodeAddress({ freeForm: fullAddr, street: addr, city, state });
+        if (r && !r.notFound && typeof r.lat === 'number') {
+          geoCache[fullAddr] = { lat: r.lat, lng: r.lng, approximate: !!r.approximate, provider: r.provider, accuracy: r.accuracy };
+          await window.api.saveGeocodeCache({ address: fullAddr, lat: r.lat, lng: r.lng, approximate: !!r.approximate, provider: r.provider, accuracy: r.accuracy });
         }
       } catch(e) {}
     }
@@ -3617,7 +5483,9 @@ async function runAiOptimize() {
     j._gal = Object.keys(pumped).length > 0
       ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
       : jobTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
-    j._distFromHome = j._coords
+    // Placeholder haversine just for clustering (Step 1). The real
+    // road-miles value is computed in Step 4 right before sorting.
+    j._distFromHomeAir = j._coords
       ? _haversineDist(homeLat, homeLng, j._coords.lat, j._coords.lng)
       : 0;
   }
@@ -3712,72 +5580,127 @@ async function runAiOptimize() {
     const truckJobs = ta.jobs.filter(j => j._coords);
     const noCoordJobs = ta.jobs.filter(j => !j._coords);
 
+    // Pull user-placed manifests on this truck — they are fixed segment
+    // boundaries in the final route. Sort by existing sort_order so the
+    // relative position between "fresh" reassigned jobs and manifests is
+    // preserved as much as possible.
+    const truckManifests = (manifestsByTruck[ta.id] || [])
+      .slice()
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const truckDriver = trucks.find(v => v.id === ta.id)?.default_tech_id || '';
+
     if (truckJobs.length > 1) {
-      // Furthest job first (truck is light), then work back toward home by closest drive time
+      // Route strategy: nearest-neighbor TSP seeded with the farthest-from-home
+      // job. OSRM /table fetches the full NxN road-miles matrix for this
+      // truck's stops in a single API call. First stop = the longest-road-
+      // distance job from home (handle the extreme while empty). Every stop
+      // after that = the closest remaining job (from *current* position) that
+      // still fits in the tank. Naturally snakes back home as far jobs get
+      // consumed, avoiding the peninsula-hop zigzag that descending-from-home
+      // sorting produced on coastal Maine.
+      //
+      // Manifest-aware segmenting: if the truck has actual manifests placed,
+      // split the route into segments bounded by manifests. We distribute
+      // reassigned jobs across segments by their pre-optimization sort_order
+      // relative to each manifest's sort_order. Each segment is then solved
+      // independently starting with an empty tank.
       const truckCap = ta.capacity || 9999;
-      truckJobs.forEach(j => {
-        j._distFromHome = _haversineDist(homeLat, homeLng, j._coords.lat, j._coords.lng);
-      });
 
-      const remaining = [...truckJobs];
-      const sorted = [];
-      let onboard = 0;
-
-      // Pick furthest from home first
-      remaining.sort((a, b) => b._distFromHome - a._distFromHome);
-      const first = remaining.shift();
-      sorted.push(first);
-      onboard += first._gal;
-
-      // Then closest next job by drive time, respecting capacity.
-      // On dump (capacity full): treat as returning to home base — pick furthest remaining from home.
-      while (remaining.length > 0) {
-        const current = sorted[sorted.length - 1];
-        const anyFits = truckCap <= 0 || remaining.some(j => onboard + j._gal <= truckCap);
-
-        if (!anyFits && truckCap > 0) {
-          // DUMP — back to home base, pick furthest remaining job
-          onboard = 0;
-          remaining.forEach(j => {
-            j._distFromHome = _haversineDist(homeLat, homeLng, j._coords.lat, j._coords.lng);
-          });
-          remaining.sort((a, b) => b._distFromHome - a._distFromHome);
-          const next = remaining.shift();
-          sorted.push(next);
-          onboard += next._gal;
-          continue;
+      let optimizedSegments = [];
+      if (truckManifests.length === 0) {
+        // No manifests — single segment, straightforward.
+        const { sorted: nnSorted } = await _nearestNeighborRoute(
+          { lat: homeLat, lng: homeLng },
+          truckJobs,
+          truckCap
+        );
+        optimizedSegments = [{ jobs: nnSorted, manifestAfter: null }];
+      } else {
+        // Split truckJobs into N+1 buckets around N manifests by sort_order.
+        // Jobs with original sort_order < first manifest's sort go to bucket 0,
+        // etc. Jobs missing sort_order (newly assigned this run) fall into the
+        // last bucket so they route after existing manifests.
+        const buckets = Array.from({ length: truckManifests.length + 1 }, () => []);
+        for (const j of truckJobs) {
+          const js = j.sort_order != null ? j.sort_order : Infinity;
+          let placed = false;
+          for (let b = 0; b < truckManifests.length; b++) {
+            if (js < (truckManifests[b].sort_order || 0)) {
+              buckets[b].push(j);
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) buckets[truckManifests.length].push(j);
         }
-
-        let bestIdx = -1;
-        let bestDist = Infinity;
-        for (let i = 0; i < remaining.length; i++) {
-          if (truckCap > 0 && onboard + remaining[i]._gal > truckCap) continue;
-          const dist = await getOsrmDrivingDistance(current._coords.lat, current._coords.lng, remaining[i]._coords.lat, remaining[i]._coords.lng);
-          if (dist.distance < bestDist) { bestDist = dist.distance; bestIdx = i; }
+        // Solve each bucket independently.
+        for (let b = 0; b < buckets.length; b++) {
+          const segJobs = buckets[b];
+          const manifestAfter = b < truckManifests.length ? truckManifests[b] : null;
+          if (segJobs.length === 0) {
+            optimizedSegments.push({ jobs: [], manifestAfter });
+            continue;
+          }
+          if (segJobs.length === 1) {
+            segJobs[0]._dumpAfter = false;
+            optimizedSegments.push({ jobs: [...segJobs], manifestAfter });
+            continue;
+          }
+          const { sorted: segSorted } = await _nearestNeighborRoute(
+            { lat: homeLat, lng: homeLng },
+            segJobs,
+            truckCap
+          );
+          // The last job before a manifest shouldn't carry a dump-suggestion
+          // flag — the manifest is the real dump.
+          if (manifestAfter && segSorted.length > 0) {
+            segSorted[segSorted.length - 1]._dumpAfter = false;
+          }
+          optimizedSegments.push({ jobs: segSorted, manifestAfter });
         }
-        if (bestIdx === -1) bestIdx = 0;
-
-        const next = remaining.splice(bestIdx, 1)[0];
-        sorted.push(next);
-        onboard += next._gal;
-        updateAiProgress(aiStepsDone + 1, 'Optimizing routes… ' + sorted.length + ' jobs routed');
-        aiStepsDone++;
       }
 
-      // Save assignments + order + update driver to match new truck
-      const truckDriver = trucks.find(v => v.id === ta.id)?.default_tech_id || '';
-      sorted.forEach((j, i) => {
-        allSaves.push(window.api.saveJob({ id: j.id, vehicle_id: ta.id, assigned_to: truckDriver, sort_order: (i + 1) * 10 }));
-      });
-      // Append non-geocoded jobs at end
+      aiStepsDone += truckJobs.length;
+      updateAiProgress(aiStepsDone + 1, 'Route computed for ' + (ta.name || 'truck'));
+
+      // Save assignments + order + dump flag + update driver to match new truck.
+      // Manifests keep their id but get renumbered into the final sort_order.
+      let sortIdx = 0;
+      for (const seg of optimizedSegments) {
+        for (const j of seg.jobs) {
+          sortIdx++;
+          allSaves.push(window.api.saveJob({
+            id: j.id,
+            vehicle_id: ta.id,
+            assigned_to: truckDriver,
+            sort_order: sortIdx * 10,
+            dump_after: !!j._dumpAfter,
+          }));
+        }
+        if (seg.manifestAfter) {
+          sortIdx++;
+          allSaves.push(window.api.saveScheduleItem({
+            id: seg.manifestAfter.id,
+            sort_order: sortIdx * 10,
+          }));
+        }
+      }
+      // Append non-geocoded jobs at end (no dump flag — can't route them)
       noCoordJobs.forEach((j, i) => {
-        allSaves.push(window.api.saveJob({ id: j.id, vehicle_id: ta.id, assigned_to: truckDriver, sort_order: (sorted.length + i + 1) * 10 }));
+        sortIdx++;
+        allSaves.push(window.api.saveJob({ id: j.id, vehicle_id: ta.id, assigned_to: truckDriver, sort_order: sortIdx * 10, dump_after: false }));
       });
     } else {
-      // 0-1 jobs, just assign
-      const truckDriver = trucks.find(v => v.id === ta.id)?.default_tech_id || '';
-      ta.jobs.forEach((j, i) => {
-        allSaves.push(window.api.saveJob({ id: j.id, vehicle_id: ta.id, assigned_to: truckDriver, sort_order: (i + 1) * 10 }));
+      // 0-1 jobs, just assign; no routing needed so clear any stale flag.
+      // Still renumber manifests into the sort_order sequence.
+      let sortIdx = 0;
+      ta.jobs.forEach(j => {
+        sortIdx++;
+        allSaves.push(window.api.saveJob({ id: j.id, vehicle_id: ta.id, assigned_to: truckDriver, sort_order: sortIdx * 10, dump_after: false }));
+      });
+      truckManifests.forEach(m => {
+        sortIdx++;
+        allSaves.push(window.api.saveScheduleItem({ id: m.id, sort_order: sortIdx * 10 }));
       });
     }
   }
@@ -3800,6 +5723,7 @@ async function runAiOptimize() {
     // Refresh map in place — re-fetch jobs and re-render markers/panel without destroying the map
     const { data: freshJobs } = await window.api.getJobs({ date: dateStr });
     const { data: freshVehicles } = await window.api.getVehicles();
+    const { data: freshSched } = await window.api.getScheduleItems(null, dateStr);
     freshJobs.forEach(j => {
       const addr = j.property?.address || '';
       const city = j.property?.city || '';
@@ -3809,6 +5733,7 @@ async function runAiOptimize() {
       j._fullAddr = fullAddr;
     });
     mapAllJobs = freshJobs;
+    mapAllScheduleItems = (freshSched || []).filter(si => si.item_type === 'manifest');
     mapAllVehicles = freshVehicles;
     renderMapMarkers();
     renderMapRoutePanel();
@@ -3848,17 +5773,58 @@ function renderMapRoutePanel() {
   html += '<div style="padding:4px 8px;font-weight:700;font-size:12px;border-bottom:1px solid #eee;">Route Order</div>';
   mapAllVehicles.forEach(v => {
     if (!mapVisibleTrucks[v.id]) return;
-    const vJobs = mapAllJobs.filter(j => j.vehicle_id === v.id && j._coords).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const vJobs = mapAllJobs.filter(j => j.vehicle_id === v.id && j._coords && j.status !== 'completed').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
     if (vJobs.length === 0) return;
     const color = v.color || '#1565c0';
     html += '<div style="border-bottom:1px solid #eee;">'
       + '<div style="padding:5px 8px;background:' + color + ';color:white;font-weight:700;font-size:11px;display:flex;justify-content:space-between;align-items:center;">'
       + '<span>' + esc(v.name) + ' (' + vJobs.length + ')</span>'
-      + '<button onclick="optimizeTruckRoute(\'' + v.id + '\')" style="background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:white;border-radius:3px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;" title="Optimize route: furthest from home first">Optimize</button>'
+      + '<button onclick="optimizeTruckRoute(\'' + v.id + '\')" style="background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:white;border-radius:3px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;" title="Optimize route: farthest stop first, then nearest-neighbor back home">Optimize</button>'
       + '</div>';
     const capacity = v.capacity_gallons || 0;
     let routeRunGal = 0;
-    vJobs.forEach((j, idx) => {
+
+    // Build an interleaved list of jobs + actual manifests for this truck so
+    // we can render real dump records alongside job cards. Jobs and manifests
+    // both live on sort_order — a manifest with sort_order between two jobs
+    // sits between them in the rendered list.
+    const vManifests = mapAllScheduleItems
+      .filter(si => si.vehicle_id === v.id && si.item_type === 'manifest')
+      .map(si => ({ type: 'manifest', data: si, sort: si.sort_order != null ? si.sort_order : 999 }));
+    const vRouteJobs = vJobs.map((j, jobIdx) => ({ type: 'job', data: j, sort: j.sort_order != null ? j.sort_order : jobIdx * 10, jobIdx }));
+    const combined = [...vRouteJobs, ...vManifests].sort((a, b) => a.sort - b.sort);
+
+    combined.forEach((item, cIdx) => {
+      if (item.type === 'manifest') {
+        // Actual manifest (real dump record from schedule_items). Render as
+        // a draggable green-tinted card. Placing one here is authoritative —
+        // the tank resets at this position regardless of any dump_after flags
+        // on surrounding jobs. Drag to reposition; drop-target logic updates
+        // sort_order on the underlying schedule_item.
+        const si = item.data;
+        const isCompleted = si.status === 'completed';
+        const mfBg = isCompleted ? '#e8f5e9' : '#e3f2fd';
+        const mfBorder = isCompleted ? '#43a047' : '#1e88e5';
+        const mfTitle = isCompleted
+          ? 'Manifest #' + esc(si.manifest_number || '—') + ' — dumped ' + (si.total_gallons || 0).toLocaleString() + ' gal'
+          : 'Manifest #' + esc(si.manifest_number || '(draft)') + ' — drag to reposition';
+        html += '<div class="map-route-manifest" draggable="true" '
+          + 'data-manifest-id="' + si.id + '" data-vehicle-id="' + v.id + '" '
+          + 'ondragstart="onMapManifestDragStart(event)" ondragover="onMapRouteDragOver(event)" '
+          + 'ondrop="onMapRouteDrop(event, \'' + v.id + '\')" ondragend="onMapRouteDragEnd(event)" '
+          + 'title="' + mfTitle + '" '
+          + 'style="padding:4px 8px;background:' + mfBg + ';border-bottom:1px solid ' + mfBorder + ';display:flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:#0d47a1;cursor:grab;">'
+          + '<span style="font-size:14px;">&#9851;</span>'
+          + '<span style="flex:1;">Manifest' + (si.manifest_number ? ' #' + esc(si.manifest_number) : '') + (si.total_gallons ? ' — ' + si.total_gallons.toLocaleString() + ' gal' : '') + (isCompleted ? '' : ' <span style="color:#999;font-weight:500;">(draft)</span>') + '</span>'
+          + '<span style="font-size:9px;color:#999;font-weight:500;">&#8693;</span>'
+          + '</div>';
+        routeRunGal = 0; // Actual dump empties the tank
+        return;
+      }
+
+      const j = item.data;
+      const idx = item.jobIdx;
+
       // Calculate job gallons
       const pumped = j.gallons_pumped || {};
       const jobTanks = j.property?.tanks || [];
@@ -3866,11 +5832,29 @@ function renderMapRoutePanel() {
         ? Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0)
         : jobTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
 
-      // Show dump alert before this job if it would overflow
-      if (capacity > 0 && routeRunGal > 0 && routeRunGal + jobGal > capacity) {
-        html += '<div style="padding:4px 8px;background:#fff3e0;border-bottom:1px solid #ff9800;display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#e65100;">'
+      // Show dump SUGGESTION (orange) before this job when either:
+      //   (a) the previous job was flagged dump_after by the optimizer
+      //       (opportunistic mid-route dump, tank wouldn't overflow), or
+      //   (b) adding this job would overflow capacity.
+      // Skip if the immediately previous item was already an actual manifest
+      // (the real dump already reset the tank — no need for a suggestion).
+      const prevItem = cIdx > 0 ? combined[cIdx - 1] : null;
+      const prevWasManifest = prevItem && prevItem.type === 'manifest';
+      const prevJobInList = prevItem && prevItem.type === 'job' ? prevItem.data : null;
+      const flaggedDump = prevJobInList && prevJobInList.dump_after;
+      const overflowDump = capacity > 0 && routeRunGal > 0 && routeRunGal + jobGal > capacity;
+      if (!prevWasManifest && (flaggedDump || overflowDump)) {
+        const dumpSourceId = flaggedDump ? prevJobInList.id : '';
+        html += '<div class="map-route-dump" draggable="true" '
+          + 'data-vehicle-id="' + v.id + '" data-source-job-id="' + dumpSourceId + '" '
+          + 'data-dump-type="' + (flaggedDump ? 'flagged' : 'overflow') + '" '
+          + 'ondragstart="onMapDumpDragStart(event)" ondragover="onMapRouteDragOver(event)" '
+          + 'ondrop="onMapRouteDrop(event, \'' + v.id + '\')" ondragend="onMapRouteDragEnd(event)" '
+          + 'title="Suggested dump — drag to reposition, or insert a real manifest from the schedule view" '
+          + 'style="padding:4px 8px;background:#fff3e0;border-bottom:1px solid #ff9800;display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#e65100;cursor:grab;">'
           + '<span style="font-size:14px;">&#9888;</span>'
-          + '<span>Dump — ' + routeRunGal.toLocaleString() + ' / ' + capacity.toLocaleString() + ' gal</span>'
+          + '<span style="flex:1;">Dump suggested — ' + routeRunGal.toLocaleString() + (capacity > 0 ? ' / ' + capacity.toLocaleString() : '') + ' gal</span>'
+          + '<span style="font-size:9px;color:#999;font-weight:500;">&#8693;</span>'
           + '</div>';
         routeRunGal = 0;
       }
@@ -3881,6 +5865,7 @@ function renderMapRoutePanel() {
       const city = j.property?.city || '';
       html += '<div class="map-route-item" draggable="true" data-job-id="' + j.id + '" data-vehicle-id="' + v.id + '" data-idx="' + idx + '" '
         + 'ondragstart="onMapRouteDragStart(event)" ondragover="onMapRouteDragOver(event)" ondrop="onMapRouteDrop(event, \'' + v.id + '\')" ondragend="onMapRouteDragEnd(event)" '
+        + 'onmouseenter="highlightMapJob(\'' + j.id + '\',true)" onmouseleave="highlightMapJob(\'' + j.id + '\',false)" '
         + 'style="padding:3px 8px;border-bottom:1px solid #f5f5f5;cursor:grab;display:flex;align-items:center;gap:5px;">'
         + '<span style="background:' + color + ';color:white;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0;">' + num + '</span>'
         + '<div style="min-width:0;flex:1;overflow:hidden;">'
@@ -3915,6 +5900,83 @@ function fitMapBounds() {
   }
 }
 
+
+async function refreshMotiveTrucksOnMap() {
+  if (!scheduleMapInstance || !mapMotiveTruckLayer) return;
+  try {
+    // Always fetch fresh vehicles so color changes in Settings apply immediately
+    const [locResult, { data: freshVehicles }] = await Promise.all([
+      window.api.getMotiveLocations(),
+      window.api.getVehicles(),
+    ]);
+    if (!locResult || locResult.error) return;
+    mapMotiveTruckLayer.clearLayers();
+    const rawList = locResult.vehicles || [];
+    const motiveVehicles = rawList.map(item => item.vehicle || item).filter(Boolean);
+    const ismVehicleList = freshVehicles || mapAllVehicles;
+    motiveVehicles.forEach(mv => {
+      const loc = mv.current_location;
+      if (!loc?.lat || !loc?.lon) return;
+      // Match to ISM vehicle for color
+      const mnRaw = (mv.number || '').toLowerCase();
+      const mnTokens = [...new Set(
+        mnRaw.split(/[\s_\-]+/).flatMap(p => p.split(/(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])/i)).filter(w => w.length > 2)
+      )];
+      let ismV = null, bestScore = -1;
+      for (const v of ismVehicleList) {
+        if ((v.name || '').toLowerCase().includes('service')) continue;
+        const words = (v.name || '').toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        const score = words.filter(w => mnTokens.some(t => t.includes(w) || w.includes(t))).length;
+        if (score > bestScore) { bestScore = score; ismV = v; }
+      }
+      if (bestScore === 0) ismV = null;
+      const color = ismV?.color || '#607d8b';
+      const label = ismV?.name || mv.number || 'Truck';
+      const speedMph = Math.round((loc.kph || 0) * 0.621);
+      const updatedAt = loc.located_at ? new Date(loc.located_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+      const isBox = (ismV?.name || '').toLowerCase().includes('box');
+
+      const truckSvg = isBox
+        ? `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="24" viewBox="0 0 44 24">
+            <rect x="1" y="2" width="26" height="16" rx="2" fill="${color}" stroke="white" stroke-width="1"/>
+            <line x1="22" y1="2" x2="22" y2="18" stroke="rgba(255,255,255,0.4)" stroke-width="0.7"/>
+            <rect x="27" y="7" width="14" height="11" rx="2" fill="${color}" stroke="white" stroke-width="1"/>
+            <rect x="28" y="8" width="8" height="7" rx="1" fill="rgba(200,235,255,0.45)" stroke="rgba(255,255,255,0.6)" stroke-width="0.6"/>
+            <circle cx="9" cy="21" r="3" fill="#1a1a1a" stroke="white" stroke-width="1"/><circle cx="9" cy="21" r="1.2" fill="#555"/>
+            <circle cx="34" cy="21" r="3" fill="#1a1a1a" stroke="white" stroke-width="1"/><circle cx="34" cy="21" r="1.2" fill="#555"/>
+          </svg>`
+        : `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="22" viewBox="0 0 44 22">
+            <rect x="1" y="4" width="27" height="11" rx="5" fill="${color}" stroke="white" stroke-width="1"/>
+            <rect x="28" y="6" width="14" height="9" rx="2" fill="${color}" stroke="white" stroke-width="1"/>
+            <rect x="29" y="7" width="8" height="6" rx="1" fill="rgba(200,235,255,0.45)" stroke="rgba(255,255,255,0.6)" stroke-width="0.6"/>
+            <rect x="40" y="3" width="1.8" height="4" rx="0.8" fill="rgba(0,0,0,0.4)"/>
+            <circle cx="9" cy="19" r="3" fill="#1a1a1a" stroke="white" stroke-width="1"/><circle cx="9" cy="19" r="1.2" fill="#555"/>
+            <circle cx="34" cy="19" r="3" fill="#1a1a1a" stroke="white" stroke-width="1"/><circle cx="34" cy="19" r="1.2" fill="#555"/>
+          </svg>`;
+
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
+          ${truckSvg}
+          <div style="background:${color};color:white;font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;border:1px solid white;white-space:nowrap;margin-top:1px;">${esc(label)}</div>
+        </div>`,
+        iconSize: [44, 38], iconAnchor: [22, 38],
+      });
+      L.marker([loc.lat, loc.lon], { icon, zIndexOffset: 2000 })
+        .bindPopup(`<strong>${esc(label)}</strong><br>${loc.city || ''}${loc.state ? ', ' + loc.state : ''}<br>Speed: ${speedMph} mph<br>Updated: ${updatedAt}`)
+        .addTo(mapMotiveTruckLayer);
+    });
+  } catch (e) { console.error('[Motive map]', e); }
+}
+
+function highlightMapJob(jobId, on) {
+  const marker = mapJobMarkers[jobId];
+  if (!marker) return;
+  marker.setIcon(on ? marker._jobHoverIcon : marker._jobNormalIcon);
+  if (on) marker.setZIndexOffset(1000);
+  else marker.setZIndexOffset(0);
+}
+
 function toggleMapTruck(id) {
   if (id === 'all') {
     const allOn = mapAllVehicles.every(v => mapVisibleTrucks[v.id]);
@@ -3930,6 +5992,13 @@ function toggleMapTruck(id) {
 // Map route drag-and-drop reordering
 let mapDragJobId = null;
 let mapDragSourceVehicle = null;
+// Additional drag state — set exclusively by their respective dragstart
+// handlers, cleared in onMapRouteDragEnd. The drop handler branches on
+// whichever is set.
+let mapDragDumpVehicleId = null;     // dump suggestion being dragged
+let mapDragDumpSourceJobId = null;   // prev job with dump_after=true; '' for overflow-only dumps
+let mapDragManifestId = null;        // actual manifest (schedule_item) being dragged
+let mapDragManifestVehicle = null;
 
 function onMapRouteDragStart(e) {
   const item = e.target.closest('.map-route-item');
@@ -3939,14 +6008,34 @@ function onMapRouteDragStart(e) {
   if (item) item.style.opacity = '0.4';
 }
 
+function onMapDumpDragStart(e) {
+  const el = e.target.closest('.map-route-dump');
+  if (!el) return;
+  mapDragDumpVehicleId = el.dataset.vehicleId;
+  mapDragDumpSourceJobId = el.dataset.sourceJobId || ''; // '' = overflow dump
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'dump'); // required for some browsers
+  el.style.opacity = '0.4';
+}
+
+function onMapManifestDragStart(e) {
+  const el = e.target.closest('.map-route-manifest');
+  if (!el) return;
+  mapDragManifestId = el.dataset.manifestId;
+  mapDragManifestVehicle = el.dataset.vehicleId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'manifest');
+  el.style.opacity = '0.4';
+}
+
 function onMapRouteDragOver(e) {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
 
-  // Clear all drop indicators
+  // Clear all drop indicators across every row type
   const panel = document.getElementById('mapRoutePanel');
   if (panel) {
-    panel.querySelectorAll('.map-route-item').forEach(el => {
+    panel.querySelectorAll('.map-route-item, .map-route-dump, .map-route-manifest').forEach(el => {
       el.style.borderTop = '';
       el.style.borderBottom = '';
     });
@@ -3957,8 +6046,8 @@ function onMapRouteDragOver(e) {
     else if (e.clientY > rect.bottom - edgeZone) panel.scrollTop += 8;
   }
 
-  // Show indicator above or below the hovered item
-  const item = e.target.closest('.map-route-item');
+  // Show indicator above or below the hovered row (job, dump, or manifest)
+  const item = e.target.closest('.map-route-item, .map-route-dump, .map-route-manifest');
   if (item) {
     const rect = item.getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
@@ -3971,10 +6060,10 @@ function onMapRouteDragOver(e) {
 }
 
 function onMapRouteDragEnd(e) {
-  // Clean up opacity and indicators
+  // Clean up opacity and indicators for all draggable row types
   const panel = document.getElementById('mapRoutePanel');
   if (panel) {
-    panel.querySelectorAll('.map-route-item').forEach(el => {
+    panel.querySelectorAll('.map-route-item, .map-route-dump, .map-route-manifest').forEach(el => {
       el.style.opacity = '';
       el.style.borderTop = '';
       el.style.borderBottom = '';
@@ -3982,23 +6071,218 @@ function onMapRouteDragEnd(e) {
   }
   mapDragJobId = null;
   mapDragSourceVehicle = null;
+  mapDragDumpVehicleId = null;
+  mapDragDumpSourceJobId = null;
+  mapDragManifestId = null;
+  mapDragManifestVehicle = null;
+}
+
+// Find which JOB the user intended to drop before/after, given any target row
+// (job, dump, or manifest) and the drop Y coordinate. Returns the job that
+// should receive the dump_after flag (i.e. the job immediately before the
+// drop position in route order). Returns null if no such job exists (e.g.
+// dropped before the first job).
+function _findDumpAnchorJob(e, vehicleId, targetItem) {
+  const vJobs = mapAllJobs
+    .filter(j => j.vehicle_id === vehicleId && j._coords && j.status !== 'completed')
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  if (vJobs.length === 0) return null;
+
+  // Build combined in the same order the panel renders them so "before/after"
+  // matches what the user sees.
+  const vManifests = mapAllScheduleItems
+    .filter(si => si.vehicle_id === vehicleId && si.item_type === 'manifest')
+    .map(si => ({ type: 'manifest', data: si, sort: si.sort_order != null ? si.sort_order : 999 }));
+  const vRouteJobs = vJobs.map((j, i) => ({ type: 'job', data: j, sort: j.sort_order != null ? j.sort_order : i * 10 }));
+  const combined = [...vRouteJobs, ...vManifests].sort((a, b) => a.sort - b.sort);
+
+  if (!targetItem) {
+    // Dropped in empty space — append dump after the last job.
+    for (let i = combined.length - 1; i >= 0; i--) {
+      if (combined[i].type === 'job') return combined[i].data;
+    }
+    return null;
+  }
+
+  const rect = targetItem.getBoundingClientRect();
+  const dropAfter = e.clientY >= rect.top + rect.height * 0.5;
+
+  // Figure out which combined-index the targetItem corresponds to.
+  const targetJobId = targetItem.dataset?.jobId;
+  const targetManifestId = targetItem.dataset?.manifestId;
+  let targetCIdx = -1;
+  if (targetJobId) {
+    targetCIdx = combined.findIndex(c => c.type === 'job' && c.data.id === targetJobId);
+  } else if (targetManifestId) {
+    targetCIdx = combined.findIndex(c => c.type === 'manifest' && c.data.id === targetManifestId);
+  } else if (targetItem.classList.contains('map-route-dump')) {
+    // Dropped on another dump marker — treat as "right before the job that comes after it"
+    // The dump isn't in `combined` (it's rendered between items), so search forward
+    // from the source job for the next job.
+    const sourceJobId = targetItem.dataset.sourceJobId;
+    if (sourceJobId) {
+      targetCIdx = combined.findIndex(c => c.type === 'job' && c.data.id === sourceJobId);
+    }
+  }
+
+  if (targetCIdx === -1) return null;
+
+  // The dump lands either BEFORE targetCIdx (if dropAfter=false) or AFTER (if dropAfter=true).
+  // The anchor job is the last job at or before the landing slot.
+  const landingIdx = dropAfter ? targetCIdx : targetCIdx - 1;
+  for (let i = landingIdx; i >= 0; i--) {
+    if (combined[i].type === 'job') return combined[i].data;
+  }
+  return null;
+}
+
+async function _handleMapDumpDrop(e, vehicleId, targetItem) {
+  const anchorJob = _findDumpAnchorJob(e, vehicleId, targetItem);
+  if (!anchorJob) { showToast('Cannot place dump before the first job.', 'error'); return; }
+  if (anchorJob.id === mapDragDumpSourceJobId) return; // same position, no-op
+
+  const saves = [];
+  // Clear the flag from the old source (if this was a flagged dump, not overflow)
+  if (mapDragDumpSourceJobId) {
+    saves.push(window.api.saveJob({ id: mapDragDumpSourceJobId, dump_after: false }));
+  }
+  // Set the flag on the new anchor
+  saves.push(window.api.saveJob({ id: anchorJob.id, dump_after: true }));
+  await Promise.all(saves);
+
+  // Update in-memory so the re-render reflects immediately without needing a round-trip
+  mapAllJobs.forEach(j => {
+    if (j.id === mapDragDumpSourceJobId) j.dump_after = false;
+    if (j.id === anchorJob.id) j.dump_after = true;
+  });
+
+  renderMapRoutePanel();
+  showToast('Dump repositioned.', 'success');
+}
+
+async function _handleMapManifestDrop(e, vehicleId, targetItem) {
+  const manifestId = mapDragManifestId;
+
+  // Assemble the current combined list and relocate the manifest within it,
+  // then renumber all sort_orders sequentially so the new position sticks.
+  const vJobs = mapAllJobs
+    .filter(j => j.vehicle_id === vehicleId && j._coords && j.status !== 'completed')
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  const vManifests = mapAllScheduleItems
+    .filter(si => si.vehicle_id === vehicleId && si.item_type === 'manifest')
+    .map(si => ({ type: 'manifest', id: si.id, sort: si.sort_order != null ? si.sort_order : 999 }));
+  const vRouteJobs = vJobs.map((j, i) => ({ type: 'job', id: j.id, sort: j.sort_order != null ? j.sort_order : i * 10 }));
+  const combined = [...vRouteJobs, ...vManifests].sort((a, b) => a.sort - b.sort);
+
+  // Remove the dragged manifest from its current position
+  const draggedIdx = combined.findIndex(c => c.type === 'manifest' && c.id === manifestId);
+  if (draggedIdx === -1) return;
+  const [dragged] = combined.splice(draggedIdx, 1);
+
+  // Determine insert position based on drop target + Y position
+  let insertIdx;
+  if (!targetItem) {
+    insertIdx = combined.length; // end of route
+  } else {
+    const rect = targetItem.getBoundingClientRect();
+    const dropAfter = e.clientY >= rect.top + rect.height * 0.5;
+    const targetJobId = targetItem.dataset?.jobId;
+    const targetManifestId = targetItem.dataset?.manifestId;
+    let targetCIdx = -1;
+    if (targetJobId) {
+      targetCIdx = combined.findIndex(c => c.type === 'job' && c.id === targetJobId);
+    } else if (targetManifestId) {
+      targetCIdx = combined.findIndex(c => c.type === 'manifest' && c.id === targetManifestId);
+    }
+    if (targetCIdx === -1) insertIdx = combined.length;
+    else insertIdx = dropAfter ? targetCIdx + 1 : targetCIdx;
+  }
+  combined.splice(insertIdx, 0, dragged);
+
+  // Renumber sort_orders: 10, 20, 30, ... — jobs and manifests share the space
+  const saves = [];
+  combined.forEach((entry, i) => {
+    const newSort = (i + 1) * 10;
+    if (entry.type === 'job') {
+      saves.push(window.api.saveJob({ id: entry.id, sort_order: newSort }));
+    } else {
+      saves.push(window.api.saveScheduleItem({ id: entry.id, sort_order: newSort }));
+    }
+  });
+  await Promise.all(saves);
+
+  // Refresh and re-render
+  const dateStr = formatDate(scheduleDate);
+  const { data: freshJobs } = await window.api.getJobs({ date: dateStr });
+  const { data: freshSched } = await window.api.getScheduleItems(null, dateStr);
+  freshJobs.forEach(j => {
+    const addr = j.property?.address || '';
+    const city = j.property?.city || '';
+    const state = j.property?.state || 'ME';
+    const fullAddr = [addr, city, state].filter(Boolean).join(', ');
+    if (mapGeoCache[fullAddr]) { j._coords = mapGeoCache[fullAddr]; j._fullAddr = fullAddr; }
+  });
+  mapAllJobs = freshJobs;
+  mapAllScheduleItems = (freshSched || []).filter(si => si.item_type === 'manifest');
+  renderMapMarkers();
+  renderMapRoutePanel();
+  showToast('Manifest repositioned.', 'success');
+}
+
+// Reload jobs + schedule items for the currently open map without destroying
+// the Leaflet map instance. Used by the data-change broadcast listener so
+// edits from other surfaces (day view manifest inserts, etc.) show up on
+// the map immediately.
+async function refreshMapData() {
+  if (!scheduleMapVisible) return;
+  const dateStr = formatDate(scheduleDate);
+  const { data: jobs } = await window.api.getJobs({ date: dateStr });
+  const { data: schedItems } = await window.api.getScheduleItems(null, dateStr);
+  jobs.forEach(j => {
+    const addr = j.property?.address || '';
+    const city = j.property?.city || '';
+    const state = j.property?.state || 'ME';
+    const fullAddr = [addr, city, state].filter(Boolean).join(', ');
+    if (mapGeoCache[fullAddr]) { j._coords = mapGeoCache[fullAddr]; j._fullAddr = fullAddr; }
+  });
+  mapAllJobs = jobs;
+  mapAllScheduleItems = (schedItems || []).filter(si => si.item_type === 'manifest');
+  renderMapMarkers();
+  renderMapRoutePanel();
 }
 
 async function onMapRouteDrop(e, vehicleId) {
   e.preventDefault();
   e.stopPropagation();
-  const targetItem = e.target.closest('.map-route-item');
+  const targetItem = e.target.closest('.map-route-item, .map-route-dump, .map-route-manifest');
 
-  // Clean up indicators
+  // Clean up indicators across all row types
   const panel = document.getElementById('mapRoutePanel');
   if (panel) {
-    panel.querySelectorAll('.map-route-item').forEach(el => {
+    panel.querySelectorAll('.map-route-item, .map-route-dump, .map-route-manifest').forEach(el => {
       el.style.opacity = '';
       el.style.borderTop = '';
       el.style.borderBottom = '';
     });
   }
 
+  // Branch 1: dropped a DUMP SUGGESTION — update dump_after flags on jobs.
+  if (mapDragDumpVehicleId) {
+    await _handleMapDumpDrop(e, vehicleId, targetItem);
+    mapDragDumpVehicleId = null;
+    mapDragDumpSourceJobId = null;
+    return;
+  }
+
+  // Branch 2: dropped an ACTUAL MANIFEST — update its sort_order.
+  if (mapDragManifestId) {
+    await _handleMapManifestDrop(e, vehicleId, targetItem);
+    mapDragManifestId = null;
+    mapDragManifestVehicle = null;
+    return;
+  }
+
+  // Branch 3: dropped a JOB (original behavior).
   if (!mapDragJobId) return;
   const draggedId = mapDragJobId;
   mapDragJobId = null;
@@ -4039,6 +6323,7 @@ async function onMapRouteDrop(e, vehicleId) {
   // Refresh data and re-render
   const dateStr = formatDate(scheduleDate);
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
+  const { data: schedItemsRefresh } = await window.api.getScheduleItems(null, dateStr);
   jobs.forEach(j => {
     const addr = j.property?.address || '';
     const city = j.property?.city || '';
@@ -4047,6 +6332,7 @@ async function onMapRouteDrop(e, vehicleId) {
     if (mapGeoCache[fullAddr]) { j._coords = mapGeoCache[fullAddr]; j._fullAddr = fullAddr; }
   });
   mapAllJobs = jobs;
+  mapAllScheduleItems = (schedItemsRefresh || []).filter(si => si.item_type === 'manifest');
   renderMapMarkers();
   renderMapRoutePanel();
 }
@@ -4060,6 +6346,7 @@ async function reassignJobFromMap(jobId, newVehicleId) {
   const newDriver = dayAssign?.user_id ?? newTruck?.default_tech_id ?? '';
   await window.api.saveJob({ id: jobId, vehicle_id: newVehicleId, assigned_to: newDriver });
   const { data: jobs } = await window.api.getJobs({ date: dateStr });
+  const { data: schedItemsRA } = await window.api.getScheduleItems(null, dateStr);
   jobs.forEach(j => {
     const addr = j.property?.address || '';
     const city = j.property?.city || '';
@@ -4068,16 +6355,21 @@ async function reassignJobFromMap(jobId, newVehicleId) {
     if (mapGeoCache[fullAddr]) { j._coords = mapGeoCache[fullAddr]; j._fullAddr = fullAddr; }
   });
   mapAllJobs = jobs;
+  mapAllScheduleItems = (schedItemsRA || []).filter(si => si.item_type === 'manifest');
   renderMapMarkers();
   renderMapRoutePanel();
 }
 
 async function seedTestData() {
-  if (!confirm('Seed demo customers & jobs for today? This will add ~28 jobs across your pump trucks.')) return;
+  if (!confirm('Seed ~28 demo jobs for today using your real customer list?\n\n'
+    + '• Real customers, properties, and tanks are used so addresses map correctly\n'
+    + '• ONLY the job records are tagged as demo data\n'
+    + '• NO confirmation emails will go out to your real customers\n'
+    + '• Clicking "- Demo" removes every demo job and its invoices/payments/etc., leaving all customer data untouched')) return;
   const result = await window.api.seedTestData();
   if (result.success) {
     const d = result.data;
-    showToast(`Created ${d.jobs} jobs, ${d.customers} customers for ${d.date}`, 'success');
+    showToast(`Created ${d.jobs} demo jobs for ${d.date} (sampled from ${d.pool_size} real customers — no emails sent)`, 'success');
     loadSchedule();
   } else {
     showToast(result.error || 'Seed failed', 'error');
@@ -4085,10 +6377,26 @@ async function seedTestData() {
 }
 
 async function unseedTestData() {
-  if (!confirm('Remove ALL test/demo data? This will delete demo customers, properties, tanks, and jobs. Your real data is untouched.')) return;
+  if (!confirm('Remove ALL demo jobs and every record tied to them '
+    + '(invoices, payments, schedule items, reminders, disposal loads, service-due notices, filter leads)?\n\n'
+    + 'Your real customers, properties, and tanks are NOT touched.')) return;
   const result = await window.api.unseedTestData();
   if (result.success) {
-    showToast(`Removed ${result.data.jobs} jobs, ${result.data.customers} customers, ${result.data.properties} properties, ${result.data.tanks} tanks.`, 'success');
+    const d = result.data;
+    // Build a concise summary of what was actually removed
+    const parts = [];
+    if (d.jobs) parts.push(`${d.jobs} jobs`);
+    if (d.invoices) parts.push(`${d.invoices} invoices`);
+    if (d.payments) parts.push(`${d.payments} payments`);
+    if (d.schedule_items) parts.push(`${d.schedule_items} schedule items`);
+    if (d.reminders) parts.push(`${d.reminders} reminders`);
+    if (d.disposal_loads) parts.push(`${d.disposal_loads} disposal loads`);
+    if (d.service_due_notices) parts.push(`${d.service_due_notices} service-due notices`);
+    if (d.filter_leads) parts.push(`${d.filter_leads} filter leads`);
+    if (d.customers) parts.push(`${d.customers} legacy demo customers`);
+    if (d.properties) parts.push(`${d.properties} legacy demo properties`);
+    if (d.tanks) parts.push(`${d.tanks} legacy demo tanks`);
+    showToast(parts.length ? `Removed: ${parts.join(', ')}` : 'No demo data to remove.', 'success');
     loadSchedule();
   } else {
     showToast(result.error || 'Unseed failed', 'error');
@@ -4204,6 +6512,25 @@ async function refreshRevenue() {
     if (amt) amt.textContent = '$' + rev.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
   });
 
+  // Re-sort driver chips scoreboard-style: highest revenue on top
+  const scoreboardList = document.getElementById('drivers-scoreboard-list');
+  if (scoreboardList) {
+    const items = Array.from(scoreboardList.querySelectorAll('.driver-scoreboard-item'));
+    // Record position before sort
+    const beforeOrder = items.map(el => el.dataset.userId);
+    items.sort((a, b) => (driverRevenue[b.dataset.userId] || 0) - (driverRevenue[a.dataset.userId] || 0));
+    items.forEach((item, i) => {
+      scoreboardList.appendChild(item);
+      // Flash items that moved position
+      if (beforeOrder[i] !== item.dataset.userId) {
+        item.classList.remove('scoreboard-moved');
+        void item.offsetWidth; // force reflow so animation re-triggers
+        item.classList.add('scoreboard-moved');
+        setTimeout(() => item.classList.remove('scoreboard-moved'), 400);
+      }
+    });
+  }
+
   console.log('[Revenue] Total revenue:', totalRev);
   const totalEl = document.getElementById('rev-day-total');
   if (totalEl) totalEl.textContent = '$' + totalRev.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -4221,6 +6548,7 @@ function _scheduleRestoreScroll() {
 // ===== CUSTOM POINTER-BASED DRAG & DROP (no HTML5 drag API) =====
 let _pDrag = null; // { type, id, source, el, ghost, startY, startX, started }
 let _pDragAutoScroll = null;
+let _scheduleUndoStack = []; // stack of { jobs: [{id, vehicle_id, assigned_to, sort_order}] }
 
 function _pDragCleanup() {
   if (_pDrag?.ghost) _pDrag.ghost.remove();
@@ -4267,6 +6595,38 @@ function onJobMouseDown(e, jobId) {
   };
 }
 
+// Recompute and persist assigned_to for every job in a truck column based on driver_change schedule items.
+// Jobs before any driver_change get the truck's default driver; jobs after each driver_change get that driver.
+async function _reapplyDriverChanges(vehicleId, date) {
+  const [{ data: allJobs2 }, { data: vehicles2 }, { data: dayAssigns2 }, { data: schedItems2 }] = await Promise.all([
+    window.api.getJobs({ date }),
+    window.api.getVehicles(),
+    window.api.getTruckDayAssignments(date),
+    window.api.getScheduleItems(vehicleId, date),
+  ]);
+  const truckJobs = (allJobs2 || []).filter(j => j.vehicle_id === vehicleId);
+  const truck = (vehicles2 || []).find(v => v.id === vehicleId);
+  const dayAssign = (dayAssigns2 || []).find(a => a.vehicle_id === vehicleId);
+  const defaultDriverId = dayAssign?.user_id ?? truck?.default_tech_id ?? '';
+  const driverChanges = (schedItems2 || []).filter(si => si.item_type === 'driver_change');
+
+  const combined = [];
+  truckJobs.forEach((j, idx) => combined.push({ type: 'job', data: j, sort: j.sort_order != null ? j.sort_order : idx * 10 }));
+  driverChanges.forEach(si => combined.push({ type: 'driver_change', driverId: si.driver_id, sort: si.sort_order != null ? si.sort_order : 999 }));
+  combined.sort((a, b) => a.sort - b.sort);
+
+  let curDriver = defaultDriverId;
+  const updates = [];
+  for (const item of combined) {
+    if (item.type === 'driver_change') {
+      curDriver = item.driverId;
+    } else if (item.data.assigned_to !== curDriver) {
+      updates.push({ id: item.data.id, assigned_to: curDriver });
+    }
+  }
+  if (updates.length > 0) await Promise.all(updates.map(u => window.api.saveJob(u)));
+}
+
 // Called from mousedown on side panel chips (manifest, driver)
 function onChipMouseDown(e, type, id) {
   if (e.button !== 0) return;
@@ -4283,7 +6643,8 @@ function onChipMouseDown(e, type, id) {
 // Called from mousedown on schedule items (manifests, driver changes in column)
 function onScheduleItemMouseDown(e, itemId) {
   if (e.button !== 0) return;
-  const card = e.target.closest('.schedule-manifest-card, .schedule-driver-change');
+  const card = e.target.closest('.schedule-manifest-card, .schedule-driver-change') ||
+    e.target.closest('.note-card-drag')?.closest('.schedule-note-card');
   if (!card) return;
   e.preventDefault();
   e.stopPropagation();
@@ -4413,6 +6774,11 @@ document.addEventListener('mouseup', async (e) => {
     showToast(`Manifest #${nextNum} added. Click to edit details.`, 'success');
     _scheduleRestoreScroll(); loadSchedule();
 
+  } else if (drag.type === 'note') {
+    // Open note modal — save drop location for when user hits Save
+    openNoteModal(dropVehicleId, dropDateStr, sortOrder, null, '');
+    return;
+
   } else if (drag.type === 'driver_change') {
     const { data: users } = await window.api.getUsers();
     const user = users.find(u => u.id === drag.id);
@@ -4420,11 +6786,15 @@ document.addEventListener('mouseup', async (e) => {
       vehicle_id: dropVehicleId, scheduled_date: dropDateStr, item_type: 'driver_change',
       sort_order: sortOrder, driver_id: drag.id, driver_name: user?.name || 'Unknown',
     });
+    // Propagate: update assigned_to on every job in this column based on where driver changes now fall
+    await _reapplyDriverChanges(dropVehicleId, dropDateStr);
     showToast(`Driver change to ${user?.name || 'Unknown'} added.`, 'success');
     _scheduleRestoreScroll(); loadSchedule();
 
   } else if (drag.type === 'move_item' && drag.source === 'schedule') {
     await window.api.saveScheduleItem({ id: drag.id, vehicle_id: dropVehicleId, sort_order: sortOrder });
+    // If this was a driver_change item being repositioned, re-derive assigned_to for all jobs in the column
+    await _reapplyDriverChanges(dropVehicleId, dropDateStr);
     _scheduleRestoreScroll(); loadSchedule();
 
   } else if (drag.type === 'move_job') {
@@ -4465,12 +6835,53 @@ document.addEventListener('mouseup', async (e) => {
     const { data: dropDayAssigns } = await window.api.getTruckDayAssignments(dropDateStr);
     const dropDayAssign = dropDayAssigns.find(a => a.vehicle_id === dropVehicleId);
     const destDriver = dropDayAssign?.user_id ?? destTruck?.default_tech_id ?? '';
+    // Capture before-state for undo
+    const allAffectedIds = [...new Set([...domOrder, drag.id])];
+    const { data: preJobs } = await window.api.getJobs({ date: dropDateStr });
+    const undoSnapshot = preJobs
+      .filter(j => allAffectedIds.includes(j.id))
+      .map(j => ({ id: j.id, vehicle_id: j.vehicle_id, assigned_to: j.assigned_to, sort_order: j.sort_order }));
+    _scheduleUndoStack.push({ jobs: undoSnapshot, date: dropDateStr });
+    if (_scheduleUndoStack.length > 20) _scheduleUndoStack.shift(); // cap at 20
+
+    // Fetch driver_change schedule items so we can assign the correct driver to each job by position
+    const { data: dropSchedItems } = await window.api.getScheduleItems(dropVehicleId, dropDateStr);
+    const dropDriverChanges = (dropSchedItems || []).filter(si => si.item_type === 'driver_change');
+    // Build combined list of new job positions + existing driver_change items, sorted
+    const newOrderCombined = [];
+    domOrder.forEach((jobId, i) => newOrderCombined.push({ type: 'job', jobId, sort: (i + 1) * 10 }));
+    dropDriverChanges.forEach(si => newOrderCombined.push({ type: 'driver_change', driverId: si.driver_id, sort: si.sort_order != null ? si.sort_order : 999 }));
+    newOrderCombined.sort((a, b) => a.sort - b.sort);
+    // Walk the combined list to determine which driver each job belongs to
+    let activeDriver = destDriver;
+    const jobDriverMap = {};
+    for (const item of newOrderCombined) {
+      if (item.type === 'driver_change') activeDriver = item.driverId;
+      else jobDriverMap[item.jobId] = activeDriver;
+    }
+
     const savePromises = domOrder.map((jobId, i) => {
-      const updates = { id: jobId, sort_order: (i + 1) * 10 };
-      if (jobId === drag.id) { updates.vehicle_id = dropVehicleId; updates.assigned_to = destDriver; }
+      const updates = { id: jobId, sort_order: (i + 1) * 10, assigned_to: jobDriverMap[jobId] || destDriver };
+      if (jobId === drag.id) updates.vehicle_id = dropVehicleId;
       return window.api.saveJob(updates);
     });
     await Promise.all(savePromises);
+    _scheduleRestoreScroll(); loadSchedule();
+  }
+});
+
+document.addEventListener('keydown', async (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+    const active = document.activeElement;
+    const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+    if (typing) return;
+    if (_scheduleUndoStack.length === 0) return;
+    e.preventDefault();
+    const snapshot = _scheduleUndoStack.pop();
+    await Promise.all(snapshot.jobs.map(j =>
+      window.api.saveJob({ id: j.id, vehicle_id: j.vehicle_id, assigned_to: j.assigned_to, sort_order: j.sort_order })
+    ));
+    showToast('Move undone (Ctrl+Z)', 'success');
     _scheduleRestoreScroll(); loadSchedule();
   }
 });
@@ -4494,6 +6905,13 @@ async function changeTruckDriver(vehicleId, dateStr, userId) {
 }
 
 // ===== MANIFEST DETAIL (click on manifest card) =====
+function getActiveTanks(j) {
+  const all = j.property?.tanks || [];
+  return j.pumped_tank_ids && j.pumped_tank_ids.length > 0
+    ? all.filter(t => j.pumped_tank_ids.includes(t.id))
+    : all;
+}
+
 async function openManifestDetail(itemId) {
   const { data: allItems } = await window.api.getScheduleItems();
   const item = allItems.find(i => i.id === itemId);
@@ -4536,12 +6954,6 @@ async function openManifestDetail(itemId) {
   // Auto-detect waste types from tank types in the jobs above
   const tankTypeToWaste = { 'Septic Tank': 'Septage', 'Septic Tank+Filter': 'Septage', 'Septic': 'Septage', 'Grease Trap': 'Grease Trap', 'Holding Tank': 'Holding Tank', 'Cesspool': 'Septage', 'Dry Well': 'Septage', 'Portable Toilet': 'Portable Toilet', 'Pump Chamber': 'Septage' };
   // Only count tanks that were actually pumped (respect pumped_tank_ids if set)
-  const getActiveTanks = (j) => {
-    const all = j.property?.tanks || [];
-    return j.pumped_tank_ids && j.pumped_tank_ids.length > 0
-      ? all.filter(t => j.pumped_tank_ids.includes(t.id))
-      : all;
-  };
   const detectedWasteTypes = [...new Set(jobsAbove.flatMap(j => getActiveTanks(j).map(t => tankTypeToWaste[t.tank_type] || 'Septage')))];
   // Use saved waste_types if available, otherwise use auto-detected
   const activeWasteTypes = Array.isArray(item.waste_types) && item.waste_types.length > 0 ? item.waste_types : (detectedWasteTypes.length > 0 ? detectedWasteTypes : ['Septage']);
@@ -4599,14 +7011,15 @@ async function openManifestDetail(itemId) {
               const jGal = Object.values(pumped).reduce((s, g) => s + (parseInt(g) || 0), 0);
               const tankDesc = activeTanks.map(t => `${esc(t.tank_type || 'Tank')} (${(t.volume_gallons||0).toLocaleString()})`).join(', ') || 'Unknown';
               return `<tr style="border-top:1px solid #eee;">
-                <td style="padding:6px 8px;"><input type="checkbox" class="mf-job-check" data-job-id="${j.id}" data-gallons="${jGal}" checked ${isCompleted ? 'disabled' : ''} onchange="updateManifestTotal()"></td>
+                <td style="padding:6px 8px;"><input type="checkbox" class="mf-job-check" data-job-id="${j.id}" data-gallons="${jGal}" checked onchange="updateManifestTotal()"></td>
                 <td style="padding:6px 8px;"><strong>${esc(j.customers?.name || '')}</strong><div style="font-size:11px;color:var(--text-light);">${esc(j.property?.address || '')}, ${esc(j.property?.city || '')}</div></td>
                 <td style="padding:6px 8px;">${tankDesc}</td>
                 <td style="padding:6px 8px;text-align:right;">
-                  <input type="number" class="mf-job-gal" value="${jGal > 0 ? jGal : ''}" min="0" ${isCompleted ? 'disabled' : ''}
+                  <input type="number" class="mf-job-gal" value="${jGal > 0 ? jGal : ''}" min="0"
+                    data-job-id="${j.id}"
                     placeholder="—"
                     style="width:80px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;text-align:right;"
-                    onchange="this.closest('tr').querySelector('.mf-job-check').dataset.gallons=this.value;updateManifestTotal()">
+                    oninput="this.closest('tr').querySelector('.mf-job-check').dataset.gallons=this.value;updateManifestTotal()">
                 </td>
               </tr>`;
             }).join('')}
@@ -4625,7 +7038,7 @@ async function openManifestDetail(itemId) {
     <div class="form-row">
       <div class="form-group">
         <label>Waste Site *</label>
-        <select id="mfWasteSite" ${isCompleted ? 'disabled' : ''}>
+        <select id="mfWasteSite">
           <option value="">Select waste site...</option>
           ${wasteSites.map(s => `<option value="${s.id}" ${s.id === selectedSiteId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
         </select>
@@ -4639,13 +7052,13 @@ async function openManifestDetail(itemId) {
     <div class="form-row">
       <div class="form-group">
         <label>Technician</label>
-        <select id="mfDriver" ${isCompleted ? 'disabled' : ''}>
+        <select id="mfDriver">
           ${users.map(u => `<option value="${u.id}" ${(item.driver_id || tech?.id) === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
         </select>
       </div>
       <div class="form-group">
         <label>Total Gallons${truckCapacity > 0 ? ' (max ' + truckCapacity.toLocaleString() + ')' : ''}</label>
-        <input type="number" id="mfGallons" value="${item.total_gallons || totalGallons}" min="0" ${truckCapacity > 0 ? 'max="' + truckCapacity + '"' : ''} ${isCompleted ? 'disabled' : ''}>
+        <input type="number" id="mfGallons" value="${item.total_gallons || totalGallons}" min="0" ${truckCapacity > 0 ? 'max="' + truckCapacity + '"' : ''}>
       </div>
     </div>
 
@@ -4653,28 +7066,24 @@ async function openManifestDetail(itemId) {
     <div class="form-row">
       <div class="form-group">
         <label>Receipt #</label>
-        <input type="text" id="mfReceipt" value="${esc(item.receipt_number || '')}" placeholder="Receipt number" ${isCompleted ? 'disabled' : ''}>
+        <input type="text" id="mfReceipt" value="${esc(item.receipt_number || '')}" placeholder="Receipt number">
       </div>
       <div class="form-group">
         <label>Actual Gallons Delivered</label>
-        <input type="number" id="mfActualGallons" value="${item.actual_gallons || totalGallons}" min="0" placeholder="Actual gallons" ${isCompleted ? 'disabled' : ''}>
+        <input type="number" id="mfActualGallons" value="${item.actual_gallons || totalGallons}" min="0" placeholder="Actual gallons">
       </div>
     </div>
     <div class="form-group">
       <label>Disposal Notes</label>
-      <textarea id="mfNotes" ${isCompleted ? 'disabled' : ''}>${esc(item.notes || '')}</textarea>
+      <textarea id="mfNotes">${esc(item.notes || '')}</textarea>
     </div>
 
-    ${isCompleted ? '<div style="padding:10px;background:#e8f5e9;border-radius:4px;text-align:center;color:#2e7d32;font-weight:600;margin-top:4px;">&#9989; Manifest Completed & Locked</div>' : ''}
+    ${isCompleted ? '<div style="margin-top:12px;padding:8px 12px;background:#e8f5e9;border-radius:6px;border:1px solid #a5d6a7;color:#2e7d32;font-weight:600;font-size:13px;">&#10003; Completed</div>' : ''}
   `, `
-    ${!isCompleted ? `
-      <button class="btn btn-danger" onclick="removeScheduleItem('${item.id}'); closeModal();">Remove</button>
-      <button class="btn btn-secondary" onclick="saveManifestDraft('${item.id}')">Save Draft</button>
-      <button class="btn btn-success" onclick="completeManifest('${item.id}', '${item.vehicle_id}', '${item.scheduled_date}')">Complete Manifest</button>
-    ` : `
-      <button class="btn btn-danger" onclick="deleteCompletedManifest('${item.id}')">Delete Manifest</button>
-      <button class="btn btn-secondary" onclick="closeModal()">Close</button>
-    `}
+    <button class="btn btn-danger" onclick="deleteCompletedManifest('${item.id}')">Remove</button>
+    ${isCompleted ? `<button class="btn btn-secondary" onclick="uncompleteManifest('${item.id}')">Reopen</button>` : ''}
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveManifestModal('${item.id}', '${item.vehicle_id}', '${item.scheduled_date}', ${isCompleted})">Save &amp; Complete</button>
   `);
 }
 
@@ -4719,12 +7128,12 @@ async function deleteCompletedManifest(itemId) {
         await window.api.saveJob({ id: j.id, manifest_number: '', waste_site: '' });
       }
 
-      // Delete the associated disposal load
+      // Delete ALL disposal loads with this manifest number (handles duplicates from prior bugs)
       try {
         const { data: disposals } = await window.api.getDisposalLoads();
-        const matchingDisposal = disposals.find(d => String(d.manifest_number) === mNum);
-        if (matchingDisposal) {
-          await window.api.deleteDisposalLoad(matchingDisposal.id);
+        const matched = (disposals || []).filter(d => String(d.manifest_number) === mNum);
+        for (const disp of matched) {
+          await window.api.deleteDisposalLoad(disp.id);
         }
       } catch (e) { console.log('Could not delete disposal:', e); }
     }
@@ -4744,15 +7153,63 @@ async function deleteCompletedManifest(itemId) {
   }
 }
 
+// Write per-job gallons from the manifest modal rows back to each job's gallons_pumped.
+// This makes the manifest the source of truth — work order reads from it.
+async function syncManifestGallonsToJobs() {
+  const checkboxes = [...document.querySelectorAll('.mf-job-check')];
+  for (const cb of checkboxes) {
+    const jobId = cb.dataset.jobId;
+    const row = cb.closest('tr');
+    const galInput = row?.querySelector('.mf-job-gal');
+    const val = galInput?.value?.trim() ?? '';
+    const gal = val === '' ? null : (parseInt(val) || 0);
+
+    const { data: job } = await window.api.getJob(jobId);
+    if (!job) continue;
+    const activeTanks = getActiveTanks(job);
+    let newPumped = {};
+
+    if (gal !== null && gal > 0 && activeTanks.length > 0) {
+      if (activeTanks.length === 1) {
+        newPumped = { [activeTanks[0].id]: gal };
+      } else {
+        const totalCap = activeTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
+        activeTanks.forEach(t => {
+          newPumped[t.id] = totalCap > 0
+            ? Math.round(gal * (t.volume_gallons || 0) / totalCap)
+            : Math.round(gal / activeTanks.length);
+        });
+      }
+    }
+    await window.api.saveJob({ id: jobId, gallons_pumped: newPumped });
+  }
+}
+
 async function saveManifestDraft(itemId) {
+  // Legacy path — kept for any direct calls. Full logic now in saveManifestModal.
+  await saveManifestModal(itemId, null, null, false);
+}
+
+async function saveManifestModal(itemId, vehicleId, dateStr, wasCompleted) {
+  if (!wasCompleted) {
+    // Not yet complete — complete it now
+    await completeManifest(itemId, vehicleId, dateStr);
+    return;
+  }
+
+  // Already complete — update fields in place:
+  // Sync gallons from manifest rows to jobs, then save the schedule item fields
+  await syncManifestGallonsToJobs();
+
   const wasteSiteId = document.getElementById('mfWasteSite').value;
   const { data: wasteSites } = await window.api.getWasteSites();
   const site = wasteSites.find(s => s.id === wasteSiteId);
-
   const wasteTypes = (document.getElementById('mfWasteTypesHidden')?.value || 'Septage').split(',').filter(Boolean);
 
   await window.api.saveScheduleItem({
     id: itemId,
+    // Preserve completed status if it was already complete
+    ...(wasCompleted ? { status: 'completed' } : {}),
     total_gallons: parseInt(document.getElementById('mfGallons').value) || 0,
     waste_type: wasteTypes.join(', '),
     waste_types: wasteTypes,
@@ -4764,8 +7221,38 @@ async function saveManifestDraft(itemId) {
     receipt_number: document.getElementById('mfReceipt')?.value.trim() || '',
     actual_gallons: parseInt(document.getElementById('mfActualGallons')?.value) || 0,
   });
+
   closeModal();
-  showToast('Manifest draft saved.', 'success');
+  showToast('Manifest saved.', 'success');
+  loadSchedule();
+}
+
+async function uncompleteManifest(itemId) {
+  const { data: allItems } = await window.api.getScheduleItems(null, null);
+  const item = allItems?.find ? allItems.find(i => i.id === itemId) : null;
+  const manifestNumber = item?.manifest_number || document.getElementById('mfNumber')?.value?.trim();
+
+  // Mark the schedule item as draft
+  await window.api.saveScheduleItem({ id: itemId, status: 'draft' });
+
+  // Remove manifest stamp from any jobs that were completed under this manifest
+  if (manifestNumber) {
+    const { data: allJobs } = await window.api.getJobs({});
+    const mNum = String(manifestNumber);
+    const stamped = (allJobs || []).filter(j => String(j.manifest_number) === mNum);
+    for (const j of stamped) {
+      await window.api.saveJob({ id: j.id, manifest_number: null, status: 'scheduled', completed_at: null });
+    }
+    // Delete ALL disposal loads with this manifest number (handles duplicates from prior bugs)
+    const { data: disposals } = await window.api.getDisposalLoads({});
+    const matched = (disposals || []).filter(d => String(d.manifest_number) === mNum);
+    for (const disp of matched) {
+      await window.api.deleteDisposalLoad(disp.id);
+    }
+  }
+
+  closeModal();
+  showToast('Manifest reopened.', 'info');
   loadSchedule();
 }
 
@@ -4888,14 +7375,37 @@ async function completeManifest(itemId, vehicleId, dateStr) {
     pickup_addresses: pickupAddresses,
   });
 
-  // Stamp included jobs with manifest and mark as completed
+  // Stamp included jobs with manifest, mark as completed, and write gallons back to job
   for (const j of includedJobs) {
+    const modalGallons = checkedJobData[j.id]?.gallons;
+    let newGallonsPumped = j.gallons_pumped || {};
+
+    if (modalGallons != null && modalGallons > 0) {
+      const activeTanks = getActiveTanks(j);
+      const totalCap = activeTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
+      if (activeTanks.length === 1) {
+        newGallonsPumped = { [activeTanks[0].id]: modalGallons };
+      } else if (activeTanks.length > 1 && totalCap > 0) {
+        // Distribute proportionally by tank capacity
+        newGallonsPumped = {};
+        activeTanks.forEach(t => {
+          newGallonsPumped[t.id] = Math.round(modalGallons * (t.volume_gallons || 0) / totalCap);
+        });
+      } else if (activeTanks.length > 1) {
+        // Equal split
+        const split = Math.round(modalGallons / activeTanks.length);
+        newGallonsPumped = {};
+        activeTanks.forEach(t => { newGallonsPumped[t.id] = split; });
+      }
+    }
+
     await window.api.saveJob({
       id: j.id,
       waste_site: site?.name || '',
       manifest_number: manifestNumber,
       status: 'completed',
       completed_at: new Date().toISOString(),
+      gallons_pumped: newGallonsPumped,
     });
   }
 
@@ -4926,13 +7436,57 @@ let jobLineItems = [];
 let jobPropertyTanks = []; // tanks for currently selected property in job modal
 let jobTankTypesCache = []; // tank type configs cached for current job modal session
 
+let _jobModalCustomers = []; // module-level cache for customer search
+let _jobModalCustomersAt = 0; // cache timestamp
+const _JOB_MODAL_CUST_TTL = 60000; // 60s — invalidated on save via data-changed listener below
+
+// Invalidate the customers cache when customers/properties change elsewhere
+if (window.api && window.api.onDataChanged && !window._jobModalCacheSub) {
+  window._jobModalCacheSub = true;
+  window.api.onDataChanged((payload) => {
+    const col = (payload && payload.collection) || payload;
+    if (col === 'customers' || col === 'properties') {
+      _jobModalCustomersAt = 0;
+    }
+  });
+}
+
+async function _loadJobModalCustomers() {
+  const now = Date.now();
+  if (_jobModalCustomers.length > 0 && (now - _jobModalCustomersAt) < _JOB_MODAL_CUST_TTL) {
+    return _jobModalCustomers;
+  }
+  const api = window.api;
+  // Prefer the lightweight endpoint; fall back to full list if unavailable
+  let customers;
+  if (api.getCustomersLite) {
+    const res = await api.getCustomersLite();
+    customers = res && res.data;
+  } else {
+    const res = await api.getCustomers();
+    customers = res && res.data;
+  }
+  _jobModalCustomers = customers || [];
+  _jobModalCustomersAt = Date.now();
+  return _jobModalCustomers;
+}
+
 async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
+  try {
   const isEdit = !!(job && job.id);
   const j = job || {};
-  const { data: customers } = await window.api.getCustomers();
-  const { data: users } = await window.api.getUsers();
-  const { data: vehicles } = await window.api.getVehicles();
-  const { data: categories } = await window.api.getServiceCategories();
+  const [
+    customers,
+    { data: users },
+    { data: vehicles },
+    { data: categories },
+  ] = await Promise.all([
+    _loadJobModalCustomers(),
+    window.api.getUsers(),
+    window.api.getVehicles(),
+    window.api.getServiceCategories(),
+  ]);
+  _jobModalCustomers = customers || [];
 
   const dateVal = j.scheduled_date || defaultDate || formatDate(scheduleDate);
   const vehicleVal = j.vehicle_id || defaultVehicle || '';
@@ -4948,6 +7502,9 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
   let selPropTanks = [];
   if (j.customer_id) {
     const { data: props } = await window.api.getProperties(j.customer_id);
+    // If no property is pre-selected and the customer has exactly one, auto-pick it
+    // so tanks & line items auto-populate just like the Customers-tab flow.
+    if (!j.property_id && props.length === 1) j.property_id = props[0].id;
     propertyOptions = props.map(p => `<option value="${p.id}" ${p.id === j.property_id ? 'selected' : ''}>${esc(p.address)}</option>`).join('');
     const selProp = props.find(p => p.id === j.property_id);
     if (selProp && selProp.tanks && selProp.tanks.length > 0) {
@@ -5014,16 +7571,13 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
         <div style="flex:1;position:relative;">
           <input type="hidden" id="jobCustomer" value="${j.customer_id || ''}">
           <input type="text" id="jobCustomerSearch" class="form-control" placeholder="Type to search customers..."
-            value="${j.customer_id ? esc(customers.find(c => c.id === j.customer_id)?.name || '') : ''}"
+            value=""
             autocomplete="off"
-            oninput="filterJobCustomers()"
-            onfocus="document.getElementById('jobCustomerDropdown').style.display='block'"
+            oninput="renderJobCustomerDropdown()"
+            onfocus="renderJobCustomerDropdown()"
+            onblur="setTimeout(()=>{const d=document.getElementById('jobCustomerDropdown');if(d)d.style.display='none';},200)"
             style="width:100%;">
-          <div id="jobCustomerDropdown" class="autocomplete-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:white;border:1px solid #ccc;border-top:none;border-radius:0 0 4px 4px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.15);" onmousedown="event.preventDefault()">
-            ${customers.map(c => `<div class="autocomplete-item" data-id="${c.id}" data-name="${esc(c.name).replace(/"/g, '&quot;')}" onclick="selectJobCustomer(this.dataset.id, this.dataset.name)" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;">
-              <strong>${esc(c.name)}</strong>
-              <div style="font-size:11px;color:var(--text-light);">${esc(c.primary_address || '')}</div>
-            </div>`).join('')}
+          <div id="jobCustomerDropdown" class="autocomplete-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:220px;overflow-y:auto;background:white;border:1px solid #ccc;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.2);">
           </div>
         </div>
         <button class="btn btn-primary" style="white-space:nowrap;padding:6px 12px;font-size:12px;" onclick="openCustomerModalFromJob()">+ New</button>
@@ -5200,10 +7754,12 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
       <label>Job Notes (for internal use)</label>
       <textarea id="jobNotes" placeholder="Add job notes here...">${esc(j.notes || '')}</textarea>
     </div>
+    ${isEdit ? `
     <div class="form-group">
       <label>Technician Notes (for customers)</label>
       <textarea id="jobTechNotes" placeholder="Notes visible to customer...">${esc(j.tech_notes || '')}</textarea>
     </div>
+    ` : ''}
   `, `
     ${isEdit ? '<button class="btn btn-danger" onclick="deleteJob()">Delete</button>' : ''}
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -5231,6 +7787,10 @@ async function openJobModal(job = null, defaultDate = '', defaultVehicle = '') {
   // Render existing line items
   renderJobLineItems();
 
+  } catch (err) {
+    console.error('[openJobModal]', err);
+    showToast('Error loading job form: ' + (err.message || err), 'error');
+  }
 }
 
 function onJobCategoryChange() {
@@ -5328,44 +7888,360 @@ function renderJobLineItems() {
   totalEl.innerHTML = `Total: $${total.toFixed(2)}`;
 }
 
-function filterJobCustomers() {
-  const query = (document.getElementById('jobCustomerSearch')?.value || '').toLowerCase();
-  const dropdown = document.getElementById('jobCustomerDropdown');
-  if (!dropdown) return;
-  dropdown.style.display = 'block';
-  const items = dropdown.querySelectorAll('.autocomplete-item');
-  let visibleCount = 0;
-  items.forEach(item => {
-    const text = item.textContent.toLowerCase();
-    const show = !query || text.includes(query);
-    item.style.display = show ? '' : 'none';
-    if (show) visibleCount++;
-  });
-  // Clear hidden id if user is typing a new search
-  document.getElementById('jobCustomer').value = '';
+let _jobCustSearchTimer = null;
+function renderJobCustomerDropdown() {
+  // Debounce rapid keystrokes so filtering 4k+ customers doesn't block typing.
+  if (_jobCustSearchTimer) clearTimeout(_jobCustSearchTimer);
+  _jobCustSearchTimer = setTimeout(_renderJobCustomerDropdownNow, 60);
 }
+function _renderJobCustomerDropdownNow() {
+  const searchEl = document.getElementById('jobCustomerSearch');
+  const dropdown = document.getElementById('jobCustomerDropdown');
+  if (!searchEl || !dropdown) return;
+  const query = (searchEl.value || '').toLowerCase().trim();
+  const hiddenEl = document.getElementById('jobCustomer');
+  if (hiddenEl) hiddenEl.value = '';
+  const list = _jobModalCustomers;
+  if (!list || list.length === 0) {
+    dropdown.innerHTML = '<div style="padding:8px 12px;color:#999;font-size:13px;">Loading customers...</div>';
+    dropdown.style.display = 'block';
+    return;
+  }
+  const queryDigits = query.replace(/\D/g, '');
+  // Bail out early once we have 50 matches — on an empty/short query we were
+  // iterating all 4k items even though we only render 50.
+  const out = [];
+  const MAX = 50;
+  for (let i = 0; i < list.length && out.length < MAX; i++) {
+    const c = list[i];
+    if (!query) { out.push(c); continue; }
+    const name = c.name || '';
+    if (name.toLowerCase().indexOf(query) !== -1) { out.push(c); continue; }
+    if (queryDigits) {
+      const p = (c.phone_cell || c.phone || '').replace(/\D/g, '');
+      if (p && p.indexOf(queryDigits) !== -1) { out.push(c); continue; }
+    }
+    const email = c.email || '';
+    if (email && email.toLowerCase().indexOf(query) !== -1) { out.push(c); continue; }
+    const addr = c.primary_address || '';
+    if (addr && addr.toLowerCase().indexOf(query) !== -1) { out.push(c); continue; }
+  }
+  if (out.length === 0) {
+    dropdown.innerHTML = '<div style="padding:8px 12px;color:#999;font-size:13px;">No customers found.</div>';
+  } else {
+    const parts = new Array(out.length);
+    for (let i = 0; i < out.length; i++) {
+      const c = out[i];
+      parts[i] = '<div class="autocomplete-item" data-id="' + esc(c.id) + '" data-name="' + esc(c.name) + '"' +
+        ' onmousedown="event.preventDefault(); selectJobCustomer(this.dataset.id, this.dataset.name)"' +
+        ' style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;">' +
+        '<strong>' + esc(c.name) + '</strong>' +
+        '<div style="font-size:11px;color:var(--text-light);">' + esc(c.primary_address || '') + '</div>' +
+        '</div>';
+    }
+    dropdown.innerHTML = parts.join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+function filterJobCustomers() { renderJobCustomerDropdown(); } // legacy alias
 
 function selectJobCustomer(id, name) {
-  document.getElementById('jobCustomer').value = id;
-  document.getElementById('jobCustomerSearch').value = name;
-  document.getElementById('jobCustomerDropdown').style.display = 'none';
-  onJobCustomerChange();
-}
-
-function openCustomerModalFromJob() {
-  // Close job modal, open customer modal, then re-open job modal after save
-  closeModal();
-  openCustomerModal();
-}
-
-// Close customer dropdown when clicking outside
-document.addEventListener('click', (e) => {
+  // Reopen the modal with the customer pre-set, so the full flow
+  // (property dropdown populated, single-property auto-select, tank selector
+  // pre-rendered with checkboxes, pump-out line items auto-computed) runs
+  // exactly the same as when opening from the Customers tab.
+  const keepDate = document.getElementById('jobDate')?.value || '';
+  const keepVehicle = document.getElementById('jobVehicle')?.value || '';
   const dropdown = document.getElementById('jobCustomerDropdown');
-  const search = document.getElementById('jobCustomerSearch');
-  if (dropdown && search && !search.contains(e.target) && !dropdown.contains(e.target)) {
-    dropdown.style.display = 'none';
+  if (dropdown) dropdown.style.display = 'none';
+  closeModal();
+  openJobModal({ customer_id: id }, keepDate, keepVehicle);
+}
+
+// Context saved when "+ New" is clicked in the job modal so we can reopen it after
+let _newCustJobCtx = null;
+
+async function openCustomerModalFromJob(fromJob = true) {
+  try {
+  if (fromJob) {
+    // Capture the current job modal context before closing it
+    _newCustJobCtx = {
+      date: document.getElementById('jobDate')?.value || '',
+      vehicle: document.getElementById('jobVehicle')?.value || '',
+    };
+    closeModal();
+  } else {
+    // Called from Customers page — no job context
+    _newCustJobCtx = null;
   }
-});
+
+  const { data: tankTypes } = await window.api.getTankTypes();
+  window._ncpTtOptions = (tankTypes || []).map(tt => `<option value="${esc(tt.name)}">${esc(tt.name)}</option>`).join('');
+
+  const saveBtn = fromJob
+    ? `<button class="btn btn-primary" onclick="saveNewCustomerAndProperty()">Save &amp; Continue to Job &#8594;</button>`
+    : `<button class="btn btn-primary" onclick="saveNewCustomerAndProperty()">Save &amp; Open Contact &#8594;</button>`;
+
+  openModal('New Customer & Property', `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 28px;">
+
+      <!-- LEFT: CONTACT -->
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-light);margin-bottom:10px;padding-bottom:5px;border-bottom:2px solid #1565c0;">&#128100; Contact Info</div>
+        <div class="form-group">
+          <label>Customer Name *</label>
+          <input type="text" id="ncpName" placeholder="John & Jane Doe">
+        </div>
+        <div class="form-group">
+          <label>Cell Phone</label>
+          <input type="text" id="ncpPhoneCell" placeholder="(207) 555-1234">
+        </div>
+        <div class="form-group">
+          <label>Home Phone</label>
+          <input type="text" id="ncpPhoneHome" placeholder="(207) 555-1234">
+        </div>
+        <div class="form-group">
+          <label>Work Phone</label>
+          <input type="text" id="ncpPhoneWork" placeholder="(207) 555-1234">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="ncpEmail" placeholder="customer@email.com">
+        </div>
+        <div class="form-group">
+          <label>Billing Address</label>
+          <input type="text" id="ncpBillingAddr" placeholder="123 Main Street">
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:2;">
+            <label>City</label>
+            <input type="text" id="ncpBillingCity" placeholder="Camden">
+          </div>
+          <div class="form-group" style="max-width:64px;">
+            <label>State</label>
+            <input type="text" id="ncpBillingState" value="ME" maxlength="2">
+          </div>
+          <div class="form-group" style="max-width:90px;">
+            <label>Zip</label>
+            <input type="text" id="ncpBillingZip" placeholder="04843">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Contact Method</label>
+          <select id="ncpContactMethod">
+            <option value="Email &amp; Text">Email &amp; Text</option>
+            <option value="Email">Email Only</option>
+            <option value="Text">Text Only</option>
+            <option value="Phone">Phone Call</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- RIGHT: PROPERTY -->
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:5px;border-bottom:2px solid #388e3c;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-light);">&#127968; Service Property</div>
+          <button type="button" class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="ncpCopyAddress()">&#128203; Same as billing</button>
+        </div>
+        <div class="form-group">
+          <label>Street Address *</label>
+          <input type="text" id="ncpPropAddr" placeholder="573 Peterboro Rd">
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:2;">
+            <label>City</label>
+            <input type="text" id="ncpPropCity">
+          </div>
+          <div class="form-group" style="max-width:64px;">
+            <label>State</label>
+            <input type="text" id="ncpPropState" value="ME" maxlength="2">
+          </div>
+          <div class="form-group" style="max-width:90px;">
+            <label>Zip</label>
+            <input type="text" id="ncpPropZip">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>County</label>
+            <input type="text" id="ncpPropCounty">
+          </div>
+          <div class="form-group">
+            <label>Property Type</label>
+            <select id="ncpPropType">
+              <option value="">-- Select --</option>
+              <option value="Residential" selected>Residential</option>
+              <option value="Commercial">Commercial</option>
+              <option value="Multi-Family">Multi-Family</option>
+              <option value="Vacant Land">Vacant Land</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Directions / Access Notes</label>
+          <textarea id="ncpPropNotes" rows="2" placeholder="Gate code, driveway info, access instructions..."></textarea>
+        </div>
+
+        <!-- TANKS -->
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-light);">&#128167; Tanks</div>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="ncpAddTankRow()">+ Add Tank</button>
+          </div>
+          <div id="ncpTankRows"></div>
+        </div>
+      </div>
+
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    ${saveBtn}
+  `);
+  // Widen the modal for the two-column layout
+  const m = document.querySelector('.modal');
+  if (m) { m.style.maxWidth = '1000px'; m.style.width = '92%'; }
+  _ncpTankCount = 0;
+  } catch (err) {
+    console.error('[openCustomerModalFromJob]', err);
+    showToast('Error opening new customer form: ' + (err.message || err), 'error');
+  }
+}
+
+let _ncpTankCount = 0;
+
+function ncpAddTankRow() {
+  const container = document.getElementById('ncpTankRows');
+  if (!container) return;
+  const idx = _ncpTankCount++;
+  const row = document.createElement('div');
+  row.id = `ncpTankRow_${idx}`;
+  row.style.cssText = 'background:#f9f9f9;border:1px solid #e0e0e0;border-radius:5px;padding:8px 10px;margin-bottom:8px;';
+  row.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+      <div class="form-group" style="flex:2;min-width:100px;margin-bottom:0;">
+        <label style="font-size:11px;">Tank Type</label>
+        <select id="ncpTankType_${idx}" style="font-size:12px;padding:4px 6px;">
+          ${window._ncpTtOptions || ''}
+        </select>
+      </div>
+      <div class="form-group" style="flex:1;min-width:80px;margin-bottom:0;">
+        <label style="font-size:11px;">Gallons</label>
+        <input type="number" id="ncpTankGal_${idx}" min="0" value="1000" placeholder="1000" style="font-size:12px;padding:4px 6px;">
+      </div>
+      <div class="form-group" style="flex:2;min-width:100px;margin-bottom:0;">
+        <label style="font-size:11px;">Name (optional)</label>
+        <input type="text" id="ncpTankName_${idx}" placeholder="e.g. Main Tank" style="font-size:12px;padding:4px 6px;">
+      </div>
+      <div class="form-group" style="min-width:70px;margin-bottom:0;">
+        <label style="font-size:11px;">Filter</label>
+        <select id="ncpTankFilter_${idx}" style="font-size:12px;padding:4px 6px;">
+          <option value="unknown">Unknown</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+      <div class="form-group" style="min-width:70px;margin-bottom:0;">
+        <label style="font-size:11px;">Riser</label>
+        <select id="ncpTankRiser_${idx}" style="font-size:12px;padding:4px 6px;">
+          <option value="unknown">Unknown</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+      <button type="button" style="background:none;border:none;color:#f44336;font-size:16px;cursor:pointer;padding:0 4px;margin-bottom:2px;" onclick="document.getElementById('ncpTankRow_${idx}').remove()" title="Remove">&#10005;</button>
+    </div>`;
+  container.appendChild(row);
+}
+
+function ncpCopyAddress() {
+  document.getElementById('ncpPropAddr').value  = document.getElementById('ncpBillingAddr').value;
+  document.getElementById('ncpPropCity').value  = document.getElementById('ncpBillingCity').value;
+  document.getElementById('ncpPropState').value = document.getElementById('ncpBillingState').value;
+  document.getElementById('ncpPropZip').value   = document.getElementById('ncpBillingZip').value;
+}
+
+async function saveNewCustomerAndProperty() {
+  try {
+  const name = document.getElementById('ncpName').value.trim();
+  const propAddr = document.getElementById('ncpPropAddr').value.trim();
+
+  if (!name) { showToast('Customer name is required.', 'error'); return; }
+  if (!propAddr) { showToast('Property address is required.', 'error'); return; }
+
+  // Save customer
+  const custResult = await window.api.saveCustomer({
+    name,
+    phone_cell: document.getElementById('ncpPhoneCell').value.trim(),
+    phone_home: document.getElementById('ncpPhoneHome').value.trim(),
+    phone_work: document.getElementById('ncpPhoneWork').value.trim(),
+    email: document.getElementById('ncpEmail').value.trim(),
+    address: document.getElementById('ncpBillingAddr').value.trim(),
+    city: document.getElementById('ncpBillingCity').value.trim(),
+    state: document.getElementById('ncpBillingState').value.trim(),
+    zip: document.getElementById('ncpBillingZip').value.trim(),
+    contact_method: document.getElementById('ncpContactMethod').value,
+  });
+  if (!custResult.success) { showToast('Failed to save customer.', 'error'); return; }
+
+  const customerId = custResult.data.id;
+
+  // Save property
+  const propResult = await window.api.saveProperty({
+    customer_id: customerId,
+    address: propAddr,
+    city: document.getElementById('ncpPropCity').value.trim(),
+    state: document.getElementById('ncpPropState').value.trim(),
+    zip: document.getElementById('ncpPropZip').value.trim(),
+    county: document.getElementById('ncpPropCounty').value.trim(),
+    property_type: document.getElementById('ncpPropType').value,
+    notes: document.getElementById('ncpPropNotes').value.trim(),
+  });
+  if (!propResult.success) { showToast('Customer saved but property failed.', 'error'); return; }
+
+  const propertyId = propResult.data.id;
+
+  // Save any tanks that were added
+  const tankRows = document.querySelectorAll('#ncpTankRows > div[id^="ncpTankRow_"]');
+  for (const row of tankRows) {
+    const idx = row.id.replace('ncpTankRow_', '');
+    const gallons = parseInt(document.getElementById(`ncpTankGal_${idx}`)?.value) || 0;
+    const tankType = document.getElementById(`ncpTankType_${idx}`)?.value || '';
+    if (!tankType && !gallons) continue; // skip completely empty rows
+    await window.api.saveTank({
+      property_id: propertyId,
+      tank_type: document.getElementById(`ncpTankType_${idx}`)?.value || '',
+      volume_gallons: gallons,
+      tank_name: document.getElementById(`ncpTankName_${idx}`)?.value.trim() || '',
+      filter: document.getElementById(`ncpTankFilter_${idx}`)?.value || 'unknown',
+      riser: document.getElementById(`ncpTankRiser_${idx}`)?.value || 'unknown',
+    });
+  }
+
+  closeModal();
+
+  const ctx = _newCustJobCtx;
+  _newCustJobCtx = null;
+
+  if (ctx) {
+    // Came from job modal — open job creation immediately
+    showToast(`${name} added. Opening job...`, 'success');
+    await openJobModal(
+      { customer_id: customerId, property_id: propertyId },
+      ctx.date || '',
+      ctx.vehicle || ''
+    );
+  } else {
+    // Came from Customers page — open the new customer's detail
+    showToast(`${name} added.`, 'success');
+    openCustomerDetail(customerId);
+  }
+  } catch (err) {
+    console.error('[saveNewCustomerAndProperty]', err);
+    showToast('Error: ' + (err.message || err), 'error');
+  }
+}
+
 
 // Safety: clear stale drag state when focusing any input/textarea
 document.addEventListener('focusin', (e) => {
@@ -5594,7 +8470,8 @@ async function saveJob() {
     waste_site: document.getElementById('jobWasteSite')?.value?.trim() || '',
     manifest_number: document.getElementById('jobManifest')?.value?.trim() || '',
     notes: document.getElementById('jobNotes').value.trim(),
-    tech_notes: document.getElementById('jobTechNotes').value.trim(),
+    tech_notes: document.getElementById('jobTechNotes')?.value?.trim() || '',
+    filter_found: document.getElementById('jobFilterFound')?.checked || false,
     line_items: jobLineItems.map(li => { const item = Object.assign({}, li); delete item._auto; return item; }),
     total: total,
     helpers: Array.from(document.querySelectorAll('.helper-check:checked')).map(cb => cb.value),
@@ -5668,6 +8545,16 @@ async function saveJob() {
 
   const result = await window.api.saveJob(data);
   if (result.success) {
+    const savedId = result.data?.id || id;
+    // If filter was found, ensure a filter lead exists for this job
+    if (data.filter_found && savedId) {
+      await window.api.ensureFilterLead({
+        job_id: savedId,
+        customer_id: data.customer_id,
+        property_id: data.property_id,
+        scheduled_date: data.scheduled_date,
+      });
+    }
     closeModal();
     showToast(id ? 'Job updated.' : 'Job scheduled.', 'success');
     loadSchedule();
@@ -5678,7 +8565,10 @@ async function saveJob() {
 
 async function deleteJob() {
   const id = document.getElementById('jobId').value;
-  if (!id || !confirm('Delete this job?')) return;
+  if (!id) return;
+  const blocked = await jobDeleteBlocked(id);
+  if (blocked) return;
+  if (!confirm('Delete this job?')) return;
   const result = await window.api.deleteJob(id);
   if (result.success) {
     closeModal();
@@ -5735,6 +8625,10 @@ async function openJobDetail(id) {
   const { data: vehicles } = await window.api.getVehicles();
   const { data: users } = await window.api.getUsers();
   const { data: serviceCategories } = await window.api.getServiceCategories();
+  const { data: allFilterLeads } = await window.api.getFilterLeads({});
+  const jobFilterLead = allFilterLeads.find(l => l.job_id === id) || null;
+  const { data: custAfcs } = job.customer_id ? await window.api.getAfcs({ customerId: job.customer_id }) : { data: [] };
+  const callOnWay = custAfcs.some(a => a.status === 'active' && a.call_ahead);
 
   const customer = job.customers;
   const property = job.property;
@@ -5758,9 +8652,10 @@ async function openJobDetail(id) {
   document.getElementById('page-schedule').classList.add('active');
   document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === 'schedule'));
 
-  document.getElementById('pageTitle').textContent = 'Job Detail';
+  document.getElementById('pageTitle').textContent = 'Work Order';
   document.getElementById('pageActions').innerHTML = `
     ${navBackButton() || `<button class="btn btn-secondary" onclick="loadSchedule()">&#8592; Back to Schedule</button>`}
+    ${!_isPopup ? `<button class="btn btn-secondary btn-sm" title="Open in new window" onclick="window.api.openPopupWindow({page:'job',id:'${id}',title:'Job — ${esc(customer?.name || '')}'})">&#10697; Pop Out</button>` : ''}
   `;
 
   const page = document.getElementById('page-schedule');
@@ -5769,9 +8664,9 @@ async function openJobDetail(id) {
       <!-- LEFT SIDEBAR -->
       <div class="job-detail-sidebar">
         <div class="card">
-          <div class="card-header" style="color:#1565c0;cursor:pointer;" onclick="${property ? `navPush('Job Detail', "openJobDetail('${id}')");openPropertyDetail('${property.id}')` : ''}"><h3>PROPERTY INFO</h3></div>
+          <div class="card-header" style="color:#1565c0;cursor:pointer;" onclick="${property ? `navPush('Work Order', "openJobDetail('${id}')");openPropertyDetail('${property.id}')` : ''}"><h3>PROPERTY INFO</h3></div>
           ${property ? `
-            <div style="font-weight:700;cursor:pointer;color:#1565c0;" onclick="navPush('Job Detail', &quot;openJobDetail('${id}')&quot;);openPropertyDetail('${property.id}')">${esc(property.address || '')}</div>
+            <div style="font-weight:700;cursor:pointer;color:#1565c0;" onclick="navPush('Work Order', &quot;openJobDetail('${id}')&quot;);openPropertyDetail('${property.id}')">${esc(property.address || '')}</div>
             <div>${esc(property.city || '')}${property.state ? ', ' + esc(property.state) : ''} ${esc(property.zip || '')}</div>
           ` : '<div style="color:var(--text-light);">No property selected</div>'}
 
@@ -5790,15 +8685,15 @@ async function openJobDetail(id) {
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
               <div style="font-size:12px;color:var(--text-light);">BILL TO</div>
               ${job.customer_id ? `
-              <div class="acct-icon ${jobAcctInfo.overdue ? 'overdue' : ''}" onclick="navPush('Job Detail', &quot;openJobDetail('${id}')&quot;);openCustomerAccounting('${job.customer_id}')" title="Accounting" style="padding:2px 8px;font-size:12px;">
+              <div class="acct-icon ${jobAcctInfo.overdue ? 'overdue' : ''}" onclick="navPush('Work Order', &quot;openJobDetail('${id}')&quot;);openCustomerAccounting('${job.customer_id}')" title="Accounting" style="padding:2px 8px;font-size:12px;">
                 <span style="font-size:14px;font-weight:800;">$</span>
                 ${jobAcctInfo.overdue ? '<span class="acct-overdue-badge" style="width:14px;height:14px;font-size:10px;top:-4px;right:-4px;">!</span>' : ''}
                 ${jobAcctInfo.overdue ? `<span class="acct-balance-negative" style="font-size:11px;font-weight:700;">$${Math.abs(jobAcctInfo.balance).toFixed(2)}</span>` : ''}
               </div>` : ''}
             </div>
-            <div style="font-weight:700;cursor:pointer;color:#1565c0;" onclick="navPush('Job Detail', &quot;openJobDetail('${id}')&quot;);openCustomerDetail('${job.customer_id}')">${esc(customer?.name || 'N/A')}</div>
+            <div style="font-weight:700;cursor:pointer;color:#1565c0;" onclick="navPush('Work Order', &quot;openJobDetail('${id}')&quot;);openCustomerDetail('${job.customer_id}')">${esc(customer?.name || 'N/A')}</div>
             ${property ? `<div style="font-size:13px;">${esc(property.address || '')}<br>${esc(property.city || '')}${property.state ? ', ' + esc(property.state) : ''} ${esc(property.zip || '')}</div>` : ''}
-            ${customer?.phone ? `<div style="font-size:13px;">${esc(customer.phone)}</div>` : ''}
+            ${(customer?.phone_cell || customer?.phone) ? `<div style="font-size:13px;">${esc(customer.phone_cell || customer.phone)}</div>` : ''}
             ${customer?.email ? `<div style="font-size:13px;">${esc(customer.email)}</div>` : ''}
           </div>
 
@@ -5966,7 +8861,7 @@ async function openJobDetail(id) {
                   <input type="number" value="${gallonsPumped[t.id] || ''}" min="0"
                     class="form-control" style="width:100px;text-align:right;padding:4px 8px;"
                     ${!isChecked ? 'disabled' : ''}
-                    onchange="updateJobGallons('${job.id}', '${t.id}', this.value)">
+                    onblur="updateJobGallons('${job.id}', '${t.id}', this.value)">
                 </div>
               </div>`;
             }).join('')}
@@ -6007,6 +8902,11 @@ async function openJobDetail(id) {
 
       <!-- RIGHT SIDEBAR - Notes -->
       <div class="job-detail-right">
+        ${callOnWay ? `
+        <div class="card" style="padding:12px;background:#fff3e0;border-left:4px solid #e65100;">
+          <div style="font-weight:700;font-size:14px;color:#e65100;">&#128222; Call Customer On The Way</div>
+        </div>
+        ` : ''}
         <div class="card">
           <div class="card-header"><h3>Job Notes</h3></div>
           <div style="font-size:12px;color:var(--text-light);margin-bottom:4px;">(for internal use)</div>
@@ -6017,6 +8917,19 @@ async function openJobDetail(id) {
           <div class="card-header"><h3>Technician Notes</h3></div>
           <div style="font-size:12px;color:var(--text-light);margin-bottom:4px;">(for customers)</div>
           <textarea style="width:100%;min-height:120px;font-size:13px;" onchange="updateJobField('${job.id}', 'tech_notes', this.value)">${esc(job.tech_notes || '')}</textarea>
+        </div>
+
+        <!-- FILTER CLEANING FOLLOW-UP -->
+        <div class="card" style="padding:12px;">
+          ${jobFilterLead ? `
+            <div style="display:flex;align-items:center;gap:8px;font-weight:700;color:#2e7d32;font-size:13px;">
+              &#128388; Flagged for Automatic Filter Cleaning &#10003;
+            </div>
+          ` : `
+            <button class="btn" style="width:100%;background:#1565c0;color:white;font-weight:700;font-size:13px;padding:9px;border:none;border-radius:5px;cursor:pointer;" onclick="flagFilterCleaningFromJob('${id}')">
+              &#128388; Flag for Automatic Filter Cleaning
+            </button>
+          `}
         </div>
 
         <!-- SERVICE DUE NOTICE -->
@@ -6082,13 +8995,59 @@ async function openJobDetail(id) {
   document.body.style.cursor = '';
 }
 
+async function flagFilterCleaningFromJob(jobId) {
+  const { data: job } = await window.api.getJob(jobId);
+  if (!job) return;
+  await window.api.ensureFilterLead({
+    job_id: jobId,
+    customer_id: job.customer_id,
+    property_id: job.property_id,
+    scheduled_date: job.scheduled_date,
+  });
+  showToast('Filter cleaning follow-up created.', 'success');
+  openJobDetail(jobId);
+}
+
 async function updateJobGallons(jobId, tankId, value) {
   const { data: job } = await window.api.getJob(jobId);
   if (!job) return;
   const gallonsPumped = job.gallons_pumped || {};
-  gallonsPumped[tankId] = parseInt(value) || 0;
+  if (value === '' || value == null) {
+    delete gallonsPumped[tankId];
+  } else {
+    gallonsPumped[tankId] = parseInt(value) || 0;
+  }
   await window.api.saveJob({ id: jobId, gallons_pumped: gallonsPumped });
   showToast('Gallons updated.', 'success');
+}
+
+// Called from manifest modal per-job gallons input — writes back to job immediately
+async function updateManifestJobGallons(jobId, input) {
+  const val = input.value.trim();
+  const gal = val === '' ? null : (parseInt(val) || 0);
+
+  const { data: job } = await window.api.getJob(jobId);
+  if (!job) return;
+
+  const activeTanks = getActiveTanks(job);
+  let newPumped = {};
+
+  if (gal !== null && gal > 0) {
+    if (activeTanks.length === 1) {
+      newPumped = { [activeTanks[0].id]: gal };
+    } else if (activeTanks.length > 1) {
+      const totalCap = activeTanks.reduce((s, t) => s + (t.volume_gallons || 0), 0);
+      if (totalCap > 0) {
+        activeTanks.forEach(t => { newPumped[t.id] = Math.round(gal * (t.volume_gallons || 0) / totalCap); });
+      } else {
+        const split = Math.round(gal / activeTanks.length);
+        activeTanks.forEach(t => { newPumped[t.id] = split; });
+      }
+    }
+  }
+  // gal === null or 0 → newPumped stays {} (clears gallons_pumped)
+
+  await window.api.saveJob({ id: jobId, gallons_pumped: newPumped });
 }
 
 function toggleAllJobDetailTanks(jobId, checked) {
@@ -6332,10 +9291,36 @@ async function openJobEditFromDetail(jobId) {
 }
 
 async function deleteJobFromDetail(jobId) {
+  const blocked = await jobDeleteBlocked(jobId);
+  if (blocked) return;
   if (!confirm('Delete this job?')) return;
   await window.api.deleteJob(jobId);
   showToast('Job deleted.', 'success');
   loadSchedule();
+}
+
+// Returns true (and shows error) if the job is stamped to a manifest and cannot be deleted
+async function jobDeleteBlocked(jobId) {
+  const { data: job } = await window.api.getJob(jobId);
+  if (!job?.manifest_number) return false;
+
+  // Verify the manifest schedule item actually still exists
+  const { data: allItems } = await window.api.getScheduleItems();
+  const manifestExists = (allItems || []).some(i =>
+    i.item_type === 'manifest' && String(i.manifest_number) === String(job.manifest_number)
+  );
+  if (!manifestExists) {
+    // Manifest was deleted without clearing job stamp — clear it now and allow deletion
+    await window.api.saveJob({ id: jobId, manifest_number: '', waste_site: '' });
+    return false;
+  }
+
+  showToast(
+    `Cannot delete — this job is on manifest #${job.manifest_number}. Remove it from the manifest or delete the manifest first.`,
+    'error',
+    7000
+  );
+  return true;
 }
 
 // ===== VEHICLES =====
@@ -6352,11 +9337,18 @@ async function loadVehicles() {
         <div class="trucks-list-header">
           <span>My Trucks: <b>${vehicles.length}</b></span>
         </div>
-        <div class="trucks-list">
+        <div class="trucks-list" id="trucksList">
           ${vehicles.map(v => {
             const isSelected = v.id === _selectedVehicleId;
             return `
-              <div class="truck-list-item ${isSelected ? 'selected' : ''}" onclick="selectVehicle('${v.id}')">
+              <div class="truck-list-item ${isSelected ? 'selected' : ''}" data-id="${v.id}" draggable="true"
+                   ondragstart="_truckDragStart(event,'${v.id}')"
+                   ondragover="_truckDragOver(event)"
+                   ondragleave="_truckDragLeave(event)"
+                   ondrop="_truckDrop(event,'${v.id}')"
+                   ondragend="_truckDragEnd(event)"
+                   onclick="selectVehicle('${v.id}')">
+                <div class="truck-drag-handle" title="Drag to reorder" style="cursor:grab;padding:0 6px;color:#999;font-size:16px;user-select:none;">&#8942;&#8942;</div>
                 <div class="truck-list-color" style="background:${v.color || '#1565c0'};"></div>
                 <div class="truck-list-icon">&#128666;</div>
                 <div class="truck-list-info">
@@ -6367,7 +9359,6 @@ async function loadVehicles() {
             `;
           }).join('')}
         </div>
-        <button class="btn btn-danger" style="margin-top:12px;width:100%;" onclick="openVehicleForm(null)">ADD NEW TRUCK</button>
       </div>
       <div class="trucks-edit-panel" id="trucksEditPanel">
         ${_selectedVehicleId ? '' : '<div class="empty-state" style="padding:40px;"><p>Select a truck to edit, or add a new one.</p></div>'}
@@ -6375,7 +9366,9 @@ async function loadVehicles() {
     </div>
   `;
 
-  if (_selectedVehicleId) {
+  if (_selectedVehicleId === '__new__') {
+    renderVehicleForm(null, users);
+  } else if (_selectedVehicleId) {
     const v = vehicles.find(x => x.id === _selectedVehicleId);
     if (v) renderVehicleForm(v, users);
   }
@@ -6388,13 +9381,6 @@ function selectVehicle(id) {
 
 function openVehicleForm(vehicle) {
   _selectedVehicleId = vehicle ? vehicle.id : '__new__';
-  if (!vehicle) {
-    window.api.getUsers().then(({ data: users }) => {
-      renderVehicleForm(null, users);
-      // Also highlight the new item
-      document.querySelectorAll('.truck-list-item').forEach(el => el.classList.remove('selected'));
-    });
-  }
   loadVehicles();
 }
 
@@ -6508,14 +9494,82 @@ async function deleteVehicle() {
   loadVehicles();
 }
 
+// ===== TRUCK LIST DRAG-AND-DROP REORDER =====
+let _truckDraggingId = null;
+function _truckDragStart(e, id) {
+  _truckDraggingId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', id); } catch (_) {}
+  e.currentTarget.style.opacity = '0.4';
+}
+function _truckDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const row = e.currentTarget;
+  if (row.dataset.id === _truckDraggingId) return;
+  const rect = row.getBoundingClientRect();
+  const after = (e.clientY - rect.top) > rect.height / 2;
+  row.style.borderTop = after ? '' : '2px solid #1565c0';
+  row.style.borderBottom = after ? '2px solid #1565c0' : '';
+}
+function _truckDragLeave(e) {
+  e.currentTarget.style.borderTop = '';
+  e.currentTarget.style.borderBottom = '';
+}
+function _truckDragEnd(e) {
+  document.querySelectorAll('.truck-list-item').forEach(el => {
+    el.style.opacity = '';
+    el.style.borderTop = '';
+    el.style.borderBottom = '';
+  });
+  _truckDraggingId = null;
+}
+async function _truckDrop(e, targetId) {
+  e.preventDefault();
+  const row = e.currentTarget;
+  row.style.borderTop = '';
+  row.style.borderBottom = '';
+  const draggingId = _truckDraggingId;
+  _truckDraggingId = null;
+  if (!draggingId || draggingId === targetId) return;
+
+  const list = document.getElementById('trucksList');
+  if (!list) return;
+  const rect = row.getBoundingClientRect();
+  const after = (e.clientY - rect.top) > rect.height / 2;
+
+  const draggingEl = list.querySelector(`.truck-list-item[data-id="${draggingId}"]`);
+  if (!draggingEl) return;
+  if (after) row.parentNode.insertBefore(draggingEl, row.nextSibling);
+  else row.parentNode.insertBefore(draggingEl, row);
+
+  const orderedIds = Array.from(list.querySelectorAll('.truck-list-item')).map(el => el.dataset.id);
+  try {
+    await window.api.reorderVehicles(orderedIds);
+    showToast('Order saved.', 'success');
+  } catch (err) {
+    console.error('Reorder failed:', err);
+    showToast('Reorder failed.', 'error');
+    loadVehicles();
+  }
+}
+
 // ===== INVOICES =====
 // ===== INVOICES =====
-let invoiceFilters = { page: 1, perPage: 35, sortField: 'svc_date', sortDir: 'desc' };
+function _invoiceDefaultFilters() {
+  const d = new Date();
+  const fmt = (dt) => dt.toISOString().split('T')[0];
+  const from = fmt(new Date(d.getFullYear(), d.getMonth(), 1));
+  const to = fmt(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+  return { sortField: 'svc_date', sortDir: 'desc', dateFrom: from, dateTo: to, _preset: 'This Month' };
+}
+let invoiceFilters = _invoiceDefaultFilters();
 let invoiceFilterOptions = null;
 let selectedInvoiceIds = new Set();
 
 async function loadInvoices() {
   const page = document.getElementById('page-invoices');
+  selectedInvoiceIds.clear();
 
   // Backfill invoices for any jobs that don't have one yet
   await window.api.backfillInvoices();
@@ -6637,6 +9691,20 @@ async function loadInvoices() {
           <option value="">All</option>
           ${opts.wasteSites.map(w => `<option value="${w.id}" ${invoiceFilters.wasteSiteId === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
         </select>
+
+        <label class="inv-filter-label">Waiting Area</label>
+        <select class="inv-filter-select" onchange="invoiceFilters.waitingArea=this.value||undefined;loadInvoices()">
+          <option value="" ${!invoiceFilters.waitingArea ? 'selected' : ''}>Include (default)</option>
+          <option value="hide" ${invoiceFilters.waitingArea === 'hide' ? 'selected' : ''}>Hide</option>
+          <option value="only" ${invoiceFilters.waitingArea === 'only' ? 'selected' : ''}>Only Waiting Area</option>
+        </select>
+
+        <label class="inv-filter-label">Cancelled</label>
+        <select class="inv-filter-select" onchange="invoiceFilters.cancelled=this.value||undefined;loadInvoices()">
+          <option value="" ${!invoiceFilters.cancelled ? 'selected' : ''}>Hide (default)</option>
+          <option value="include" ${invoiceFilters.cancelled === 'include' ? 'selected' : ''}>Include</option>
+          <option value="only" ${invoiceFilters.cancelled === 'only' ? 'selected' : ''}>Only Cancelled</option>
+        </select>
       </div>
 
       <!-- MAIN CONTENT -->
@@ -6650,6 +9718,8 @@ async function loadInvoices() {
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
             <span style="font-size:11px;color:var(--text-light);">${new Date().toLocaleDateString()} | ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+            <button id="invCancelBtn" class="btn btn-sm" style="background:#f57c00;color:white;font-weight:700;font-size:11px;${selectedInvoiceIds.size > 0 ? '' : 'display:none;'}" onclick="invoiceBatchCancel(true)">CANCEL (${selectedInvoiceIds.size})</button>
+            <button id="invUncancelBtn" class="btn btn-sm" style="background:#2e7d32;color:white;font-weight:700;font-size:11px;${selectedInvoiceIds.size > 0 && invoiceFilters.cancelled === 'only' ? '' : 'display:none;'}" onclick="invoiceBatchCancel(false)">UNCANCEL (${selectedInvoiceIds.size})</button>
             <button id="invDeleteBtn" class="btn btn-sm" style="background:#c62828;color:white;font-weight:700;font-size:11px;${selectedInvoiceIds.size > 0 ? '' : 'display:none;'}" onclick="invoiceBatchDelete()">DELETE (${selectedInvoiceIds.size})</button>
             <button class="btn btn-sm" style="background:#1565c0;color:white;font-weight:700;font-size:11px;" onclick="invoiceBatchSend()">BATCH SEND</button>
             <button class="btn btn-sm" style="background:#1565c0;color:white;font-weight:700;font-size:11px;" onclick="invoiceBatchPrint()">BATCH PRINT</button>
@@ -6662,57 +9732,71 @@ async function loadInvoices() {
           <table class="inv-table">
             <thead>
               <tr>
-                <th ${sortClick('invoice_number')} style="cursor:pointer;">Inv #${sortIcon('invoice_number')}</th>
                 <th style="width:32px;"><input type="checkbox" onchange="invoiceToggleAll(this.checked)"></th>
+                <th ${sortClick('invoice_number')} style="cursor:pointer;">Invoice #${sortIcon('invoice_number')}</th>
                 <th ${sortClick('svc_date')} style="cursor:pointer;">Svc Date${sortIcon('svc_date')}</th>
-                <th ${sortClick('billing_company')} style="cursor:pointer;">Name${sortIcon('billing_company')}</th>
-                <th>Complete</th>
-                <th>Balance</th>
-                <th ${sortClick('total')} style="cursor:pointer;">Invoice Amt${sortIcon('total')}</th>
-                <th ${sortClick('amount_paid')} style="cursor:pointer;">Amount Paid${sortIcon('amount_paid')}</th>
+                <th>Loose Ends</th>
+                <th ${sortClick('customer_name')} style="cursor:pointer;">Name${sortIcon('customer_name')}</th>
+                <th>Billing Company</th>
+                <th>Billing City</th>
+                <th>Property Company</th>
                 <th>Property Address</th>
-                <th style="width:60px;">Code</th>
+                <th>Property City</th>
+                <th style="width:70px;">Job Codes</th>
+                <th style="width:70px;">Complete</th>
+                <th style="text-align:right;">Gallons Pumped</th>
+                <th ${sortClick('total')} style="cursor:pointer;text-align:right;">Invoice Amt${sortIcon('total')}</th>
+                <th ${sortClick('amount_paid')} style="cursor:pointer;text-align:right;">Amount Paid${sortIcon('amount_paid')}</th>
               </tr>
             </thead>
             <tbody>
               <!-- TOTALS ROW -->
               <tr class="inv-totals-row">
+                <td></td>
                 <td><strong>Totals</strong></td>
-                <td></td><td></td><td></td><td></td>
-                <td><strong>${((totals.invoice_total || 0) - (totals.amount_paid || 0)).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</strong></td>
-                <td><strong>${(totals.invoice_total || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</strong></td>
-                <td><strong>${(totals.amount_paid || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</strong></td>
-                <td></td><td></td>
+                <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+                <td style="text-align:right;"><strong>${(totals.gallons_pumped || 0).toLocaleString()}</strong></td>
+                <td style="text-align:right;"><strong>${(totals.invoice_total || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</strong></td>
+                <td style="text-align:right;"><strong>${(totals.amount_paid || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</strong></td>
               </tr>
               ${invoices.map(inv => {
-                const balance = (inv.total || 0) - (inv.amount_paid || 0);
+                const gallons = inv.gallons_pumped_total || 0;
+                const total = inv.total || 0;
+                const paid = inv.amount_paid || 0;
+                const name = inv.customers?.name || inv.customer_name || inv.billing_company || inv.property_company || '';
+                const billCompany = inv.billing_company || inv.customers?.company || inv.customers?.name || '';
+                const billCity = inv.billing_city || inv.customers?.city || '';
+                const propCompany = inv.property_company || '';
+                const propAddr = inv.property_address || inv.property?.address || '';
+                const propCity = inv.property_city || inv.property?.city || '';
+                const isWaiting = inv.waiting_area === true || (inv.waiting_area == null && inv.imported_from === 'tanktrack' && !(inv.truck || '').trim());
+                const waitingBadge = isWaiting ? ` <span style="background:#f9a825;color:#000;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;vertical-align:middle;" title="Unassigned to a truck">WAITING</span>` : '';
+                const cancelledBadge = inv.cancelled ? ` <span style="background:#c62828;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;vertical-align:middle;" title="Cancelled invoice">CANCELLED</span>` : '';
+                const rowStyle = inv.cancelled ? 'cursor:pointer;opacity:0.55;text-decoration:line-through;' : 'cursor:pointer;';
                 return `
-                <tr data-inv-id="${inv.id}" onclick="${inv.job_id ? `openJobDetail('${inv.job_id}')` : `openInvoiceDetail('${inv.id}')`}" style="cursor:pointer;" class="${selectedInvoiceIds.has(inv.id) ? 'inv-row-selected' : ''}">
-                  <td><strong>${esc(inv.invoice_number || '')}</strong></td>
+                <tr data-inv-id="${inv.id}" onclick="${inv.job_id ? `openJobDetail('${inv.job_id}')` : `openInvoiceDetail('${inv.id}')`}" style="${rowStyle}" class="${selectedInvoiceIds.has(inv.id) ? 'inv-row-selected' : ''}">
                   <td onclick="event.stopPropagation()"><input type="checkbox" ${selectedInvoiceIds.has(inv.id) ? 'checked' : ''} onchange="invoiceToggleOne('${inv.id}', this.checked)"></td>
-                  <td>${inv.svc_date || ''}</td>
-                  <td>${esc(inv.customers?.name || '')}</td>
-                  <td>${inv.complete ? '&#9989;' : ''}</td>
-                  <td style="color:${balance > 0 ? '#c62828' : '#2e7d32'};font-weight:600;">${balance.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                  <td>${(inv.total || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                  <td>${(inv.amount_paid || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                  <td>${esc(inv.property_address || '')}</td>
+                  <td><strong>${esc(inv.invoice_number || '')}</strong>${waitingBadge}${cancelledBadge}</td>
+                  <td style="white-space:nowrap;">${inv.svc_date || ''}</td>
+                  <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(inv.loose_ends || '')}">${esc(inv.loose_ends || '')}</td>
+                  <td>${esc(name)}</td>
+                  <td>${esc(billCompany)}</td>
+                  <td>${esc(billCity)}</td>
+                  <td>${esc(propCompany)}</td>
+                  <td>${esc(propAddr)}</td>
+                  <td>${esc(propCity)}</td>
                   <td style="font-size:11px;">${esc(abbreviateJobCode(inv.job_codes || ''))}</td>
+                  <td style="text-align:center;">${inv.complete ? '&#10003;' : ''}</td>
+                  <td style="text-align:right;">${gallons ? gallons.toLocaleString() : ''}</td>
+                  <td style="text-align:right;">${total.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                  <td style="text-align:right;">${paid.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
                 </tr>`;
               }).join('')}
-              ${invoices.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-light);">No invoices match your filters.</td></tr>' : ''}
+              ${invoices.length === 0 ? '<tr><td colspan="15" style="text-align:center;padding:24px;color:var(--text-light);">No invoices match your filters.</td></tr>' : ''}
             </tbody>
           </table>
         </div>
 
-        <!-- PAGINATION -->
-        <div class="inv-pagination">
-          <button class="inv-page-btn" ${currentPage <= 1 ? 'disabled' : ''} onclick="invoiceFilters.page=${currentPage - 1};loadInvoices()">&#8249;</button>
-          <button class="inv-page-btn" ${currentPage <= 1 ? 'disabled' : ''} onclick="invoiceFilters.page=1;loadInvoices()">&#171;</button>
-          ${invoicePaginationNumbers(currentPage, totalPages)}
-          <button class="inv-page-btn" ${currentPage >= totalPages ? 'disabled' : ''} onclick="invoiceFilters.page=${currentPage + 1};loadInvoices()">&#8250;</button>
-          <button class="inv-page-btn" ${currentPage >= totalPages ? 'disabled' : ''} onclick="invoiceFilters.page=${totalPages};loadInvoices()">&#187;</button>
-        </div>
       </div>
     </div>
   `;
@@ -6823,7 +9907,7 @@ function invDatePresetNav(dir) {
 }
 
 function invoiceClearFilters() {
-  invoiceFilters = { page: 1, perPage: 35, sortField: 'svc_date', sortDir: 'desc' };
+  invoiceFilters = _invoiceDefaultFilters();
   selectedInvoiceIds.clear();
   loadInvoices();
 }
@@ -6887,15 +9971,37 @@ async function invoiceBatchPrint() {
 
 async function invoiceBatchDelete() {
   if (selectedInvoiceIds.size === 0) { showToast('Select invoices first.', 'error'); return; }
-  if (!confirm(`Delete ${selectedInvoiceIds.size} invoice(s)? This cannot be undone.`)) return;
-  let deleted = 0;
-  for (const id of selectedInvoiceIds) {
-    await window.api.deleteInvoice(id);
-    deleted++;
+  const ids = Array.from(selectedInvoiceIds);
+  if (!confirm(`Delete ${ids.length} invoice(s)? This cannot be undone.`)) return;
+  _showBulkDeleteOverlay(`Deleting ${ids.length} invoice(s)…`);
+  try {
+    const res = await window.api.bulkDeleteInvoices(ids);
+    selectedInvoiceIds.clear();
+    showToast(`Deleted ${res.deleted} invoice(s).`, 'success');
+  } catch (err) {
+    console.error(err);
+    showToast('Delete failed: ' + (err?.message || err), 'error');
+  } finally {
+    _hideBulkDeleteOverlay();
+    loadInvoices();
   }
-  selectedInvoiceIds.clear();
-  showToast(`Deleted ${deleted} invoice(s).`, 'success');
-  loadInvoices();
+}
+
+async function invoiceBatchCancel(cancel) {
+  if (selectedInvoiceIds.size === 0) { showToast('Select invoices first.', 'error'); return; }
+  const ids = Array.from(selectedInvoiceIds);
+  const verb = cancel ? 'Cancel' : 'Reinstate';
+  if (!confirm(`${verb} ${ids.length} invoice(s)?`)) return;
+  try {
+    const res = await window.api.bulkCancelInvoices(ids, cancel);
+    selectedInvoiceIds.clear();
+    showToast(`${cancel ? 'Cancelled' : 'Reinstated'} ${res.updated} invoice(s).`, 'success');
+  } catch (err) {
+    console.error(err);
+    showToast((cancel ? 'Cancel' : 'Reinstate') + ' failed: ' + (err?.message || err), 'error');
+  } finally {
+    loadInvoices();
+  }
 }
 
 function generateInvoiceHtml(inv) {
@@ -7540,7 +10646,7 @@ async function loadDisposal() {
     <div style="display:flex;height:100%;min-height:0;">
 
       <!-- LEFT FILTER SIDEBAR -->
-      <div style="width:180px;min-width:160px;flex-shrink:0;background:#f7f8fa;border-right:1px solid var(--border);padding:12px 10px;overflow-y:auto;font-size:13px;">
+      <div style="width:180px;min-width:160px;flex-shrink:0;background:var(--surface-subtle);border-right:1px solid var(--border);padding:12px 10px;overflow-y:auto;font-size:13px;color:var(--text);">
         <div style="font-weight:700;font-size:11px;letter-spacing:.5px;color:var(--text-light);margin-bottom:10px;text-transform:uppercase;">Filter Disposals</div>
 
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
@@ -7586,9 +10692,10 @@ async function loadDisposal() {
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;">
 
         <!-- TOP BAR -->
-        <div style="display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);background:#fff;flex-shrink:0;">
+        <div style="display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);background:#fff;flex-shrink:0;gap:10px;">
           <span style="font-size:18px;font-weight:700;">Disposals</span>
-          <span style="display:inline-block;background:var(--primary);color:#fff;border-radius:12px;font-size:12px;font-weight:700;padding:1px 8px;margin-left:8px;">${loads.length}</span>
+          <span style="display:inline-block;background:var(--primary);color:#fff;border-radius:12px;font-size:12px;font-weight:700;padding:1px 8px;">${loads.length}</span>
+          <button id="disposalBatchDeleteBtn" class="btn btn-danger btn-sm" style="display:none;margin-left:8px;" onclick="batchDeleteDisposals()">&#128465; Delete Selected</button>
         </div>
 
         <!-- DATE RANGE HEADER -->
@@ -7608,6 +10715,7 @@ async function loadDisposal() {
             <table class="data-table" style="font-size:13px;width:100%;">
               <thead>
                 <tr style="background:#f0f0f0;">
+                  <th style="padding:7px 8px;text-align:center;width:32px;"><input type="checkbox" id="disposalSelectAll" onchange="toggleAllDisposalChecks(this.checked)" title="Select all"></th>
                   <th style="padding:7px 10px;text-align:left;white-space:nowrap;">Record #</th>
                   <th style="padding:7px 6px;text-align:center;">Type</th>
                   <th style="padding:7px 10px;text-align:left;">Site Name</th>
@@ -7620,6 +10728,7 @@ async function loadDisposal() {
                   <th style="padding:7px 10px;text-align:left;">Receipt #</th>
                 </tr>
                 <tr style="background:#e8e8e8;font-weight:700;font-size:12px;">
+                  <td></td>
                   <td style="padding:5px 10px;" colspan="5">Totals</td>
                   <td style="padding:5px 10px;text-align:right;">${totalActual.toLocaleString()}</td>
                   <td style="padding:5px 10px;text-align:right;">${totalPumpVol.toLocaleString()}</td>
@@ -7638,23 +10747,25 @@ async function loadDisposal() {
                   const pumpVol   = volRaw.toLocaleString() + volUnit;
                   const ttDel     = isYards ? pumpVol : (l.actual_gallons || l.volume_gallons || 0).toLocaleString();
                   const isComplete = !!(l.manifest_number);
-                  // Source: own truck or outside pumper
                   let sourceLabel = l.vehicle || '';
                   if (l.outside_pumper_id) {
                     const op = _outsidePumpers.find(p => p.id === l.outside_pumper_id);
                     sourceLabel = op ? (op.company || op.name) : (l.pumper_name || 'Outside Pumper');
                   }
-                  return `<tr style="cursor:pointer;border-bottom:1px solid #eee;" onclick="openDisposalDetail('${l.id}')" onmouseover="this.style.background='#f9f9f9'" onmouseout="this.style.background=''">
-                    <td style="padding:6px 10px;font-weight:600;color:var(--primary);">${esc(l.disposal_number || l.manifest_number || '—')}</td>
-                    <td style="padding:6px 6px;text-align:center;font-size:11px;font-weight:700;">${esc(wasteCode)}</td>
-                    <td style="padding:6px 10px;">${esc(siteName)}</td>
-                    <td style="padding:6px 10px;white-space:nowrap;">${l.disposal_date || ''}</td>
-                    <td style="padding:6px 10px;">${esc(custName)}</td>
-                    <td style="padding:6px 10px;text-align:right;font-weight:600;">${ttDel}</td>
-                    <td style="padding:6px 10px;text-align:right;">${pumpVol}</td>
-                    <td style="padding:6px 10px;font-size:12px;">${esc(wasteType)}</td>
-                    <td style="padding:6px 10px;font-size:12px;">${esc(sourceLabel)}${l.outside_pumper_id ? '<br><span style="font-size:10px;color:#e65100;font-weight:600;">OUTSIDE PUMPER</span>' : ''}</td>
-                    <td style="padding:6px 10px;font-size:12px;color:var(--text-light);">${esc(l.receipt_number || '')}</td>
+                  return `<tr style="cursor:pointer;border-bottom:1px solid #eee;" onmouseover="this.style.background='#f9f9f9'" onmouseout="this.style.background=''">
+                    <td style="padding:6px 8px;text-align:center;" onclick="event.stopPropagation()">
+                      <input type="checkbox" class="disposal-row-check" data-id="${l.id}" onchange="updateDisposalBatchBtn()">
+                    </td>
+                    <td style="padding:6px 10px;font-weight:600;color:var(--primary);" onclick="openDisposalDetail('${l.id}')">${esc(l.disposal_number || l.manifest_number || '—')}</td>
+                    <td style="padding:6px 6px;text-align:center;font-size:11px;font-weight:700;" onclick="openDisposalDetail('${l.id}')">${esc(wasteCode)}</td>
+                    <td style="padding:6px 10px;" onclick="openDisposalDetail('${l.id}')">${esc(siteName)}</td>
+                    <td style="padding:6px 10px;white-space:nowrap;" onclick="openDisposalDetail('${l.id}')">${l.disposal_date || ''}</td>
+                    <td style="padding:6px 10px;" onclick="openDisposalDetail('${l.id}')">${esc(custName)}</td>
+                    <td style="padding:6px 10px;text-align:right;font-weight:600;" onclick="openDisposalDetail('${l.id}')">${ttDel}</td>
+                    <td style="padding:6px 10px;text-align:right;" onclick="openDisposalDetail('${l.id}')">${pumpVol}</td>
+                    <td style="padding:6px 10px;font-size:12px;" onclick="openDisposalDetail('${l.id}')">${esc(wasteType)}</td>
+                    <td style="padding:6px 10px;font-size:12px;" onclick="openDisposalDetail('${l.id}')">${esc(sourceLabel)}${l.outside_pumper_id ? '<br><span style="font-size:10px;color:#e65100;font-weight:600;">OUTSIDE PUMPER</span>' : ''}</td>
+                    <td style="padding:6px 10px;font-size:12px;color:var(--text-light);" onclick="openDisposalDetail('${l.id}')">${esc(l.receipt_number || '')}</td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -7680,6 +10791,44 @@ function clearDisposalFilters() {
   if (s) s.value = '';
   if (tr) tr.value = '';
   if (w) w.value = '';
+  loadDisposal();
+}
+
+function updateDisposalBatchBtn() {
+  const anyChecked = document.querySelectorAll('.disposal-row-check:checked').length > 0;
+  const btn = document.getElementById('disposalBatchDeleteBtn');
+  if (btn) btn.style.display = anyChecked ? '' : 'none';
+}
+
+function toggleAllDisposalChecks(checked) {
+  document.querySelectorAll('.disposal-row-check').forEach(cb => cb.checked = checked);
+  updateDisposalBatchBtn();
+}
+
+async function batchDeleteDisposals() {
+  const checked = [...document.querySelectorAll('.disposal-row-check:checked')];
+  if (checked.length === 0) return;
+  if (!confirm(`Delete ${checked.length} disposal record${checked.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+
+  const { data: loads } = await window.api.getDisposalLoads();
+  const { data: allItems } = await window.api.getScheduleItems();
+  const { data: allJobs } = await window.api.getJobs({});
+
+  for (const cb of checked) {
+    const disposal = (loads || []).find(d => d.id === cb.dataset.id);
+    const mNum = disposal?.manifest_number ? String(disposal.manifest_number) : null;
+    await window.api.deleteDisposalLoad(cb.dataset.id);
+    if (mNum) {
+      const manifestItem = (allItems || []).find(i => i.item_type === 'manifest' && String(i.manifest_number) === mNum);
+      if (manifestItem) await window.api.deleteScheduleItem(manifestItem.id);
+      const stamped = (allJobs || []).filter(j => String(j.manifest_number) === mNum);
+      for (const j of stamped) {
+        await window.api.saveJob({ id: j.id, manifest_number: null, status: 'scheduled', completed_at: null });
+      }
+    }
+  }
+
+  showToast(`${checked.length} disposal${checked.length > 1 ? 's' : ''} deleted.`, 'success');
   loadDisposal();
 }
 
@@ -8299,7 +11448,29 @@ async function saveDisposalLoad() {
 async function deleteDisposalLoad() {
   const id = document.getElementById('disposalId').value;
   if (!id || !confirm('Delete this disposal record?')) return;
+
+  // Look up the disposal to find its manifest number before deleting
+  const { data: loads } = await window.api.getDisposalLoads();
+  const disposal = (loads || []).find(d => d.id === id);
+  const mNum = disposal?.manifest_number ? String(disposal.manifest_number) : null;
+
   await window.api.deleteDisposalLoad(id);
+
+  if (mNum) {
+    // Delete the matching manifest schedule item
+    const { data: allItems } = await window.api.getScheduleItems();
+    const manifestItem = (allItems || []).find(i => i.item_type === 'manifest' && String(i.manifest_number) === mNum);
+    if (manifestItem) {
+      await window.api.deleteScheduleItem(manifestItem.id);
+    }
+    // Un-stamp jobs that were stamped by this manifest
+    const { data: allJobs } = await window.api.getJobs({});
+    const stamped = (allJobs || []).filter(j => String(j.manifest_number) === mNum);
+    for (const j of stamped) {
+      await window.api.saveJob({ id: j.id, manifest_number: null, status: 'scheduled', completed_at: null });
+    }
+  }
+
   closeModal();
   showToast('Disposal deleted.', 'success');
   loadDisposal();
@@ -8351,7 +11522,7 @@ async function openDisposalDetail(id) {
         </div>
         <div style="text-align:right;">
           <div style="font-size:13px;color:#555;">${esc(l.disposal_date || '')}</div>
-          <div style="margin-top:4px;"><span class="dv-badge">${isOutside ? '🚛 Outside Pumper' : '🚚 Our Truck'}</span></div>
+          ${isOutside ? '<div style="margin-top:4px;"><span class="dv-badge">🚛 Outside Pumper</span></div>' : ''}
         </div>
       </div>
 
@@ -8635,13 +11806,14 @@ async function generateDepReport() {
 
 // ===== REMINDERS =====
 // ===== SERVICE DUE NOTICES PAGE =====
-let sdnFilters = { page: 1, perPage: 35, status: '', dueDateFrom: '', dueDateTo: '', search: '', _preset: 'All Time' };
+let sdnFilters = { page: 1, perPage: 35, status: '', serviceType: '', dueDateFrom: '', dueDateTo: '', search: '', _preset: 'All Time', sortBy: 'due_date', sortDir: 'asc' };
 let selectedSdnIds = new Set();
 
 async function loadServiceDueNotices() {
   const page = document.getElementById('page-sdn');
   const filters = {};
   if (sdnFilters.status) filters.status = sdnFilters.status;
+  if (sdnFilters.serviceType) filters.serviceType = sdnFilters.serviceType;
   if (sdnFilters.dueDateFrom) filters.dueDateFrom = sdnFilters.dueDateFrom;
   if (sdnFilters.dueDateTo) filters.dueDateTo = sdnFilters.dueDateTo;
   if (sdnFilters.search) filters.search = sdnFilters.search;
@@ -8650,11 +11822,27 @@ async function loadServiceDueNotices() {
   const today = new Date().toISOString().split('T')[0];
   const thisMonthEnd = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0];
 
-  // Stats
+  // Stats (always computed on full result set before pagination)
   const totalCount = allNotices.length;
   const overdueCount = allNotices.filter(n => n.is_overdue).length;
   const dueThisMonth = allNotices.filter(n => n.status === 'pending' && n.due_date && n.due_date >= today && n.due_date <= thisMonthEnd).length;
   const sentCount = allNotices.filter(n => n.status === 'sent').length;
+
+  // Unique service types for filter dropdown
+  const serviceTypes = [...new Set(allNotices.map(n => n.service_type).filter(Boolean))].sort();
+
+  // Client-side sort (overrides backend default)
+  const sb = sdnFilters.sortBy;
+  const sd = sdnFilters.sortDir === 'asc' ? 1 : -1;
+  allNotices.sort((a, b) => {
+    let av, bv;
+    if (sb === 'customer') { av = a.customer?.name || ''; bv = b.customer?.name || ''; }
+    else if (sb === 'service_type') { av = a.service_type || ''; bv = b.service_type || ''; }
+    else if (sb === 'days') { av = a.days_until_due ?? 99999; bv = b.days_until_due ?? 99999; return (av - bv) * sd; }
+    else if (sb === 'status') { av = a.is_overdue ? 'overdue' : (a.status || ''); bv = b.is_overdue ? 'overdue' : (b.status || ''); }
+    else { av = a.due_date || ''; bv = b.due_date || ''; } // default: due_date
+    return av.localeCompare(bv) * sd;
+  });
 
   // Pagination
   const totalPages = Math.ceil(totalCount / sdnFilters.perPage);
@@ -8689,6 +11877,24 @@ async function loadServiceDueNotices() {
           <option value="completed" ${sdnFilters.status === 'completed' ? 'selected' : ''}>Completed</option>
           <option value="dismissed" ${sdnFilters.status === 'dismissed' ? 'selected' : ''}>Dismissed</option>
         </select>
+
+        <label class="inv-filter-label">Service Type</label>
+        <select class="inv-filter-select" onchange="sdnFilters.serviceType=this.value;sdnFilters.page=1;loadServiceDueNotices()">
+          <option value="">All Types</option>
+          ${serviceTypes.map(t => `<option value="${esc(t)}" ${sdnFilters.serviceType === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+        </select>
+
+        <label class="inv-filter-label">Sort By</label>
+        <div style="display:flex;gap:4px;">
+          <select class="inv-filter-select" style="flex:1;" onchange="sdnFilters.sortBy=this.value;sdnFilters.page=1;loadServiceDueNotices()">
+            <option value="due_date" ${sdnFilters.sortBy==='due_date'?'selected':''}>Due Date</option>
+            <option value="customer" ${sdnFilters.sortBy==='customer'?'selected':''}>Customer</option>
+            <option value="service_type" ${sdnFilters.sortBy==='service_type'?'selected':''}>Service Type</option>
+            <option value="days" ${sdnFilters.sortBy==='days'?'selected':''}>Days Until Due</option>
+            <option value="status" ${sdnFilters.sortBy==='status'?'selected':''}>Status</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" style="padding:3px 8px;font-size:13px;" title="Toggle direction" onclick="sdnFilters.sortDir=sdnFilters.sortDir==='asc'?'desc':'asc';loadServiceDueNotices()">${sdnFilters.sortDir==='asc'?'↑':'↓'}</button>
+        </div>
 
         <label class="inv-filter-label">Due Date Range</label>
         <div class="inv-date-preset-wrap">
@@ -8736,12 +11942,13 @@ async function loadServiceDueNotices() {
               <tr>
                 <th style="width:32px;"><input type="checkbox" onchange="sdnToggleAll(this.checked)" ${selectedSdnIds.size > 0 && selectedSdnIds.size === notices.length ? 'checked' : ''}></th>
                 <th style="width:40px;">#</th>
-                <th>Customer</th>
-                <th>Property</th>
-                <th>Service Type</th>
-                <th>Due Date</th>
-                <th>Days</th>
-                <th>Status</th>
+                ${['customer','property','service_type','due_date','days','status'].map((col,i) => {
+                  const labels = ['Customer','Property','Service Type','Due Date','Days','Status'];
+                  const sortable = col !== 'property';
+                  const active = sdnFilters.sortBy === col;
+                  const arrow = active ? (sdnFilters.sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+                  return `<th style="cursor:${sortable?'pointer':'default'};user-select:none;${active?'color:#ffeb3b;':''}" ${sortable?`onclick="sdnSetSort('${col}')"`:''} title="${sortable?'Click to sort':''}">${labels[i]}${arrow}</th>`;
+                }).join('')}
               </tr>
             </thead>
             <tbody>
@@ -8780,8 +11987,19 @@ async function loadServiceDueNotices() {
     </div>`;
 }
 
+function sdnSetSort(col) {
+  if (sdnFilters.sortBy === col) {
+    sdnFilters.sortDir = sdnFilters.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sdnFilters.sortBy = col;
+    sdnFilters.sortDir = 'asc';
+  }
+  sdnFilters.page = 1;
+  loadServiceDueNotices();
+}
+
 function sdnClearFilters() {
-  sdnFilters = { page: 1, perPage: 35, status: '', dueDateFrom: '', dueDateTo: '', search: '', _preset: 'All Time' };
+  sdnFilters = { page: 1, perPage: 35, status: '', serviceType: '', dueDateFrom: '', dueDateTo: '', search: '', _preset: 'All Time', sortBy: 'due_date', sortDir: 'asc' };
   selectedSdnIds.clear();
   loadServiceDueNotices();
 }
@@ -9086,6 +12304,31 @@ async function markReminderDone(id) {
 // ===== REPORTS =====
 let reportDateFrom = '';
 let reportDateTo = '';
+let reportTab = 'revenue'; // revenue | ar | city | statements | pl
+let reportCompareMode = 'none'; // none | prior | yoy | custom
+let reportCompareFrom = '';
+let reportCompareTo = '';
+let arSortBy = 'total'; // name | city | current | d30 | d60 | d90 | total | oldest
+let arSortDir = 'desc'; // asc | desc
+let arSearchTerm = '';
+function setArSort(col) {
+  if (arSortBy === col) { arSortDir = arSortDir === 'desc' ? 'asc' : 'desc'; }
+  else { arSortBy = col; arSortDir = (col === 'name' || col === 'city') ? 'asc' : 'desc'; }
+  loadReports();
+}
+function filterArTable(term) {
+  arSearchTerm = (term || '').toLowerCase().trim();
+  const rows = document.querySelectorAll('#ar-tbody .ar-row');
+  let shown = 0;
+  rows.forEach(tr => {
+    const hay = tr.getAttribute('data-search') || '';
+    const match = !arSearchTerm || hay.includes(arSearchTerm);
+    tr.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  const countEl = document.getElementById('ar-search-count');
+  if (countEl) countEl.textContent = arSearchTerm ? `${shown} of ${rows.length} customers` : `${rows.length} customers`;
+}
 
 async function loadReports() {
   const page = document.getElementById('page-reports');
@@ -9098,16 +12341,21 @@ async function loadReports() {
     reportDateTo = formatDate(now);
   }
 
-  // Load all invoices in date range
+  // Load all data
   const { data: allInvoices } = await window.api.getInvoices({});
   const { data: allJobs } = await window.api.getJobs({});
   const { data: categories } = await window.api.getServiceCategories();
   const { data: vehicles } = await window.api.getVehicles();
+  const { data: arRows, totals: arTotals, deltas: arDeltas, delta7: arDelta7, collection: arCollection, collectionHistory: arCollectionHistory } = await window.api.getArReport();
 
-  // Filter invoices by date range
+  // Filter invoices by date range — match TankTrack's report behavior:
+  // exclude cancelled, require complete (TT: "only includes data from Invoices marked Complete")
   const invoices = allInvoices.filter(inv => {
     const d = inv.svc_date || inv.created_at?.split('T')[0] || '';
-    return d >= reportDateFrom && d <= reportDateTo;
+    if (d < reportDateFrom || d > reportDateTo) return false;
+    if (inv.cancelled === true) return false;
+    if (inv.complete !== true) return false;
+    return true;
   });
 
   // Filter jobs by date range
@@ -9119,7 +12367,7 @@ async function loadReports() {
   // Revenue by service type
   const serviceRevenue = {};
   invoices.forEach(inv => {
-    if (inv.line_items && Array.isArray(inv.line_items)) {
+    if (inv.line_items && Array.isArray(inv.line_items) && inv.line_items.length) {
       inv.line_items.forEach(li => {
         const name = li.description || li.name || 'Other';
         if (!serviceRevenue[name]) serviceRevenue[name] = { qty: 0, revenue: 0 };
@@ -9127,10 +12375,24 @@ async function loadReports() {
         serviceRevenue[name].revenue += (li.amount || li.total || 0);
       });
     } else {
-      const name = inv.service_type || inv.job_type || 'Pumping';
-      if (!serviceRevenue[name]) serviceRevenue[name] = { qty: 0, revenue: 0 };
-      serviceRevenue[name].qty += 1;
-      serviceRevenue[name].revenue += (inv.total || inv.amount || 0);
+      // TankTrack-imported: parse comma-separated Products/Services + Quantity + Unit Cost
+      const ps = String(inv.products_services || '').split(',').map(s => s.trim()).filter(Boolean);
+      const qs = String(inv.quantity || '').split(',').map(s => parseFloat(s.trim()) || 0);
+      const ucs = String(inv.unit_cost || '').split(',').map(s => parseFloat(s.trim()) || 0);
+      if (ps.length) {
+        ps.forEach((name, i) => {
+          const q = qs[i] || 1;
+          const uc = ucs[i] || 0;
+          if (!serviceRevenue[name]) serviceRevenue[name] = { qty: 0, revenue: 0 };
+          serviceRevenue[name].qty += q;
+          serviceRevenue[name].revenue += q * uc;
+        });
+      } else {
+        const name = inv.service_type || inv.job_type || 'Pumping';
+        if (!serviceRevenue[name]) serviceRevenue[name] = { qty: 0, revenue: 0 };
+        serviceRevenue[name].qty += 1;
+        serviceRevenue[name].revenue += (inv.total || inv.amount || 0);
+      }
     }
   });
   const sortedServices = Object.entries(serviceRevenue).sort((a, b) => b[1].revenue - a[1].revenue);
@@ -9148,11 +12410,11 @@ async function loadReports() {
   // Revenue by truck
   const truckRevenue = {};
   invoices.forEach(inv => {
-    const truck = inv.vehicle_name || 'Unassigned';
+    const truck = inv.vehicle_name || inv.truck || 'Unassigned';
     if (!truckRevenue[truck]) truckRevenue[truck] = { jobs: 0, revenue: 0, gallons: 0 };
     truckRevenue[truck].jobs += 1;
     truckRevenue[truck].revenue += (inv.total || inv.amount || 0);
-    truckRevenue[truck].gallons += (inv.gallons_pumped || 0);
+    truckRevenue[truck].gallons += (inv.gallons_pumped_total || inv.gallons_pumped || 0);
   });
   const sortedTrucks = Object.entries(truckRevenue).sort((a, b) => b[1].revenue - a[1].revenue);
 
@@ -9174,9 +12436,73 @@ async function loadReports() {
 
   // Totals
   const totalRevenue = invoices.reduce((sum, inv) => sum + (inv.total || inv.amount || 0), 0);
-  const totalJobs = jobs.length;
-  const totalGallons = invoices.reduce((sum, inv) => sum + (inv.gallons_pumped || 0), 0);
+  const totalPaid = invoices.reduce((sum, inv) => sum + (inv.amount_paid || 0), 0);
+  const totalOutstanding = Math.max(0, totalRevenue - totalPaid);
+  const totalJobs = invoices.length;
+  const totalGallons = invoices.reduce((sum, inv) => sum + (inv.gallons_pumped_total || inv.gallons_pumped || 0), 0);
   const avgPerJob = invoices.length > 0 ? totalRevenue / invoices.length : 0;
+
+  // === Comparison period ===
+  function shiftDate(dStr, days) {
+    const d = new Date(dStr + 'T00:00:00');
+    d.setDate(d.getDate() + days);
+    return formatDate(d);
+  }
+  function shiftYear(dStr, years) {
+    const d = new Date(dStr + 'T00:00:00');
+    d.setFullYear(d.getFullYear() + years);
+    return formatDate(d);
+  }
+  let cmpFrom = '', cmpTo = '';
+  if (reportCompareMode === 'prior') {
+    const from = new Date(reportDateFrom + 'T00:00:00');
+    const to = new Date(reportDateTo + 'T00:00:00');
+    const span = Math.round((to - from) / 86400000);
+    cmpTo = shiftDate(reportDateFrom, -1);
+    cmpFrom = shiftDate(cmpTo, -span);
+  } else if (reportCompareMode === 'yoy') {
+    cmpFrom = shiftYear(reportDateFrom, -1);
+    cmpTo = shiftYear(reportDateTo, -1);
+  } else if (reportCompareMode === 'custom' && reportCompareFrom && reportCompareTo) {
+    cmpFrom = reportCompareFrom;
+    cmpTo = reportCompareTo;
+  }
+  const cmpInvoices = (cmpFrom && cmpTo) ? allInvoices.filter(inv => {
+    const d = inv.svc_date || inv.created_at?.split('T')[0] || '';
+    if (d < cmpFrom || d > cmpTo) return false;
+    if (inv.cancelled === true) return false;
+    if (inv.complete !== true) return false;
+    return true;
+  }) : [];
+  const cmpTotalRevenue = cmpInvoices.reduce((s, i) => s + (i.total || i.amount || 0), 0);
+  const cmpTotalJobs = cmpInvoices.length;
+  const cmpTotalGallons = cmpInvoices.reduce((s, i) => s + (i.gallons_pumped_total || i.gallons_pumped || 0), 0);
+  const cmpAvgPerJob = cmpTotalJobs > 0 ? cmpTotalRevenue / cmpTotalJobs : 0;
+  const hasCmp = cmpFrom && cmpTo;
+  function fmtCmpVal(v, isMoney, isInt) {
+    if (isMoney) return '$' + (v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (isInt) return (v || 0).toLocaleString();
+    return (v || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  }
+  function deltaBadge(curr, prev, opts = {}) {
+    if (!hasCmp) return '';
+    const { money = false, int = false } = opts;
+    const prevStr = fmtCmpVal(prev, money, int);
+    if (!prev) {
+      return `<div style="font-size:11px;color:var(--text-light);margin-top:4px;">Prior: ${prevStr}</div>`;
+    }
+    const pct = ((curr - prev) / Math.abs(prev)) * 100;
+    const up = pct >= 0;
+    const color = up ? '#4caf50' : '#e74c3c';
+    return `<div style="font-size:11px;color:${color};margin-top:4px;">${up?'▲':'▼'} ${Math.abs(pct).toFixed(1)}% — prior ${prevStr}</div>`;
+  }
+  function fmtRangeLabel(from, to) {
+    const f = d => {
+      const [y, m, day] = d.split('-');
+      return `${parseInt(m)}/${parseInt(day)}/${y}`;
+    };
+    return `${f(from)} – ${f(to)}`;
+  }
 
   // Quick period buttons
   const todayStr = formatDate(now);
@@ -9188,15 +12514,41 @@ async function loadReports() {
   // This week (Mon-Sun)
   const mon = getMonday(now);
   const thisWeekStart = formatDate(mon);
+  // Last week (prev Mon - prev Sun)
+  const lastMon = new Date(mon); lastMon.setDate(mon.getDate() - 7);
+  const lastSun = new Date(mon); lastSun.setDate(mon.getDate() - 1);
+  const lastWeekStart = formatDate(lastMon);
+  const lastWeekEnd = formatDate(lastSun);
+
+  // Revenue by city — respects the selected date range (same filter as Revenue tab)
+  const cityRevenue = {};
+  invoices.forEach(inv => {
+    const city = inv.property_city || inv.billing_city || inv.customers?.city || 'Unknown';
+    if (!cityRevenue[city]) cityRevenue[city] = { jobs: 0, revenue: 0, gallons: 0 };
+    cityRevenue[city].jobs += 1;
+    cityRevenue[city].revenue += (inv.total || inv.amount || 0);
+    cityRevenue[city].gallons += (inv.gallons_pumped_total || inv.gallons_pumped || 0);
+  });
+  const sortedCities = Object.entries(cityRevenue).sort((a, b) => b[1].revenue - a[1].revenue);
 
   // Max bar width for chart
   const maxDailyRev = dailyDates.length > 0 ? Math.max(...dailyDates.map(d => dailyRevenue[d])) : 1;
   const maxServiceRev = sortedServices.length > 0 ? sortedServices[0][1].revenue : 1;
+  const maxCityRev = sortedCities.length > 0 ? sortedCities[0][1].revenue : 1;
 
   page.innerHTML = `
+    <!-- Tab Bar -->
+    <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:20px;">
+      ${[['revenue','Revenue'],['ar','Accounts Receivable'],['city','By City'],['pl','P&L']].map(([key,label]) =>
+        `<button onclick="reportTab='${key}';loadReports()" style="padding:10px 22px;border:none;background:${reportTab===key?'var(--surface-subtle)':'none'};cursor:pointer;font-size:13px;font-weight:${reportTab===key?'700':'500'};color:${reportTab===key?'var(--primary)':'var(--text)'};border-bottom:${reportTab===key?'3px solid var(--primary)':'3px solid transparent'};margin-bottom:-2px;border-radius:6px 6px 0 0;">${label}</button>`
+      ).join('')}
+    </div>
+
+    ${(reportTab === 'revenue' || reportTab === 'city') ? `
     <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
       <div style="display:flex;gap:6px;">
         <button class="btn btn-sm ${reportDateFrom === thisWeekStart && reportDateTo === todayStr ? 'btn-primary' : 'btn-secondary'}" onclick="setReportPeriod('${thisWeekStart}','${todayStr}')">This Week</button>
+        <button class="btn btn-sm ${reportDateFrom === lastWeekStart && reportDateTo === lastWeekEnd ? 'btn-primary' : 'btn-secondary'}" onclick="setReportPeriod('${lastWeekStart}','${lastWeekEnd}')">Last Week</button>
         <button class="btn btn-sm ${reportDateFrom === thisMonthStart && reportDateTo === todayStr ? 'btn-primary' : 'btn-secondary'}" onclick="setReportPeriod('${thisMonthStart}','${todayStr}')">This Month</button>
         <button class="btn btn-sm ${reportDateFrom === lastMonthStart && reportDateTo === lastMonthEndStr ? 'btn-primary' : 'btn-secondary'}" onclick="setReportPeriod('${lastMonthStart}','${lastMonthEndStr}')">Last Month</button>
         <button class="btn btn-sm ${reportDateFrom === thisYearStart && reportDateTo === todayStr ? 'btn-primary' : 'btn-secondary'}" onclick="setReportPeriod('${thisYearStart}','${todayStr}')">YTD</button>
@@ -9208,24 +12560,69 @@ async function loadReports() {
         <input type="date" id="reportTo" value="${reportDateTo}" onchange="reportDateTo=this.value;loadReports();" style="padding:4px 8px;">
       </div>
     </div>
+    <div class="card" style="padding:12px 14px;margin-bottom:20px;display:flex;flex-direction:column;gap:10px;">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+        <label style="font-size:13px;color:var(--text-light);font-weight:600;">Compare to:</label>
+        <select onchange="reportCompareMode=this.value;loadReports();" style="padding:4px 8px;">
+          <option value="none" ${reportCompareMode==='none'?'selected':''}>None</option>
+          <option value="prior" ${reportCompareMode==='prior'?'selected':''}>Prior period (same length)</option>
+          <option value="yoy" ${reportCompareMode==='yoy'?'selected':''}>Same period last year</option>
+          <option value="custom" ${reportCompareMode==='custom'?'selected':''}>Custom date range</option>
+        </select>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-secondary" onclick="setComparePreset('week_prior')">Week vs Last Week</button>
+          <button class="btn btn-sm btn-secondary" onclick="setComparePreset('month_prior')">Month vs Prior</button>
+          <button class="btn btn-sm btn-secondary" onclick="setComparePreset('month_yoy')">Month vs YoY</button>
+          <button class="btn btn-sm btn-secondary" onclick="setComparePreset('quarter_prior')">Quarter vs Prior</button>
+          <button class="btn btn-sm btn-secondary" onclick="setComparePreset('quarter_yoy')">Quarter vs YoY</button>
+          <button class="btn btn-sm ${reportCompareMode==='custom'?'btn-primary':'btn-secondary'}" onclick="setComparePreset('custom')" title="Compare any custom date range to another">Custom Range</button>
+        </div>
+        ${hasCmp ? `<div style="margin-left:auto;font-size:12px;color:var(--text-light);white-space:nowrap;"><strong>${fmtRangeLabel(reportDateFrom, reportDateTo)}</strong> vs <strong>${fmtRangeLabel(cmpFrom, cmpTo)}</strong></div>` : ''}
+      </div>
+      ${reportCompareMode==='custom' ? `
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:10px 12px;background:rgba(33,150,243,0.08);border:1px dashed rgba(33,150,243,0.4);border-radius:6px;">
+        <div style="font-size:12px;color:var(--text-light);font-weight:600;">CURRENT:</div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="date" value="${reportDateFrom}" onchange="reportDateFrom=this.value;loadReports();" style="padding:4px 8px;" title="Current range start">
+          <span style="font-size:12px;color:var(--text-light);">to</span>
+          <input type="date" value="${reportDateTo}" onchange="reportDateTo=this.value;loadReports();" style="padding:4px 8px;" title="Current range end">
+        </div>
+        <div style="font-size:14px;color:var(--text-light);font-weight:700;">vs</div>
+        <div style="font-size:12px;color:var(--text-light);font-weight:600;">COMPARE:</div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="date" value="${reportCompareFrom}" onchange="reportCompareFrom=this.value;loadReports();" style="padding:4px 8px;" title="Compare range start">
+          <span style="font-size:12px;color:var(--text-light);">to</span>
+          <input type="date" value="${reportCompareTo}" onchange="reportCompareTo=this.value;loadReports();" style="padding:4px 8px;" title="Compare range end">
+        </div>
+        <button class="btn btn-sm btn-secondary" onclick="swapCompareRanges()" title="Swap current and compare ranges">⇄ Swap</button>
+        ${(!reportCompareFrom || !reportCompareTo) ? '<span style="font-size:11px;color:#ff9800;font-weight:600;">⚠ Enter both compare dates to see comparison</span>' : ''}
+      </div>` : ''}
+    </div>` : ''}
 
+    ${reportTab === 'revenue' ? `
     <!-- KPI Cards -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px;">
       <div class="card" style="text-align:center;padding:20px;">
         <div style="font-size:28px;font-weight:700;color:var(--primary);">$${totalRevenue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div style="font-size:13px;color:var(--text-light);margin-top:4px;">Total Revenue</div>
+        ${deltaBadge(totalRevenue, cmpTotalRevenue, {money:true})}
+        <div style="font-size:11px;color:#4caf50;margin-top:6px;">Paid: $${totalPaid.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        <div style="font-size:11px;color:#ff9800;">Outstanding: $${totalOutstanding.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
       </div>
       <div class="card" style="text-align:center;padding:20px;">
         <div style="font-size:28px;font-weight:700;color:#2196f3;">${totalJobs}</div>
         <div style="font-size:13px;color:var(--text-light);margin-top:4px;">Total Jobs</div>
+        ${deltaBadge(totalJobs, cmpTotalJobs, {int:true})}
       </div>
       <div class="card" style="text-align:center;padding:20px;">
         <div style="font-size:28px;font-weight:700;color:#4caf50;">${totalGallons.toLocaleString()}</div>
         <div style="font-size:13px;color:var(--text-light);margin-top:4px;">Gallons Pumped</div>
+        ${deltaBadge(totalGallons, cmpTotalGallons, {int:true})}
       </div>
       <div class="card" style="text-align:center;padding:20px;">
         <div style="font-size:28px;font-weight:700;color:#ff9800;">$${avgPerJob.toFixed(2)}</div>
         <div style="font-size:13px;color:var(--text-light);margin-top:4px;">Avg per Invoice</div>
+        ${deltaBadge(avgPerJob, cmpAvgPerJob, {money:true})}
       </div>
     </div>
 
@@ -9310,27 +12707,1747 @@ async function loadReports() {
         `}
       </div>
 
-      <!-- Job Status Breakdown -->
-      <div class="card">
-        <div class="card-header"><h3>Job Status</h3></div>
-        <div style="padding:16px;">
-          ${Object.entries(statusCounts).filter(([,c]) => c > 0).map(([status, count]) => {
-            const colors = { completed:'#4caf50', scheduled:'#2196f3', in_progress:'#ff9800', cancelled:'#f44336' };
-            const pct = totalJobs > 0 ? (count / totalJobs * 100).toFixed(1) : 0;
-            return `
-              <div style="margin-bottom:12px;">
-                <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
-                  <span>${formatStatus(status)}</span>
-                  <span>${count} (${pct}%)</span>
-                </div>
-                <div style="height:8px;border-radius:4px;background:var(--border);">
-                  <div style="height:100%;border-radius:4px;background:${colors[status] || '#999'};width:${pct}%;"></div>
-                </div>
+    </div>
+    ` : ''}
+
+    ${reportTab === 'ar' ? `
+    <div class="card" style="overflow:hidden;">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>Accounts Receivable — All Outstanding Balances</h3>
+        <span style="font-size:13px;color:var(--text-light);">as of ${formatDate(new Date())}</span>
+      </div>
+      <!-- AR Aging Summary -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid #e0e0e0;">
+        ${[['Total','total','#1565c0',null],['Current (0–30d)','current','#1565c0',null],['31–60 Days','d30','#ff9800',null],['61–90 Days','d60','#f44336',null],['90+ Days','d90','#b71c1c','write-off risk']].map(([label,key,color,hint]) => {
+          const d = arDeltas ? arDeltas[key] : null;
+          const base = arDeltas ? (arDeltas[key+'_base'] ?? ((arTotals?.[key] || 0) - (d || 0))) : 0;
+          // AR shrinking is good: ↑ = red, ↓ = green.
+          const deltaColor = (d == null || d === 0) ? '#999' : (d > 0 ? '#c62828' : '#2e7d32');
+          const arrow = d == null ? '' : (d > 0 ? '↑' : d < 0 ? '↓' : '');
+          const fmtShort = (v) => {
+            const abs = Math.abs(v);
+            if (abs >= 1000) return `$${(v/1000).toFixed(1)}K`;
+            return `$${v.toFixed(0)}`;
+          };
+          const fmtFull = (v) => `$${v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+          // Prior-period value for %: totals - delta
+          const prior = (arTotals?.[key] || 0) - (d || 0);
+          const pct = (d != null && prior > 0) ? ((d / prior) * 100) : null;
+          const pctTxt = pct != null ? ` (${d>0?'+':''}${pct.toFixed(0)}%)` : '';
+          const deltaTxt = arDeltas
+            ? `${arrow}${fmtShort(Math.abs(d))}${pctTxt} 30d`
+            : '— no 30d yet';
+          const deltaTitle = arDeltas
+            ? `${d>0?'+':''}${fmtFull(d)} vs ${arDeltas.since}`
+            : '';
+          // 7-day delta on Total card only
+          let delta7Html = '';
+          if (key === 'total') {
+            if (arDelta7) {
+              const d7 = arDelta7.total;
+              const c7 = (d7 === 0) ? '#999' : (d7 > 0 ? '#c62828' : '#2e7d32');
+              const a7 = d7 > 0 ? '↑' : d7 < 0 ? '↓' : '';
+              delta7Html = `<div style="font-size:10px;color:${c7};margin-top:1px;" title="${d7>0?'+':''}${fmtFull(d7)} vs ${arDelta7.since}">${a7}${fmtShort(Math.abs(d7))} 7d</div>`;
+            } else {
+              delta7Html = `<div style="font-size:10px;color:#999;margin-top:1px;">— no 7d yet</div>`;
+            }
+          }
+          const hintHtml = hint ? `<div style="font-size:10px;color:#b71c1c;font-style:italic;margin-top:2px;">${hint}</div>` : '';
+          return `
+          <div style="text-align:center;padding:14px 8px;border-right:1px solid #e0e0e0;">
+            <div style="font-size:18px;font-weight:700;color:${color};">$${((arTotals||{})[key]||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+            <div style="font-size:11px;color:var(--text-light);margin-top:2px;">${label}</div>
+            <div style="font-size:10px;color:${deltaColor};margin-top:3px;" title="${deltaTitle}">${deltaTxt}</div>
+            ${delta7Html}
+            ${hintHtml}
+          </div>`;
+        }).join('')}
+      </div>
+      ${arCollection ? (() => {
+        const r = arCollection.ratio;
+        const pct = r != null ? (r * 100) : null;
+        const color = pct == null ? '#999' : (pct >= 100 ? '#2e7d32' : pct >= 80 ? '#ff9800' : '#c62828');
+        const bar = Math.max(0, Math.min(120, pct || 0));
+        return `
+        <div style="padding:12px 16px;border-bottom:1px solid #e0e0e0;background:#fafafa;">
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div>
+              <div style="font-size:11px;color:var(--text-light);">Collection Ratio (last 30d)</div>
+              <div style="font-size:18px;font-weight:700;color:${color};">${pct != null ? pct.toFixed(0) + '%' : '—'}</div>
+            </div>
+            <div style="flex:1;min-width:200px;">
+              <div style="height:8px;background:#e0e0e0;border-radius:4px;overflow:hidden;">
+                <div style="width:${bar}%;height:100%;background:${color};"></div>
               </div>
-            `;
+              <div style="font-size:11px;color:var(--text-light);margin-top:4px;">
+                Collected $${arCollection.collected.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+                of $${arCollection.billed.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} billed
+                · ${pct >= 100 ? 'keeping up' : pct >= 80 ? 'slightly behind' : 'falling behind'}
+              </div>
+            </div>
+            ${(arCollectionHistory && arCollectionHistory.length) ? (() => {
+              const hist = arCollectionHistory.slice(-6);
+              const maxBar = 32;
+              const ratios = hist.map(h => h.ratio == null ? 0 : h.ratio * 100);
+              return `
+              <div style="border-left:1px solid #e0e0e0;padding-left:16px;min-width:200px;">
+                <div style="font-size:11px;color:var(--text-light);margin-bottom:4px;">6-Month History</div>
+                <div style="display:flex;align-items:flex-end;gap:4px;height:${maxBar}px;">
+                  ${hist.map((h, i) => {
+                    const r = ratios[i];
+                    const c = r >= 100 ? '#2e7d32' : r >= 80 ? '#ff9800' : '#c62828';
+                    const h2 = Math.max(2, Math.min(maxBar, (r/120)*maxBar));
+                    const tip = `${h.date}: ${r.toFixed(0)}% (collected $${h.collected.toLocaleString('en-US',{maximumFractionDigits:0})} / billed $${h.billed.toLocaleString('en-US',{maximumFractionDigits:0})})`;
+                    return `<div class="ar-hist-bar" data-tip="${tip.replace(/"/g,'&quot;')}" style="width:14px;height:${h2}px;background:${c};border-radius:2px 2px 0 0;cursor:default;"></div>`;
+                  }).join('')}
+                </div>
+                <div style="font-size:10px;color:var(--text-light);margin-top:4px;">
+                  avg ${(ratios.reduce((a,b)=>a+b,0)/ratios.length).toFixed(0)}% ·
+                  best ${Math.max(...ratios).toFixed(0)}% ·
+                  worst ${Math.min(...ratios).toFixed(0)}%
+                </div>
+              </div>`;
+            })() : ''}
+          </div>
+        </div>` ;
+      })() : ''}
+      ${!arRows || arRows.length === 0 ? `<p style="padding:20px;color:var(--text-light);">No outstanding balances. All invoices paid!</p>` : (() => {
+        const arrow = (col) => arSortBy === col ? (arSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+        const th = (col, label, align) => `<th style="cursor:pointer;user-select:none;${align === 'right' ? 'text-align:right;' : ''}" onclick="setArSort('${col}')">${label}${arrow(col)}</th>`;
+        const sorted = [...(arRows || [])].sort((a, b) => {
+          let va = a[arSortBy], vb = b[arSortBy];
+          if (arSortBy === 'name' || arSortBy === 'city') {
+            va = (va || '').toLowerCase(); vb = (vb || '').toLowerCase();
+            return arSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+          }
+          if (arSortBy === 'oldest') {
+            va = va || ''; vb = vb || '';
+            return arSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+          }
+          va = va || 0; vb = vb || 0;
+          return arSortDir === 'asc' ? va - vb : vb - va;
+        });
+        return `
+      <div style="padding:10px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);">
+        <input id="ar-search" type="text" placeholder="Search customer or city…" autocomplete="off"
+          value="${esc(arSearchTerm || '')}"
+          oninput="filterArTable(this.value)"
+          style="flex:1;max-width:360px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;" />
+        <span id="ar-search-count" style="color:var(--text-light);font-size:12px;">${sorted.length} customers</span>
+      </div>
+      <table class="data-table" style="margin:0;">
+        <thead><tr>
+          ${th('name','Customer')}${th('city','City')}
+          ${th('current','Current','right')}
+          ${th('d30','31–60d','right')}
+          ${th('d60','61–90d','right')}
+          ${th('d90','90+d','right')}
+          ${th('total','Total Owed','right')}
+          ${th('oldest','Oldest Inv')}
+        </tr></thead>
+        <tbody id="ar-tbody">
+          ${sorted.map(r => {
+            const searchText = ((r.name || '') + ' ' + (r.city || '')).toLowerCase().replace(/"/g, '&quot;');
+            return `
+            <tr class="ar-row" data-search="${searchText}" style="cursor:pointer;" onclick="openCustomerDetail('${r.customerId || ''}')">
+              <td><strong>${esc(r.name)}</strong></td>
+              <td style="color:var(--text-light);font-size:12px;">${esc(r.city)}</td>
+              <td style="text-align:right;color:#4caf50;">$${r.current.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+              <td style="text-align:right;color:#ff9800;">$${r.d30.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+              <td style="text-align:right;color:#f44336;">$${r.d60.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+              <td style="text-align:right;color:#b71c1c;font-weight:${r.d90>0?'700':'400'};">$${r.d90.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+              <td style="text-align:right;font-weight:700;">$${r.total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+              <td style="font-size:12px;color:var(--text-light);">${r.oldest || '—'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+      })()}
+    </div>
+    ` : ''}
+
+    ${reportTab === 'city' ? `
+    <div class="card">
+      <div class="card-header"><h3>Revenue by City — ${reportDateFrom} to ${reportDateTo}</h3></div>
+      ${sortedCities.length === 0 ? '<p style="padding:20px;color:var(--text-light);">No invoice data.</p>' : `
+      <table class="data-table" style="margin:0;">
+        <thead><tr>
+          <th>City</th>
+          <th style="text-align:right;">Jobs</th>
+          <th style="text-align:right;">Gallons</th>
+          <th style="text-align:right;">Revenue</th>
+          <th style="min-width:140px;"></th>
+        </tr></thead>
+        <tbody>
+          ${sortedCities.map(([city, d]) => `
+            <tr>
+              <td><strong>${esc(city)}</strong></td>
+              <td style="text-align:right;">${d.jobs}</td>
+              <td style="text-align:right;">${d.gallons.toLocaleString()}</td>
+              <td style="text-align:right;font-weight:700;">$${d.revenue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+              <td><div style="height:8px;border-radius:4px;background:#e0e0e0;"><div style="height:100%;border-radius:4px;background:var(--primary);width:${(d.revenue/maxCityRev*100).toFixed(1)}%;"></div></div></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`}
+    </div>
+    ` : ''}
+
+    ${reportTab === 'statements' ? `
+    <div class="card" style="max-width:600px;">
+      <div class="card-header"><h3>Generate Customer Statement</h3></div>
+      <div style="padding:20px;">
+        <div class="form-group">
+          <label>Customer</label>
+          <select id="stmtCustomerId" style="width:100%;">
+            <option value="">-- Select Customer --</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>From Date</label>
+            <input type="date" id="stmtFrom" value="${reportDateFrom}">
+          </div>
+          <div class="form-group">
+            <label>To Date</label>
+            <input type="date" id="stmtTo" value="${reportDateTo}">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="btn btn-primary" onclick="generateStatement()">Generate PDF</button>
+          <button class="btn btn-secondary" onclick="generateStatement(true)">Generate &amp; Email</button>
+        </div>
+      </div>
+    </div>
+    ` : ''}
+
+    ${reportTab === 'pl' ? `
+    <div style="margin-bottom:20px;">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="importPlFile()">Import QB P&L Export</button>
+        <button class="btn btn-primary" onclick="importExpensePdfAi()">Import Expense PDF (AI)</button>
+        <button class="btn btn-primary" onclick="importExpensePdfAiBatch()" style="background:linear-gradient(135deg,#7c4dff,#448aff);">Batch Import PDFs (AI)</button>
+        <span style="color:#888;font-size:13px;">QB monthly export, single PDF, or batch-upload multiple quarter PDFs at once.</span>
+      </div>
+    </div>
+    <div id="plContent">
+      <div style="color:#888;text-align:center;padding:40px 0;">Loading P&L data…</div>
+    </div>
+    ` : ''}
+  `;
+
+  // Populate statements customer dropdown async
+  if (reportTab === 'statements') {
+    const { data: custs } = await window.api.getCustomers('');
+    const sel = document.getElementById('stmtCustomerId');
+    if (sel) {
+      (custs || []).forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name + (c.city ? ' — ' + c.city : '');
+        sel.appendChild(opt);
+      });
+    }
+  }
+
+  if (reportTab === 'pl') {
+    renderPlTab();
+  }
+
+  // Re-apply A/R search filter after re-render (e.g. after sort click)
+  if (reportTab === 'ar' && arSearchTerm) {
+    filterArTable(arSearchTerm);
+  }
+}
+
+async function importPlFile() {
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+  try {
+    const result = await window.api.importPlFile();
+    if (result && result.success) {
+      showToast(`Imported ${result.count} month(s) of P&L data.`, 'success');
+      renderPlTab();
+    } else {
+      showToast(result?.error || 'Import failed.', 'error');
+    }
+  } catch (e) {
+    showToast('Import error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Import QB P&L Export'; }
+  }
+}
+
+let plViewMode = 'quarter'; // 'year' | 'quarter' | 'month'
+let plCompareMode = 'prior'; // 'prior' | 'yoy' | 'none'
+
+function monthToQuarter(m) {
+  const [y, mm] = m.split('-');
+  const q = Math.ceil(parseInt(mm) / 3);
+  return `${y}-Q${q}`;
+}
+function quarterMonths(qKey) {
+  const [y, qStr] = qKey.split('-Q');
+  const q = parseInt(qStr);
+  const start = (q - 1) * 3 + 1;
+  return [start, start + 1, start + 2].map(m => `${y}-${String(m).padStart(2,'0')}`);
+}
+function priorQuarter(qKey) {
+  const [y, qStr] = qKey.split('-Q');
+  let q = parseInt(qStr) - 1, yr = parseInt(y);
+  if (q < 1) { q = 4; yr -= 1; }
+  return `${yr}-Q${q}`;
+}
+function yoyQuarter(qKey) {
+  const [y, qStr] = qKey.split('-Q');
+  return `${parseInt(y) - 1}-Q${qStr}`;
+}
+function priorMonth(mKey) {
+  const [y, m] = mKey.split('-');
+  let mm = parseInt(m) - 1, yr = parseInt(y);
+  if (mm < 1) { mm = 12; yr -= 1; }
+  return `${yr}-${String(mm).padStart(2,'0')}`;
+}
+function yoyMonth(mKey) {
+  const [y, m] = mKey.split('-');
+  return `${parseInt(y) - 1}-${m}`;
+}
+
+async function importExpensePdfAi() {
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning with Claude…'; }
+
+  // Progress overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.cssText = 'display:flex;z-index:9999;';
+  const stepOrder = ['picking','reading','read_done','calling','received','done'];
+  const stepLabels = {
+    picking: 'Choose PDF',
+    reading: 'Read PDF',
+    read_done: 'PDF loaded',
+    calling: 'Claude extracting',
+    received: 'Parsing response',
+    done: 'Complete'
+  };
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:520px;width:95%;">
+      <div class="modal-header"><h2>Importing Expense PDF</h2></div>
+      <div class="modal-body">
+        <div id="expImpMsg" style="font-size:13px;color:var(--text-muted);margin-bottom:14px;min-height:36px;">Starting…</div>
+        <div style="display:flex;flex-direction:column;gap:8px;" id="expImpSteps">
+          ${stepOrder.map(s => `
+            <div class="exp-imp-step" data-step="${s}" style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-muted);">
+              <div class="exp-imp-dot" style="width:14px;height:14px;border-radius:50%;border:2px solid var(--border);background:var(--surface-subtle);flex-shrink:0;"></div>
+              <span>${stepLabels[s]}</span>
+            </div>`).join('')}
+        </div>
+        <div style="margin-top:16px;height:4px;background:var(--surface-subtle);border-radius:2px;overflow:hidden;">
+          <div id="expImpBar" style="height:100%;width:0%;background:linear-gradient(90deg,#4caf50,#2196f3);transition:width 0.5s ease;border-radius:2px;"></div>
+        </div>
+        <div id="expImpTimer" style="margin-top:8px;font-size:11px;color:var(--text-muted);text-align:right;"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const msgEl = overlay.querySelector('#expImpMsg');
+  const barEl = overlay.querySelector('#expImpBar');
+  const timerEl = overlay.querySelector('#expImpTimer');
+  const tStart = Date.now();
+  const tick = setInterval(() => {
+    timerEl.textContent = `Elapsed: ${((Date.now() - tStart)/1000).toFixed(1)}s`;
+  }, 100);
+
+  function markStep(name, message) {
+    const idx = stepOrder.indexOf(name);
+    if (idx >= 0) {
+      overlay.querySelectorAll('.exp-imp-step').forEach((el, i) => {
+        const dot = el.querySelector('.exp-imp-dot');
+        if (i < idx) {
+          dot.style.background = '#4caf50';
+          dot.style.borderColor = '#4caf50';
+          dot.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" style="display:block;margin:auto;margin-top:-1px;"><path fill="white" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+          el.style.color = 'var(--text)';
+        } else if (i === idx) {
+          dot.style.background = '#2196f3';
+          dot.style.borderColor = '#2196f3';
+          dot.style.animation = 'pulse 1.2s ease-in-out infinite';
+          dot.innerHTML = '';
+          el.style.color = 'var(--text)';
+          el.style.fontWeight = '600';
+        } else {
+          dot.style.background = 'var(--surface-subtle)';
+          dot.style.borderColor = 'var(--border)';
+          dot.style.animation = '';
+          dot.innerHTML = '';
+          el.style.color = 'var(--text-muted)';
+          el.style.fontWeight = '400';
+        }
+      });
+      barEl.style.width = `${((idx + 1) / stepOrder.length * 100).toFixed(0)}%`;
+    }
+    if (message) msgEl.textContent = message;
+  }
+
+  const unsubscribe = window.api.onExpenseImportProgress(({ step, message }) => {
+    if (step === 'error') {
+      msgEl.style.color = '#e74c3c';
+      msgEl.textContent = message;
+      return;
+    }
+    if (step === 'cancelled') return;
+    markStep(step, message);
+  });
+
+  try {
+    const result = await window.api.importExpensePdfAi();
+    clearInterval(tick);
+    unsubscribe && unsubscribe();
+    setTimeout(() => overlay.remove(), result?.success ? 400 : 2000);
+    if (result && result.success) {
+      showExpenseReviewModal(result.extracted, result.source_file);
+    } else if (result && result.canceled) {
+      overlay.remove();
+    } else {
+      showToast(result?.error || 'AI import failed.', 'error');
+    }
+  } catch (e) {
+    clearInterval(tick);
+    unsubscribe && unsubscribe();
+    overlay.remove();
+    showToast('Import error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Import Expense PDF (AI)'; }
+  }
+}
+
+async function importExpensePdfAiBatch() {
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning with Claude…'; }
+
+  // Progress overlay — simpler for batch (shows X of N + live message)
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.cssText = 'display:flex;z-index:9999;';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:560px;width:95%;">
+      <div class="modal-header"><h2>Batch Importing Expense PDFs</h2></div>
+      <div class="modal-body">
+        <div id="batchImpFile" style="font-size:14px;font-weight:600;margin-bottom:6px;">Starting…</div>
+        <div id="batchImpMsg" style="font-size:13px;color:var(--text-muted);margin-bottom:14px;min-height:20px;"></div>
+        <div style="height:6px;background:var(--surface-subtle);border-radius:3px;overflow:hidden;">
+          <div id="batchImpBar" style="height:100%;width:0%;background:linear-gradient(90deg,#4caf50,#2196f3);transition:width 0.4s ease;border-radius:3px;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:var(--text-muted);">
+          <span id="batchImpCount">0 / 0</span>
+          <span id="batchImpTimer">Elapsed: 0.0s</span>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const fileEl = overlay.querySelector('#batchImpFile');
+  const msgEl = overlay.querySelector('#batchImpMsg');
+  const barEl = overlay.querySelector('#batchImpBar');
+  const countEl = overlay.querySelector('#batchImpCount');
+  const timerEl = overlay.querySelector('#batchImpTimer');
+
+  const tStart = Date.now();
+  const tick = setInterval(() => {
+    timerEl.textContent = `Elapsed: ${((Date.now() - tStart)/1000).toFixed(1)}s`;
+  }, 100);
+
+  const unsubscribe = window.api.onExpenseImportProgress(({ step, message, index, total, file }) => {
+    if (step === 'error') { msgEl.style.color = '#e74c3c'; msgEl.textContent = message; return; }
+    if (step === 'cancelled') return;
+    if (file) fileEl.textContent = file;
+    if (message) msgEl.textContent = message;
+    if (index && total) {
+      countEl.textContent = `${index} / ${total}`;
+      barEl.style.width = `${Math.round((index - 1) / total * 100)}%`;
+    }
+    if (step === 'done') {
+      barEl.style.width = '100%';
+      countEl.textContent = `${total} / ${total}`;
+      fileEl.textContent = 'All files processed';
+    }
+  });
+
+  try {
+    const res = await window.api.importExpensePdfAiBatch();
+    clearInterval(tick);
+    unsubscribe && unsubscribe();
+    if (res && res.canceled) { overlay.remove(); return; }
+    if (res && res.error) { showToast(res.error, 'error'); overlay.remove(); return; }
+    setTimeout(() => overlay.remove(), 500);
+    showBatchReviewModal(res.results || []);
+  } catch (e) {
+    clearInterval(tick);
+    unsubscribe && unsubscribe();
+    overlay.remove();
+    showToast('Batch import error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Batch Import PDFs (AI)'; }
+  }
+}
+
+function showBatchReviewModal(results) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const money = v => '$' + (parseFloat(v)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const successes = results.filter(r => r.extracted);
+  const failures = results.filter(r => r.error);
+
+  // Flatten every period across every file into a single list of rows
+  const rows = [];
+  successes.forEach(r => {
+    const d = r.extracted;
+    const periods = Array.isArray(d.periods) ? d.periods : [{ label: '(unknown)', period_type: 'custom' }];
+    const totals = Array.isArray(d.totals_by_period) ? d.totals_by_period : [];
+    const incomes = Array.isArray(d.income_by_period) ? d.income_by_period : [];
+    const nets = Array.isArray(d.net_by_period) ? d.net_by_period : [];
+    periods.forEach((p, i) => {
+      rows.push({
+        file: r.file,
+        label: p.label || `Period ${i+1}`,
+        period_type: p.period_type || 'custom',
+        start: p.start || '',
+        end: p.end || '',
+        income: parseFloat(incomes[i]) || 0,
+        expense: parseFloat(totals[i]) || 0,
+        net: parseFloat(nets[i]) || 0,
+        line_items: Array.isArray(d.line_items) ? d.line_items.map(li => ({
+          code: li.code || '',
+          name: li.name || '',
+          parent_category: li.parent_category || 'OTHER',
+          amount: parseFloat((li.amounts || [])[i]) || 0,
+        })).filter(li => li.amount !== 0) : [],
+        use_income: false, // default off — only enable for pre-TankTrack years
+        _pick: true,
+      });
+    });
+  });
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.cssText = 'display:flex;z-index:9999;';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:1000px;width:95%;max-height:90vh;display:flex;flex-direction:column;">
+      <div class="modal-header">
+        <h2>Batch Import Review — ${rows.length} period${rows.length!==1?'s':''} extracted</h2>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1;">
+        ${failures.length > 0 ? `
+          <div style="background:rgba(229,57,53,0.1);border:1px solid rgba(229,57,53,0.3);border-radius:6px;padding:10px;margin-bottom:14px;">
+            <div style="font-weight:600;color:#e74c3c;margin-bottom:4px;">${failures.length} file${failures.length!==1?'s':''} failed</div>
+            ${failures.map(f => `<div style="font-size:12px;color:var(--text-muted);">${esc(f.file)}: ${esc(f.error)}</div>`).join('')}
+          </div>
+        ` : ''}
+        <div style="margin-bottom:10px;font-size:13px;color:var(--text-muted);">
+          Uncheck any period you don't want to save. Use-income checkboxes are off by default — turn them on only for pre-TankTrack years where you want the PDF income to seed Revenue.
+        </div>
+        <table class="data-table" style="font-size:13px;">
+          <thead><tr>
+            <th style="width:32px;">Save</th>
+            <th>Source</th>
+            <th>Label</th>
+            <th>Type</th>
+            <th style="text-align:right;">Income</th>
+            <th style="text-align:right;">Expense</th>
+            <th style="text-align:right;">Net</th>
+            <th style="text-align:center;">Use income as revenue</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map((r, i) => `
+              <tr>
+                <td><input type="checkbox" data-r-field="pick" data-r-i="${i}" ${r._pick?'checked':''}></td>
+                <td style="font-size:11px;color:var(--text-muted);">${esc(r.file)}</td>
+                <td><input type="text" data-r-field="label" data-r-i="${i}" value="${esc(r.label)}" style="width:140px;"></td>
+                <td>
+                  <select data-r-field="period_type" data-r-i="${i}">
+                    <option value="year" ${r.period_type==='year'?'selected':''}>Year</option>
+                    <option value="quarter" ${r.period_type==='quarter'?'selected':''}>Quarter</option>
+                    <option value="month" ${r.period_type==='month'?'selected':''}>Month</option>
+                    <option value="custom" ${r.period_type==='custom'?'selected':''}>Custom</option>
+                  </select>
+                </td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${money(r.income)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${money(r.expense)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;color:${r.net>=0?'#4caf50':'#e74c3c'};">${money(r.net)}</td>
+                <td style="text-align:center;"><input type="checkbox" data-r-field="use_income" data-r-i="${i}"></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="modal-footer" style="padding:14px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove();">Cancel</button>
+        <button class="btn btn-primary" id="batchSaveAllBtn">Save All Checked</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  // Wire inputs
+  overlay.querySelectorAll('[data-r-field]').forEach(el => {
+    el.addEventListener('change', () => {
+      const i = parseInt(el.dataset.rI, 10);
+      const field = el.dataset.rField;
+      const row = rows[i];
+      if (field === 'pick') row._pick = el.checked;
+      else if (field === 'use_income') row.use_income = el.checked;
+      else row[field] = el.value;
+    });
+  });
+
+  overlay.querySelector('#batchSaveAllBtn').addEventListener('click', async () => {
+    const picked = rows.filter(r => r._pick);
+    if (picked.length === 0) { showToast('Nothing to save.', 'error'); return; }
+    const saveBtn = overlay.querySelector('#batchSaveAllBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = `Saving 0 / ${picked.length}…`;
+    let ok = 0, fail = 0;
+    for (let i = 0; i < picked.length; i++) {
+      const r = picked[i];
+      saveBtn.textContent = `Saving ${i+1} / ${picked.length}…`;
+      try {
+        await window.api.saveExpenseSnapshot({
+          period_label: r.label,
+          period_type: r.period_type,
+          period_start: r.start || null,
+          period_end: r.end || null,
+          total_expenses: r.expense,
+          total_income: r.income,
+          net_income: r.net,
+          use_income_as_revenue: !!r.use_income,
+          line_items: r.line_items,
+          source_file: r.file,
+        });
+        ok++;
+      } catch (e) {
+        fail++;
+      }
+    }
+    overlay.remove();
+    showToast(`Saved ${ok} snapshot${ok!==1?'s':''}${fail>0?`, ${fail} failed`:''}.`, fail > 0 ? 'error' : 'success');
+    renderPlTab();
+  });
+}
+
+function showExpenseReviewModal(data, sourceFile) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const money = v => '$' + (parseFloat(v)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  // Normalize: accept new multi-period schema OR legacy single-period
+  let periods = Array.isArray(data.periods) ? data.periods : null;
+  let lineItems = Array.isArray(data.line_items) ? data.line_items : null;
+  let totals = Array.isArray(data.totals_by_period) ? data.totals_by_period : null;
+  let incomes = Array.isArray(data.income_by_period) ? data.income_by_period : (periods ? new Array(periods.length).fill(0) : [0]);
+  let nets = Array.isArray(data.net_by_period) ? data.net_by_period : (periods ? new Array(periods.length).fill(0) : [0]);
+  if (!periods) {
+    periods = [{
+      label: data.period_label || 'Imported',
+      period_type: data.period_type || 'custom',
+      start: data.period_start || '',
+      end: data.period_end || ''
+    }];
+    lineItems = (data.categories || []).map(c => ({
+      code: '', name: c.name, parent_category: (c.group || 'OTHER').toUpperCase(),
+      amounts: [parseFloat(c.amount) || 0]
+    }));
+    totals = [parseFloat(data.total_expenses) || 0];
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.display = 'flex';
+  const nP = periods.length;
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:960px;width:95%;max-height:90vh;display:flex;flex-direction:column;">
+      <div class="modal-header">
+        <h2>Review Extracted Expenses</h2>
+        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;">
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 14px;">Claude extracted <strong>${lineItems.length}</strong> expense lines across <strong>${nP}</strong> period${nP>1?'s':''} from <strong>${esc(sourceFile || 'PDF')}</strong>.</p>
+
+        <div style="display:grid;grid-template-columns:repeat(${nP},1fr);gap:10px;margin-bottom:16px;">
+          ${periods.map((p, i) => `
+            <div class="card" style="padding:12px;">
+              <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Period ${i+1}</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                <div class="form-group" style="margin:0;"><label style="font-size:11px;">Label</label><input type="text" data-p-field="label" data-p-i="${i}" value="${esc(p.label||'')}" style="font-size:13px;"></div>
+                <div class="form-group" style="margin:0;"><label style="font-size:11px;">Type</label><select data-p-field="period_type" data-p-i="${i}" style="font-size:13px;">
+                  <option value="year" ${p.period_type==='year'?'selected':''}>Year</option>
+                  <option value="quarter" ${p.period_type==='quarter'?'selected':''}>Quarter</option>
+                  <option value="month" ${p.period_type==='month'?'selected':''}>Month</option>
+                  <option value="custom" ${p.period_type==='custom'?'selected':''}>Custom</option>
+                </select></div>
+                <div class="form-group" style="margin:0;"><label style="font-size:11px;">Start</label><input type="date" data-p-field="start" data-p-i="${i}" value="${esc(p.start||'')}" style="font-size:13px;"></div>
+                <div class="form-group" style="margin:0;"><label style="font-size:11px;">End</label><input type="date" data-p-field="end" data-p-i="${i}" value="${esc(p.end||'')}" style="font-size:13px;"></div>
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:8px;display:flex;flex-direction:column;gap:2px;">
+                <div>Income: <strong style="color:var(--success-text, #4caf50);">${money(incomes[i])}</strong></div>
+                <div>Expense: <strong style="color:var(--warning-text, #e67e22);">${money(totals[i])}</strong></div>
+                <div>Net: <strong style="color:${(nets[i]||0)>=0?'var(--success-text, #4caf50)':'var(--danger-text, #e74c3c)'};">${money(nets[i])}</strong></div>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:4px;font-weight:500;">
+                  <input type="checkbox" data-p-use-income="${i}" ${incomes[i]>0?'checked':''}>
+                  <span>Use income as revenue for this period (for pre-TankTrack years)</span>
+                </label>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <strong>Line Items (${lineItems.length})</strong>
+          <button class="btn btn-secondary btn-sm" id="expAddRow">+ Add Row</button>
+        </div>
+        <div style="max-height:380px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;">
+          <table class="data-table" style="font-size:12px;margin:0;">
+            <thead style="position:sticky;top:0;background:var(--table-head-bg);z-index:1;">
+              <tr>
+                <th style="width:70px;">Code</th>
+                <th>Line Item</th>
+                <th>Parent Category</th>
+                ${periods.map(p => `<th style="text-align:right;">${esc(p.label||'')}</th>`).join('')}
+                <th style="width:30px;"></th>
+              </tr>
+            </thead>
+            <tbody id="expRowsBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-primary" id="expSaveBtn">Save ${nP} Snapshot${nP>1?'s':''}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const body = overlay.querySelector('#expRowsBody');
+  function rowHtml(li) {
+    return `<tr>
+      <td><input type="text" value="${esc(li.code||'')}" class="li-code" style="width:60px;font-size:12px;"></td>
+      <td><input type="text" value="${esc(li.name||'')}" class="li-name" style="width:100%;font-size:12px;"></td>
+      <td><input type="text" value="${esc(li.parent_category||'OTHER')}" class="li-parent" list="expParentList" style="width:100%;font-size:12px;"></td>
+      ${periods.map((_, i) => `<td style="text-align:right;"><input type="number" step="0.01" value="${li.amounts?.[i]||0}" class="li-amt" data-pi="${i}" style="width:100px;text-align:right;font-size:12px;"></td>`).join('')}
+      <td><button class="btn-icon li-del" title="Remove">×</button></td>
+    </tr>`;
+  }
+  // Datalist for parent category autocomplete
+  const parents = [...new Set(lineItems.map(l => l.parent_category).filter(Boolean))];
+  const dl = document.createElement('datalist');
+  dl.id = 'expParentList';
+  dl.innerHTML = parents.map(p => `<option value="${esc(p)}">`).join('');
+  overlay.appendChild(dl);
+
+  body.innerHTML = lineItems.map(rowHtml).join('') || rowHtml({amounts: periods.map(()=>0)});
+  body.addEventListener('click', e => {
+    if (e.target.classList.contains('li-del')) e.target.closest('tr').remove();
+  });
+  overlay.querySelector('#expAddRow').onclick = () => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = rowHtml({amounts: periods.map(()=>0), parent_category:'OTHER'}).replace(/^<tr>|<\/tr>$/g,'');
+    body.appendChild(tr);
+  };
+
+  overlay.querySelector('#expSaveBtn').onclick = async () => {
+    // Read periods back from modal inputs
+    const editedPeriods = periods.map((p, i) => {
+      const get = f => overlay.querySelector(`[data-p-field="${f}"][data-p-i="${i}"]`).value;
+      return { label: get('label').trim(), period_type: get('period_type'), start: get('start'), end: get('end') };
+    });
+    const rows = [...body.querySelectorAll('tr')];
+    const items = rows.map(r => ({
+      code: r.querySelector('.li-code').value.trim(),
+      name: r.querySelector('.li-name').value.trim(),
+      parent_category: (r.querySelector('.li-parent').value.trim() || 'OTHER').toUpperCase(),
+      amounts: [...r.querySelectorAll('.li-amt')].map(inp => parseFloat(inp.value) || 0)
+    })).filter(li => li.name);
+
+    // Save one snapshot per period
+    let saved = 0;
+    for (let i = 0; i < editedPeriods.length; i++) {
+      const p = editedPeriods[i];
+      const lineItemsForPeriod = items.map(li => ({
+        code: li.code, name: li.name, parent_category: li.parent_category, amount: li.amounts[i] || 0
+      })).filter(li => li.amount > 0);
+      const totalExp = lineItemsForPeriod.reduce((s, li) => s + li.amount, 0);
+      const useIncome = overlay.querySelector(`[data-p-use-income="${i}"]`)?.checked || false;
+      const snap = {
+        period_label: p.label,
+        period_type: p.period_type,
+        period_start: p.start,
+        period_end: p.end,
+        line_items: lineItemsForPeriod,
+        total_expenses: totalExp,
+        total_income: parseFloat(incomes[i]) || 0,
+        net_income: parseFloat(nets[i]) || 0,
+        use_income_as_revenue: useIncome,
+        source_file: sourceFile,
+        created_at: new Date().toISOString()
+      };
+      const res = await window.api.saveExpenseSnapshot(snap);
+      if (res?.success) saved++;
+    }
+    showToast(`Saved ${saved} expense snapshot${saved!==1?'s':''}.`, 'success');
+    overlay.remove();
+    renderPlTab();
+  };
+}
+
+// Color palette for parent categories (stable hash -> hue)
+function categoryHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
+}
+function categoryColor(name, alpha = 1) {
+  const hue = categoryHue(name);
+  return alpha >= 1 ? `hsl(${hue}, 60%, 55%)` : `hsla(${hue}, 60%, 55%, ${alpha})`;
+}
+
+// Strip leading QuickBooks account-code prefixes so the same line item coming
+// from different PDFs (with or without the code glued onto the name) merges.
+// Handles:
+//   "823 · Licenses and Permits"      → "Licenses and Permits"
+//   "A · Trucking Compost to JR..."   → "Trucking Compost to JR..."
+//   "823 - Licenses"                   → "Licenses"
+//   "A1: Foo"  / "B-12. Bar"          → "Foo" / "Bar"
+// Only strips UPPERCASE-or-digit prefixes of 1–6 chars (QB convention) so a
+// legitimate name like "Oz - Something" isn't accidentally mangled.
+// Accepts many Unicode mid-dot / bullet variants as the separator.
+const CODE_PREFIX_RE = /^\s*[A-Z0-9][A-Z0-9]{0,5}\s*[\u00B7\u2022\u2027\u22C5\u2219\u30FB\uFF65\u2043\-\u2012\u2013\u2014\u2015:\.\/|~]\s*/;
+function cleanLineItemName(name) {
+  if (!name) return '';
+  const stripped = String(name)
+    .replace(CODE_PREFIX_RE, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return stripped || String(name).trim();
+}
+function lineItemKey(name) {
+  return cleanLineItemName(name).toLowerCase();
+}
+
+// Safety net: catch duplicates the prefix-stripper missed (e.g. weird unicode
+// variants). Given two keys in the same parent, if the longer one ends with
+// the shorter one and the leading chunk looks like "short prefix + separator",
+// merge them.
+function suffixMergePass(parentMap) {
+  Object.keys(parentMap).forEach(parent => {
+    const items = parentMap[parent];
+    // sort by length ascending so short keys are considered first as merge targets
+    const keys = Object.keys(items).sort((a, b) => a.length - b.length);
+    const gone = new Set();
+    for (let i = 0; i < keys.length; i++) {
+      if (gone.has(keys[i])) continue;
+      const shortK = keys[i];
+      if (shortK.length < 4) continue; // avoid merging tiny keys like "a" — unreliable
+      for (let j = i + 1; j < keys.length; j++) {
+        if (gone.has(keys[j])) continue;
+        const longK = keys[j];
+        if (longK === shortK) continue;
+        if (!longK.endsWith(shortK)) continue;
+        const prefix = longK.slice(0, longK.length - shortK.length);
+        // Must be non-empty and short (≤10 chars) and end with a separator-ish char
+        if (!prefix || prefix.length > 10) continue;
+        if (!/[\s\u00B7\u2022\u2027\u22C5\u2219\u30FB\uFF65\u2043\-\u2012-\u2015:\.\/|~]$/.test(prefix)) continue;
+        // Merge longK into shortK
+        items[longK].amounts.forEach((v, k) => items[shortK].amounts[k] += v);
+        delete items[longK];
+        gone.add(longK);
+      }
+    }
+  });
+}
+
+// ===== Expense breakdown filter state (persisted to localStorage) =====
+// type:  'all' | 'year' | 'quarter' | 'month'
+// limit: 0 = show all | N = show N most recent
+// excluded: Set of snapshot ids the user has manually hidden
+function getExpenseFilterState() {
+  try {
+    const raw = localStorage.getItem('ism-expense-filter-v1');
+    if (raw) {
+      const s = JSON.parse(raw);
+      return {
+        type: s.type || 'all',
+        limit: Number(s.limit) || 0,
+        excluded: new Set(Array.isArray(s.excluded) ? s.excluded : []),
+      };
+    }
+  } catch {}
+  return { type: 'all', limit: 0, excluded: new Set() };
+}
+function setExpenseFilterState(s) {
+  try {
+    localStorage.setItem('ism-expense-filter-v1', JSON.stringify({
+      type: s.type || 'all',
+      limit: Number(s.limit) || 0,
+      excluded: Array.from(s.excluded || []),
+    }));
+  } catch {}
+}
+function setExpenseFilterType(t) {
+  const s = getExpenseFilterState(); s.type = t; setExpenseFilterState(s); renderPlTab();
+}
+function setExpenseFilterLimit(n) {
+  const s = getExpenseFilterState(); s.limit = Number(n) || 0; setExpenseFilterState(s); renderPlTab();
+}
+function toggleExpensePeriod(id) {
+  const s = getExpenseFilterState();
+  if (s.excluded.has(id)) s.excluded.delete(id); else s.excluded.add(id);
+  setExpenseFilterState(s); renderPlTab();
+}
+function resetExpenseFilterExclusions() {
+  const s = getExpenseFilterState(); s.excluded = new Set(); setExpenseFilterState(s); renderPlTab();
+}
+function resetExpenseFilter() {
+  setExpenseFilterState({ type: 'all', limit: 0, excluded: new Set() }); renderPlTab();
+}
+
+// Derive the 4-digit year for a snapshot. Prefers period_start (ISO date), falls
+// back to scanning the label for "2025" or "25".
+function snapshotYear(s) {
+  if (s.period_start && /^\d{4}/.test(s.period_start)) return s.period_start.slice(0, 4);
+  const lbl = String(s.period_label || '');
+  const m4 = lbl.match(/\b(19\d{2}|20\d{2})\b/);
+  if (m4) return m4[1];
+  const m2 = lbl.match(/\b(\d{2})\b(?!\d)\s*$/);
+  if (m2) {
+    const yy = parseInt(m2[1], 10);
+    return (yy >= 50 ? '19' : '20') + m2[1];
+  }
+  return null;
+}
+
+// Aggregate all snapshots into synthetic yearly snapshots. If a native
+// year-type snapshot exists for a given year, that's used directly; otherwise
+// quarter/month/custom snapshots belonging to that year are summed and their
+// line items merged (using the same name-normalization as renderExpenseBreakdown).
+function buildYearlyRollup(allSnaps) {
+  const native = {};
+  allSnaps.forEach(s => {
+    const t = (s.period_type || '').toLowerCase();
+    if (t === 'year' || t === 'yearly' || t === 'annual') {
+      const y = snapshotYear(s);
+      if (y && !native[y]) native[y] = s;
+    }
+  });
+  // Group sub-year snapshots
+  const subs = {};
+  allSnaps.forEach(s => {
+    const t = (s.period_type || '').toLowerCase();
+    if (t === 'year' || t === 'yearly' || t === 'annual') return;
+    const y = snapshotYear(s);
+    if (!y) return;
+    if (native[y]) return; // already have a native year snapshot — don't double-count
+    (subs[y] = subs[y] || []).push(s);
+  });
+
+  const out = {};
+  Object.keys(native).forEach(y => {
+    const s = native[y];
+    out[y] = { ...s, id: s.id || ('year-' + y), period_label: y, period_type: 'year' };
+  });
+  Object.keys(subs).forEach(y => {
+    const entries = subs[y];
+    let totalExp = 0, totalInc = 0;
+    const lineMap = {};
+    let useIncome = false;
+    const sources = [];
+    entries.forEach(s => {
+      totalExp += parseFloat(s.total_expenses) || 0;
+      totalInc += parseFloat(s.total_income) || 0;
+      if (s.use_income_as_revenue) useIncome = true;
+      if (s.source_file) sources.push(s.source_file);
+      const lines = Array.isArray(s.line_items)
+        ? s.line_items
+        : (Array.isArray(s.categories)
+            ? s.categories.map(c => ({ name: c.name, parent_category: (c.group || 'OTHER').toUpperCase(), amount: c.amount }))
+            : []);
+      lines.forEach(li => {
+        const parent = (li.parent_category || 'OTHER').toUpperCase();
+        const rawName = li.name || '(unnamed)';
+        const key = parent + '|' + (lineItemKey(rawName) || rawName.toLowerCase());
+        const cleaned = cleanLineItemName(rawName) || rawName;
+        if (!lineMap[key]) {
+          lineMap[key] = { name: cleaned, parent_category: parent, amount: 0 };
+        } else if (cleaned.length > lineMap[key].name.length ||
+                   (cleaned !== cleaned.toUpperCase() && lineMap[key].name === lineMap[key].name.toUpperCase())) {
+          lineMap[key].name = cleaned;
+        }
+        lineMap[key].amount += parseFloat(li.amount) || 0;
+      });
+    });
+    // Run the same suffix-merge safety net over the per-parent groups of this
+    // year's line items so duplicates collapse in the yearly rollup too.
+    const byParent = {};
+    Object.values(lineMap).forEach(li => {
+      const p = (li.parent_category || 'OTHER').toUpperCase();
+      const k = lineItemKey(li.name) || String(li.name).toLowerCase();
+      (byParent[p] = byParent[p] || {})[k] = {
+        display: li.name,
+        amounts: [li.amount], // 1-element for this helper to work
+        _origLi: li,
+      };
+    });
+    suffixMergePass(byParent);
+    const mergedLines = [];
+    Object.keys(byParent).forEach(p => {
+      Object.values(byParent[p]).forEach(entry => {
+        mergedLines.push({
+          name: entry.display,
+          parent_category: p,
+          amount: entry.amounts[0],
+        });
+      });
+    });
+
+    out[y] = {
+      id: 'year-' + y,
+      period_label: y,
+      period_type: 'year',
+      period_start: y + '-01-01',
+      period_end: y + '-12-31',
+      total_expenses: totalExp,
+      total_income: totalInc,
+      net_income: totalInc - totalExp,
+      use_income_as_revenue: useIncome,
+      line_items: mergedLines,
+      source_file: `rolled up from ${entries.length} ${entries.length === 1 ? 'snapshot' : 'snapshots'}`,
+      _syntheticYear: true,
+      _sourceCount: entries.length,
+    };
+  });
+  return Object.keys(out).sort().map(y => out[y]);
+}
+
+function renderExpenseBreakdown(expSnaps) {
+  if (!expSnaps || expSnaps.length === 0) {
+    return `<div class="card" style="margin-top:20px;padding:24px;text-align:center;color:var(--text-muted);">
+      <div style="font-size:14px;margin-bottom:6px;">No AI-imported expense data yet.</div>
+      <div style="font-size:12px;">Click "Import Expense PDF (AI)" above to upload a QB P&L PDF and have Claude extract expense line items automatically.</div>
+    </div>`;
+  }
+
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const money = v => '$' + (parseFloat(v)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  // ------------------------------------------------------------------
+  // FILTER: type (all/year/quarter/month) + limit (N most recent) + per-period toggle
+  // ------------------------------------------------------------------
+  const filter = getExpenseFilterState();
+  const allPeriodsSorted = [...expSnaps].sort((a, b) => (a.period_start || '').localeCompare(b.period_start || ''));
+  const uniqueTypes = new Set(allPeriodsSorted.map(p => p.period_type || 'custom'));
+
+  // When the user picks "Years", roll up any sub-year data into synthetic
+  // annual snapshots so you can view yearly totals even if you only imported
+  // quarterly PDFs. "Quarters"/"Months" still filter by native period_type.
+  let typeFiltered;
+  if (filter.type === 'all') {
+    typeFiltered = allPeriodsSorted;
+  } else if (filter.type === 'year') {
+    typeFiltered = buildYearlyRollup(allPeriodsSorted);
+  } else {
+    typeFiltered = allPeriodsSorted.filter(p => (p.period_type || 'custom') === filter.type);
+  }
+  const candidates = filter.limit > 0 ? typeFiltered.slice(-filter.limit) : typeFiltered;
+  const excluded = filter.excluded instanceof Set ? filter.excluded : new Set(filter.excluded || []);
+  const periods = candidates.filter(p => !excluded.has(p.id));
+
+  // Toolbar (always rendered so user can always change filters). The "Years"
+  // button is always enabled as long as there's any data — rollup handles it.
+  const canRollupYears = allPeriodsSorted.length > 0;
+  const typeBtn = (val, label, force=false) => (force || uniqueTypes.has(val))
+    ? `<button class="btn btn-sm ${filter.type===val?'btn-primary':'btn-secondary'}" onclick="setExpenseFilterType('${val}')" style="padding:4px 12px;font-size:12px;">${label}</button>`
+    : '';
+  const limitBtn = (n, label) => `<button class="btn btn-sm ${filter.limit===n?'btn-primary':'btn-secondary'}" onclick="setExpenseFilterLimit(${n})" style="padding:4px 12px;font-size:12px;">${label}</button>`;
+
+  const toolbarHtml = `
+    <div class="card" style="margin-top:20px;padding:14px 18px;">
+      <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;">
+        <div style="display:flex;gap:10px;align-items:center;">
+          <span style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;">Type</span>
+          <div style="display:flex;gap:4px;">
+            ${typeBtn('all','All',true)}
+            ${typeBtn('year','Years', canRollupYears)}
+            ${typeBtn('quarter','Quarters')}
+            ${typeBtn('month','Months')}
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <span style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;">Show</span>
+          <div style="display:flex;gap:4px;">
+            ${limitBtn(0,'All')}
+            ${limitBtn(4,'Last 4')}
+            ${limitBtn(8,'Last 8')}
+            ${limitBtn(12,'Last 12')}
+            ${limitBtn(16,'Last 16')}
+          </div>
+        </div>
+        <div style="margin-left:auto;font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums;">
+          <strong style="color:var(--text);">${periods.length}</strong> of ${allPeriodsSorted.length} period${allPeriodsSorted.length!==1?'s':''} shown
+        </div>
+      </div>
+      ${candidates.length > 0 ? `
+        <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+          ${candidates.map(p => {
+            const isOn = !excluded.has(p.id);
+            return `<button onclick="toggleExpensePeriod('${esc(p.id)}')" style="border:1px solid ${isOn?'var(--primary, #1565c0)':'var(--border)'};padding:3px 11px;border-radius:12px;background:${isOn?'var(--primary, #1565c0)':'transparent'};color:${isOn?'#fff':'var(--text-muted)'};font-size:11px;cursor:pointer;opacity:${isOn?1:0.6};transition:all 0.15s;white-space:nowrap;">${isOn?'✓':'○'} ${esc(p.period_label||'?')}</button>`;
+          }).join('')}
+          ${excluded.size > 0 ? `<button onclick="resetExpenseFilterExclusions()" style="border:none;background:transparent;color:var(--primary, #1565c0);font-size:11px;cursor:pointer;text-decoration:underline;margin-left:6px;">Include all</button>` : ''}
+        </div>
+      ` : ''}
+    </div>`;
+
+  if (periods.length === 0) {
+    return toolbarHtml + `<div class="card" style="margin-top:12px;padding:30px;text-align:center;color:var(--text-muted);">No periods match your filter. Adjust the buttons above, or click "Include all" to reset.</div>`;
+  }
+
+  // ------------------------------------------------------------------
+  // DATA: group into parentMap[parent][key] = { display, amounts[] }
+  // Strips QB account-code prefixes so "823 · Licenses and Permits" merges
+  // with bare "Licenses and Permits".
+  // ------------------------------------------------------------------
+  function getLines(snap) {
+    if (Array.isArray(snap.line_items)) return snap.line_items;
+    if (Array.isArray(snap.categories)) {
+      return snap.categories.map(c => ({
+        name: c.name, parent_category: (c.group || 'OTHER').toUpperCase(), amount: c.amount
+      }));
+    }
+    return [];
+  }
+
+  const parentMap = {};
+  periods.forEach((snap, pi) => {
+    getLines(snap).forEach(li => {
+      const parent = (li.parent_category || 'OTHER').toUpperCase();
+      const rawName = li.name || '(unnamed)';
+      const key = lineItemKey(rawName) || rawName.toLowerCase();
+      const cleaned = cleanLineItemName(rawName) || rawName;
+      if (!parentMap[parent]) parentMap[parent] = {};
+      if (!parentMap[parent][key]) {
+        parentMap[parent][key] = { display: cleaned, amounts: new Array(periods.length).fill(0) };
+      } else {
+        const prev = parentMap[parent][key].display;
+        if (cleaned.length > prev.length || (cleaned !== cleaned.toUpperCase() && prev === prev.toUpperCase())) {
+          parentMap[parent][key].display = cleaned;
+        }
+      }
+      parentMap[parent][key].amounts[pi] += parseFloat(li.amount) || 0;
+    });
+  });
+
+  // Safety net: merge any remaining duplicates where one key is a "prefix +
+  // separator + other key" variant that the regex didn't catch.
+  suffixMergePass(parentMap);
+
+  const parentTotals = {};
+  Object.keys(parentMap).forEach(p => {
+    parentTotals[p] = new Array(periods.length).fill(0);
+    Object.values(parentMap[p]).forEach(entry => entry.amounts.forEach((v, i) => parentTotals[p][i] += v));
+  });
+
+  // Sort parents by grand total (not just latest period) so the big ones always
+  // float to the top regardless of which periods are selected.
+  const parents = Object.keys(parentMap).sort((a, b) => {
+    const ta = parentTotals[a].reduce((s,v)=>s+v,0);
+    const tb = parentTotals[b].reduce((s,v)=>s+v,0);
+    return tb - ta;
+  });
+  const periodLabels = periods.map(p => p.period_label || p.period_start || 'Period');
+  const grandTotalAll = parents.reduce((s, p) => s + parentTotals[p].reduce((a,b)=>a+b,0), 0);
+
+  // Delta helper — for expenses, up is bad (red), down is good (green).
+  const deltaBadge = (vals, i) => {
+    if (i === 0) return '<span style="color:var(--text-muted);font-size:10px;">—</span>';
+    const prev = vals[i-1], curr = vals[i];
+    if (prev === 0 && curr === 0) return '<span style="color:var(--text-muted);font-size:10px;">—</span>';
+    if (prev === 0 && curr > 0) return '<span style="color:var(--text-muted);font-size:10px;">new</span>';
+    if (curr === 0 && prev > 0) return '<span style="color:#4caf50;font-size:10px;font-weight:600;">▼100%</span>';
+    const d = (curr - prev) / prev * 100;
+    const up = d >= 0;
+    return `<span style="color:${up?'#e74c3c':'#4caf50'};font-size:10px;font-weight:600;">${up?'▲':'▼'}${Math.abs(d).toFixed(0)}%</span>`;
+  };
+
+  // Legend (colored dots = period tone ramp)
+  const legendHtml = `
+    <div style="display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;font-size:11px;color:var(--text-muted);padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:12px;">
+      <span style="text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Periods</span>
+      ${periodLabels.map((l, i) => `<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${periodTone(i, periods.length)};"></span>${esc(l)}</span>`).join('')}
+    </div>`;
+
+  // ------------------------------------------------------------------
+  // Summary card — one block per category, periods as aligned rows inside a grid.
+  // Grid columns: [period label] [bar (flex)] [$ amount] [Δ%]
+  // ------------------------------------------------------------------
+  const summaryHtml = `
+    <div class="card" style="margin-top:14px;">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <h3 style="margin:0;">Expenses by Category</h3>
+        <div style="font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums;">
+          ${parents.length} categor${parents.length!==1?'ies':'y'} · <strong style="color:var(--text);">${money(grandTotalAll)}</strong> combined
+        </div>
+      </div>
+      <div style="padding:14px 18px;">
+        ${legendHtml}
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          ${parents.map(parent => {
+            const vals = parentTotals[parent];
+            const maxRow = Math.max(...vals, 1);
+            const color = categoryColor(parent);
+            const itemCount = Object.keys(parentMap[parent]).length;
+            const catTotal = vals.reduce((a,b)=>a+b,0);
+            return `
+              <div style="padding:12px 14px;background:var(--surface-subtle);border-radius:8px;border-left:3px solid ${color};">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;">
+                  <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+                    <span style="width:10px;height:10px;border-radius:50%;background:${color};box-shadow:0 0 10px ${categoryColor(parent,0.4)};flex-shrink:0;"></span>
+                    <span style="font-weight:600;font-size:14px;">${esc(parent)}</span>
+                    <span style="font-size:11px;color:var(--text-muted);">${itemCount} line${itemCount!==1?'s':''}</span>
+                  </div>
+                  <div style="font-size:14px;font-variant-numeric:tabular-nums;font-weight:700;color:${color};flex-shrink:0;">
+                    ${money(catTotal)}
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:minmax(100px,max-content) 1fr minmax(100px,max-content) minmax(56px,max-content);column-gap:12px;row-gap:5px;align-items:center;font-size:12px;font-variant-numeric:tabular-nums;">
+                  ${vals.map((v, i) => {
+                    const pct = (v / maxRow * 100).toFixed(1);
+                    return `
+                      <div style="color:${periodTone(i, periods.length)};font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;white-space:nowrap;">${esc(periodLabels[i])}</div>
+                      <div style="height:12px;background:var(--surface);border-radius:6px;overflow:hidden;">
+                        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg, ${categoryColor(parent,0.5)}, ${color});border-radius:6px;transition:width 0.4s ease;"></div>
+                      </div>
+                      <div style="color:${periodTone(i, periods.length)};font-weight:600;text-align:right;white-space:nowrap;">${money(v)}</div>
+                      <div style="text-align:right;">${deltaBadge(vals, i)}</div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>`;
           }).join('')}
         </div>
       </div>
+    </div>`;
+
+  // ------------------------------------------------------------------
+  // Drill-down — each category as a collapsible detail block listing line items
+  // with the same grid structure as the summary (period | bar | $ | Δ%).
+  // ------------------------------------------------------------------
+  const drillHtml = `
+    <div class="card" style="margin-top:14px;">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 style="margin:0;">Line Item Detail</h3>
+        <span style="font-size:11px;color:var(--text-muted);">Click a category to expand</span>
+      </div>
+      <div style="padding:8px 14px;">
+        ${parents.map(parent => {
+          const entries = Object.values(parentMap[parent])
+            .map(e => ({ name: e.display, amounts: e.amounts, total: e.amounts.reduce((s,v)=>s+v,0) }))
+            .filter(e => e.total !== 0)
+            .sort((a,b) => b.total - a.total);
+          const catTotal = entries.reduce((s,e)=>s+e.total,0);
+          const color = categoryColor(parent);
+          const maxItem = Math.max(...entries.flatMap(e => e.amounts), 1);
+          return `
+            <details style="margin:6px 0;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+              <summary style="padding:10px 14px;background:var(--surface-subtle);cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;user-select:none;gap:10px;">
+                <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+                  <span style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+                  <strong>${esc(parent)}</strong>
+                  <span style="font-size:11px;color:var(--text-muted);">${entries.length} item${entries.length!==1?'s':''}</span>
+                </div>
+                <div style="font-size:13px;font-variant-numeric:tabular-nums;font-weight:700;color:${color};flex-shrink:0;">${money(catTotal)}</div>
+              </summary>
+              <div style="padding:8px 14px 12px;">
+                ${entries.map(it => `
+                  <div style="padding:9px 0;border-bottom:1px solid var(--border);">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;gap:10px;">
+                      <span style="font-size:13px;font-weight:500;">${esc(it.name)}</span>
+                      <span style="font-size:13px;font-variant-numeric:tabular-nums;font-weight:600;">${money(it.total)}</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:minmax(95px,max-content) 1fr minmax(95px,max-content) minmax(50px,max-content);column-gap:10px;row-gap:4px;align-items:center;font-size:11px;font-variant-numeric:tabular-nums;">
+                      ${it.amounts.map((v, i) => {
+                        const pct = (v / maxItem * 100).toFixed(1);
+                        return `
+                          <div style="color:${periodTone(i, periods.length)};font-size:9px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;white-space:nowrap;">${esc(periodLabels[i])}</div>
+                          <div style="height:8px;background:var(--surface);border-radius:4px;overflow:hidden;">
+                            <div style="height:100%;width:${pct}%;background:linear-gradient(90deg, ${categoryColor(parent,0.45)}, ${color});border-radius:4px;"></div>
+                          </div>
+                          <div style="color:${periodTone(i, periods.length)};text-align:right;white-space:nowrap;">${money(v)}</div>
+                          <div style="text-align:right;">${deltaBadge(it.amounts, i)}</div>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </details>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  // Snapshot manager (unchanged list at bottom — always shows ALL snapshots, not
+  // the filtered subset, so the user can still delete hidden ones)
+  const snapsHtml = `
+    <div class="card" style="margin-top:20px;padding:14px 18px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <h3 style="margin:0;font-size:14px;">Imported Snapshots</h3>
+        <span style="font-size:11px;color:var(--text-muted);">${expSnaps.length} total</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${expSnaps.map(s => `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--surface-subtle);border-radius:6px;font-size:12px;">
+            <strong>${esc(s.period_label || '?')}</strong>
+            <span style="color:var(--text-muted);">${money(s.total_expenses)}</span>
+            <span style="color:var(--text-muted);font-size:10px;">${esc(s.source_file||'')}</span>
+            <button class="btn-icon" onclick="deleteExpenseSnapshot('${s.id}')" title="Delete">×</button>
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+
+  return toolbarHtml + summaryHtml + drillHtml + snapsHtml;
+}
+
+// Tone ramp for period comparison (older=dim, newer=vivid)
+function periodTone(i, total) {
+  if (total === 1) return 'var(--warning-text, #e67e22)';
+  const pct = i / (total - 1); // 0..1
+  // older = teal/blue, newer = orange/gold
+  const hue = 210 - pct * 180; // 210 -> 30
+  const sat = 45 + pct * 25;
+  const light = 55;
+  return `hsl(${hue}, ${sat}%, ${light}%)`;
+}
+
+async function deleteExpenseSnapshot(id) {
+  if (!confirm('Delete this expense snapshot?')) return;
+  await window.api.deleteExpenseSnapshot(id);
+  renderPlTab();
+}
+
+async function renderPlTab() {
+  const container = document.getElementById('plContent');
+  if (!container) return;
+  container.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:40px 0;">Loading…</div>';
+
+  const [snapshotsRes, expSnapsRes, invoicesRes] = await Promise.all([
+    window.api.getPlSnapshots(),
+    window.api.getExpenseSnapshots(),
+    window.api.getInvoices({})
+  ]);
+
+  const snapshots = (snapshotsRes?.data || []).sort((a, b) => (a.month || '') > (b.month || '') ? 1 : -1);
+  const expSnaps = expSnapsRes?.data || [];
+  const allInvoices = invoicesRes?.data || [];
+
+  // Build revenue by month from invoices — exclude future-dated, cancelled, or incomplete
+  const todayStr_pl = new Date().toISOString().slice(0, 10);
+  const revByMonth = {};
+  allInvoices.forEach(inv => {
+    const d = inv.svc_date || (inv.created_at ? inv.created_at.slice(0, 10) : '');
+    if (!d) return;
+    if (d > todayStr_pl) return;
+    if (inv.cancelled === true) return;
+    const key = d.slice(0, 7);
+    revByMonth[key] = (revByMonth[key] || 0) + (parseFloat(inv.total) || 0);
+  });
+
+  // Expense by month from QB snapshots
+  const expByMonth = {};
+  const catByMonth = {}; // month -> [{name,group,amount}]
+  snapshots.forEach(s => {
+    expByMonth[s.month] = parseFloat(s.total_expenses) || 0;
+    catByMonth[s.month] = Array.isArray(s.categories) ? s.categories : [];
+  });
+
+  // Expense by quarter from AI-imported PDF snapshots (add on top where available)
+  const expByQuarter = {};
+  const catByQuarter = {};
+  const revByQuarter = {};
+  // Aggregate monthly data to quarter
+  const allMonthKeys = new Set([
+    ...snapshots.map(s => s.month),
+    ...Object.keys(revByMonth)
+  ]);
+  [...allMonthKeys].forEach(m => {
+    const q = monthToQuarter(m);
+    revByQuarter[q] = (revByQuarter[q] || 0) + (revByMonth[m] || 0);
+    expByQuarter[q] = (expByQuarter[q] || 0) + (expByMonth[m] || 0);
+    if (catByMonth[m]) {
+      catByQuarter[q] = catByQuarter[q] || [];
+      catByMonth[m].forEach(c => catByQuarter[q].push(c));
+    }
+  });
+  // Normalize any "quarter-ish" label/date into the canonical YYYY-QN key.
+  // Accepts: "2025-Q1", "2025 Q1", "Q1 2025", "Jan-Mar 25", "Oct-Dec 2025", plus period_start fallback.
+  const MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+  function expandYear(y) {
+    if (!y) return null;
+    y = String(y);
+    if (y.length === 4) return y;
+    if (y.length === 2) return '20' + y;
+    return null;
+  }
+  function normalizeQuarterKey(s) {
+    const raw = (s.period_label || '').trim();
+    let m = raw.match(/^(\d{4})-Q([1-4])$/);
+    if (m) return `${m[1]}-Q${m[2]}`;
+    m = raw.match(/(\d{4})\s*[-\s]?\s*Q([1-4])/i) || raw.match(/Q([1-4])[\s-]*(\d{4})/i);
+    if (m) {
+      const y = m[1].length === 4 ? m[1] : m[2];
+      const q = m[1].length === 4 ? m[2] : m[1];
+      return `${y}-Q${q}`;
+    }
+    // "Jan-Mar 25", "Oct-Dec 2025", "Apr - Jun 25"
+    m = raw.toLowerCase().match(/([a-z]{3})\s*[-–]\s*([a-z]{3})[\s,]+(\d{2,4})/);
+    if (m) {
+      const m1 = MONTHS[m[1]], m2 = MONTHS[m[2]];
+      const y = expandYear(m[3]);
+      if (m1 && m2 && y && (m2 - m1) === 2 && ((m1 - 1) % 3) === 0) {
+        const q = Math.floor((m1 - 1) / 3) + 1;
+        return `${y}-Q${q}`;
+      }
+    }
+    // period_start (YYYY-MM-DD) fallback
+    if (s.period_start && /^\d{4}-\d{2}/.test(s.period_start)) {
+      const y = s.period_start.slice(0, 4);
+      const mo = parseInt(s.period_start.slice(5, 7), 10);
+      const me = s.period_end && /^\d{4}-\d{2}/.test(s.period_end) ? parseInt(s.period_end.slice(5, 7), 10) : null;
+      // Only treat as a quarter if the span is actually 3 months aligned on a quarter boundary
+      if (mo >= 1 && mo <= 12 && ((mo - 1) % 3) === 0 && (!me || me - mo === 2)) {
+        const q = Math.floor((mo - 1) / 3) + 1;
+        return `${y}-Q${q}`;
+      }
+    }
+    return null;
+  }
+  function normalizeYearKey(s) {
+    // period_start wins
+    if (s.period_start && /^\d{4}/.test(s.period_start)) return s.period_start.slice(0, 4);
+    const raw = String(s.period_label || '');
+    // Look for 4-digit year first, then 2-digit
+    let m = raw.match(/(20\d{2})/);
+    if (m) return m[1];
+    // "Jan-Dec 24" / "Jan-Dec 2025"
+    m = raw.toLowerCase().match(/jan\s*[-–]\s*dec[\s,]+(\d{2,4})/);
+    if (m) return expandYear(m[1]);
+    // Bare 2-digit year at end
+    m = raw.match(/\b(\d{2})\s*$/);
+    if (m) return expandYear(m[1]);
+    return null;
+  }
+
+  // AI expense snapshots: add expenses + fallback revenue (for pre-TankTrack years)
+  expSnaps.forEach(s => {
+    const ptype = (s.period_type || '').toLowerCase();
+    const isQuarterType = ptype === 'quarter' || ptype === 'quarterly' || ptype.startsWith('q');
+    if (isQuarterType) {
+      const key = normalizeQuarterKey(s);
+      if (!key) return;
+      expByQuarter[key] = parseFloat(s.total_expenses) || expByQuarter[key] || 0;
+      catByQuarter[key] = Array.isArray(s.line_items) ? s.line_items.map(li => ({ name: li.name, amount: li.amount, parent_category: li.parent_category }))
+        : (Array.isArray(s.categories) ? s.categories : (catByQuarter[key] || []));
+      if (s.use_income_as_revenue && s.total_income > 0) {
+        revByQuarter[key] = parseFloat(s.total_income);
+      }
+    }
+    // Yearly snapshots are NOT distributed into quarters/months — they live only in year view.
+    // Users who want finer granularity should upload quarterly PDFs.
+  });
+
+  const months = [...allMonthKeys].sort();
+
+  if (months.length === 0 && expSnaps.length === 0) {
+    container.innerHTML = `
+      <div class="card" style="text-align:center;padding:40px;">
+        <p style="color:var(--text-muted);">No P&L data yet.</p>
+        <p style="color:var(--text-muted);font-size:13px;">Import a QB export or upload a quarterly expense PDF to get started.</p>
+      </div>`;
+    return;
+  }
+
+  // Determine quarter keys
+  const allQuarterKeys = new Set(Object.keys(revByQuarter).concat(Object.keys(expByQuarter)));
+  const quarters = [...allQuarterKeys].sort();
+
+  // Build yearly aggregates from quarterly
+  const revByYear = {}, expByYear = {}, catByYear = {};
+  quarters.forEach(qk => {
+    const y = qk.slice(0, 4);
+    revByYear[y] = (revByYear[y] || 0) + (revByQuarter[qk] || 0);
+    expByYear[y] = (expByYear[y] || 0) + (expByQuarter[qk] || 0);
+    if (catByQuarter[qk]) {
+      catByYear[y] = (catByYear[y] || []).concat(catByQuarter[qk]);
+    }
+  });
+  // AI yearly snapshots: use totals directly (overrides quartered-fill)
+  expSnaps.forEach(s => {
+    const ptype = (s.period_type || '').toLowerCase();
+    const isYearType = ptype === 'year' || ptype === 'yearly' || ptype === 'annual';
+    const y = normalizeYearKey(s);
+    if (isYearType && y) {
+      expByYear[y] = parseFloat(s.total_expenses) || expByYear[y] || 0;
+      if (s.use_income_as_revenue && s.total_income > 0) {
+        revByYear[y] = parseFloat(s.total_income);
+      }
+      const lines = Array.isArray(s.line_items) ? s.line_items : [];
+      if (lines.length > 0) {
+        catByYear[y] = lines.map(li => ({ name: li.name, amount: li.amount, parent_category: li.parent_category }));
+      }
+    }
+  });
+  const years = Object.keys({ ...revByYear, ...expByYear }).sort();
+
+  const isYear = plViewMode === 'year';
+  const isQuarter = plViewMode === 'quarter';
+  // Honor the expense-filter's Show limit for this summary too. limit === 0 means
+  // "show all" (no slicing). This keeps the bottom summary in sync with the
+  // Expenses-by-Category filter toolbar so "All" / "Last N" work uniformly.
+  const plLimit = getExpenseFilterState().limit;
+  const applyPlLimit = arr => plLimit > 0 ? arr.slice(-plLimit) : arr;
+  const displayKeys = isYear ? applyPlLimit(years) : (isQuarter ? applyPlLimit(quarters) : applyPlLimit(months));
+  const revBy = isYear ? revByYear : (isQuarter ? revByQuarter : revByMonth);
+  const expBy = isYear ? expByYear : (isQuarter ? expByQuarter : expByMonth);
+  const catBy = isYear ? catByYear : (isQuarter ? catByQuarter : catByMonth);
+
+  const snapshotMap = {};
+  snapshots.forEach(s => { snapshotMap[s.month] = s; });
+
+  function fmt(n) { return '$' + n.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function fmtKey(key) {
+    if (!key) return '';
+    if (/^\d{4}$/.test(key)) return key; // yearly
+    if (key.includes('Q')) return key; // already quarterly
+    const [y, m] = key.split('-');
+    const names = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return (names[parseInt(m)] || m) + ' ' + y.slice(2);
+  }
+  const fmtM = fmtKey; // backwards-compat alias
+
+  // Current + comparison period
+  const lastKey = displayKeys[displayKeys.length - 1];
+  let compareKey = null;
+  if (plCompareMode === 'prior') {
+    compareKey = isYear ? String(parseInt(lastKey)-1) : (isQuarter ? priorQuarter(lastKey) : priorMonth(lastKey));
+  } else if (plCompareMode === 'yoy') {
+    compareKey = isYear ? String(parseInt(lastKey)-1) : (isQuarter ? yoyQuarter(lastKey) : yoyMonth(lastKey));
+  }
+
+  const lastRev = revBy[lastKey] || 0;
+  const lastExp = expBy[lastKey] || 0;
+  const lastNet = lastRev - lastExp;
+  const lastMargin = lastRev > 0 ? ((lastNet / lastRev) * 100).toFixed(1) : '—';
+
+  const cmpRev = compareKey ? (revBy[compareKey] || 0) : 0;
+  const cmpExp = compareKey ? (expBy[compareKey] || 0) : 0;
+  const cmpNet = cmpRev - cmpExp;
+
+  function deltaHtml(curr, prev) {
+    if (!compareKey || prev === 0) return '';
+    const pct = ((curr - prev) / Math.abs(prev)) * 100;
+    const up = pct >= 0;
+    const color = up ? 'var(--success-text, #27ae60)' : 'var(--danger-text, #e74c3c)';
+    return `<div style="font-size:11px;color:${color};margin-top:4px;">${up?'▲':'▼'} ${Math.abs(pct).toFixed(1)}% vs ${fmtKey(compareKey)}</div>`;
+  }
+
+  const totalRevAllTime = Object.values(revByMonth).reduce((s, v) => s + v, 0);
+  const totalExpAllTime = Object.values(expByMonth).reduce((s, v) => s + v, 0)
+    + expSnaps.filter(s => s.period_type === 'quarter').reduce((s, e) => s + (parseFloat(e.total_expenses) || 0), 0);
+  const totalNetAllTime = totalRevAllTime - totalExpAllTime;
+
+  // Bar chart: find max value for scaling
+  const chartVals = displayKeys.map(k => ({
+    key: k,
+    rev: revBy[k] || 0,
+    exp: expBy[k] || 0,
+    net: (revBy[k] || 0) - (expBy[k] || 0)
+  }));
+  const maxVal = Math.max(...chartVals.map(v => Math.max(v.rev, v.exp)), 1);
+
+  // Expense categories from last period
+  let expCatHtml = '';
+  const lastCategories = catBy[lastKey] || [];
+  // merge duplicate category names (normalized — strips account-code prefixes
+  // like "823 · " so the same line doesn't appear twice across imports)
+  const catMerged = {};
+  lastCategories.forEach(c => {
+    const raw = c.name || 'Uncategorized';
+    const k = lineItemKey(raw) || raw.toLowerCase();
+    const display = cleanLineItemName(raw) || raw;
+    if (!catMerged[k]) catMerged[k] = { display, amount: 0 };
+    if (display.length > catMerged[k].display.length) catMerged[k].display = display;
+    catMerged[k].amount += (parseFloat(c.amount) || 0);
+  });
+  const catEntries = Object.values(catMerged).map(e => ({ name: e.display, amount: e.amount })).filter(c => c.amount > 0).sort((a, b) => b.amount - a.amount);
+  if (catEntries.length > 0) {
+    const maxCat = Math.max(...catEntries.map(c => c.amount));
+    expCatHtml = `
+      <div class="card" style="margin-top:20px;">
+        <div class="card-header">
+          <h3>Expense Breakdown — ${fmtKey(lastKey)}</h3>
+        </div>
+        <div style="padding:16px;">
+          ${catEntries.map(c => {
+            const pct = maxCat > 0 ? (c.amount / maxCat * 100).toFixed(1) : 0;
+            return `
+            <div style="margin-bottom:10px;">
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px;">
+                <span>${c.name}</span><span style="font-weight:600;">${fmt(c.amount)}</span>
+              </div>
+              <div style="background:var(--surface-subtle);border-radius:4px;height:8px;overflow:hidden;">
+                <div style="background:var(--warning-text, #e67e22);height:100%;width:${pct}%;border-radius:4px;transition:width 0.4s;"></div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  // Summary table rows
+  const tableRows = displayKeys.map(k => {
+    const rev = revBy[k] || 0;
+    const exp = expBy[k] || 0;
+    const net = rev - exp;
+    const margin = rev > 0 ? ((net / rev) * 100).toFixed(1) + '%' : '—';
+    const netColor = net >= 0 ? 'var(--success-text, #27ae60)' : 'var(--danger-text, #e74c3c)';
+    return `<tr>
+      <td>${fmtKey(k)}</td>
+      <td style="text-align:right;">${rev > 0 ? fmt(rev) : '<span style="color:var(--text-muted);">—</span>'}</td>
+      <td style="text-align:right;">${exp > 0 ? fmt(exp) : '<span style="color:var(--text-muted);">No data</span>'}</td>
+      <td style="text-align:right;color:${netColor};font-weight:600;">${(rev > 0 || exp > 0) ? fmt(net) : '—'}</td>
+      <td style="text-align:right;">${margin}</td>
+    </tr>`;
+  }).reverse().join('');
+
+  container.innerHTML = `
+    <!-- Controls -->
+    <div class="card" style="padding:12px 16px;margin-bottom:20px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;">
+      <div style="display:flex;gap:4px;background:var(--surface-subtle);padding:3px;border-radius:8px;">
+        <button class="btn btn-sm ${isYear?'btn-primary':'btn-secondary'}" onclick="plViewMode='year';renderPlTab();" style="border:none;">Yearly</button>
+        <button class="btn btn-sm ${isQuarter?'btn-primary':'btn-secondary'}" onclick="plViewMode='quarter';renderPlTab();" style="border:none;">Quarterly</button>
+        <button class="btn btn-sm ${(!isYear && !isQuarter)?'btn-primary':'btn-secondary'}" onclick="plViewMode='month';renderPlTab();" style="border:none;">Monthly</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <label style="font-size:13px;color:var(--text-muted);">Compare to:</label>
+        <select onchange="plCompareMode=this.value;renderPlTab();" style="padding:5px 8px;">
+          <option value="none" ${plCompareMode==='none'?'selected':''}>None</option>
+          <option value="prior" ${plCompareMode==='prior'?'selected':''}>Prior ${isYear?'year':(isQuarter?'quarter':'month')}</option>
+          ${isYear?'':`<option value="yoy" ${plCompareMode==='yoy'?'selected':''}>Same ${isQuarter?'quarter':'month'} last year</option>`}
+        </select>
+      </div>
+      <div style="margin-left:auto;font-size:12px;color:var(--text-muted);">Showing ${displayKeys.length} ${isYear?'years':(isQuarter?'quarters':'months')}</div>
+    </div>
+
+    <!-- KPI cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px;">
+      <div class="card" style="padding:16px;text-align:center;">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Revenue (${fmtKey(lastKey)})</div>
+        <div style="font-size:22px;font-weight:700;color:var(--success-text, #27ae60);">${fmt(lastRev)}</div>
+        ${deltaHtml(lastRev, cmpRev)}
+      </div>
+      <div class="card" style="padding:16px;text-align:center;">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Expenses (${fmtKey(lastKey)})</div>
+        <div style="font-size:22px;font-weight:700;color:var(--warning-text, #e67e22);">${lastExp > 0 ? fmt(lastExp) : 'No data'}</div>
+        ${deltaHtml(lastExp, cmpExp)}
+      </div>
+      <div class="card" style="padding:16px;text-align:center;">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Net Profit (${fmtKey(lastKey)})</div>
+        <div style="font-size:22px;font-weight:700;color:${lastNet >= 0 ? 'var(--success-text, #27ae60)' : 'var(--danger-text, #e74c3c)'};">${lastExp > 0 ? fmt(lastNet) : '—'}</div>
+        ${deltaHtml(lastNet, cmpNet)}
+      </div>
+      <div class="card" style="padding:16px;text-align:center;">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Margin (${fmtKey(lastKey)})</div>
+        <div style="font-size:22px;font-weight:700;">${lastMargin}${lastMargin !== '—' ? '%' : ''}</div>
+      </div>
+    </div>
+
+    <!-- Bar chart -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header"><h3>Revenue vs Expenses — ${plLimit > 0 ? 'Last '+displayKeys.length : 'All '+displayKeys.length} ${isYear?'Years':(isQuarter?'Quarters':'Months')}</h3></div>
+      <div style="padding:16px 16px 0;">
+        <div style="display:flex;align-items:flex-end;gap:4px;height:160px;overflow-x:auto;">
+          ${chartVals.map(v => {
+            const revH = Math.round((v.rev / maxVal) * 140);
+            const expH = Math.round((v.exp / maxVal) * 140);
+            return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;min-width:44px;flex:1;">
+              <div style="display:flex;align-items:flex-end;gap:2px;height:140px;">
+                <div data-tip="Revenue: ${fmt(v.rev)}" style="width:14px;height:${revH}px;background:var(--success-text, #27ae60);border-radius:2px 2px 0 0;cursor:pointer;"></div>
+                <div data-tip="Expenses: ${fmt(v.exp)}" style="width:14px;height:${expH > 0 ? expH : 1}px;background:${v.exp > 0 ? 'var(--warning-text, #e67e22)' : 'var(--border)'};border-radius:2px 2px 0 0;cursor:pointer;opacity:${v.exp > 0 ? 1 : 0.3};"></div>
+              </div>
+              <div style="font-size:10px;color:var(--text-muted);text-align:center;white-space:nowrap;">${fmtKey(v.key)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="display:flex;gap:16px;padding:8px 0;font-size:12px;">
+          <span><span style="display:inline-block;width:10px;height:10px;background:var(--success-text, #27ae60);border-radius:2px;margin-right:4px;"></span>Revenue</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:var(--warning-text, #e67e22);border-radius:2px;margin-right:4px;"></span>Expenses</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Net profit trend -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>Net Profit Trend</h3>
+        <span style="font-size:11px;color:var(--text-muted);">Only periods with both revenue & expense data</span>
+      </div>
+      <div style="padding:16px;">
+        ${(() => {
+          // Only render periods where BOTH revenue and expense are known —
+          // otherwise net is meaningless (e.g. current quarter has TankTrack
+          // revenue but no uploaded PDF expenses yet).
+          const complete = chartVals.filter(v => v.rev > 0 && v.exp > 0);
+          if (complete.length === 0) {
+            return `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">
+              Upload expense PDFs for periods that also have revenue to see net profit trend.
+            </div>`;
+          }
+          const maxAbs = Math.max(...complete.map(v => Math.abs(v.net)), 1);
+          // Show all periods in the list but grey-out incomplete ones
+          return chartVals.map(v => {
+            const hasBoth = v.rev > 0 && v.exp > 0;
+            if (!hasBoth) {
+              return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;opacity:0.45;">
+                <div style="width:60px;font-size:12px;color:var(--text-muted);text-align:right;flex-shrink:0;">${fmtKey(v.key)}</div>
+                <div style="flex:1;background:var(--surface-subtle);border-radius:4px;height:20px;overflow:hidden;position:relative;display:flex;align-items:center;padding:0 8px;">
+                  <span style="font-size:11px;color:var(--text-muted);font-style:italic;">${v.exp === 0 ? 'No expense data uploaded' : 'No revenue yet'}</span>
+                </div>
+                <div style="width:90px;font-size:12px;color:var(--text-muted);text-align:right;flex-shrink:0;">—</div>
+              </div>`;
+            }
+            const pct = (Math.abs(v.net) / maxAbs * 100).toFixed(1);
+            const color = v.net >= 0 ? 'var(--success-text, #27ae60)' : 'var(--danger-text, #e74c3c)';
+            return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <div style="width:60px;font-size:12px;color:var(--text-muted);text-align:right;flex-shrink:0;">${fmtKey(v.key)}</div>
+              <div style="flex:1;background:var(--surface-subtle);border-radius:4px;height:20px;overflow:hidden;position:relative;">
+                <div style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${color};border-radius:4px;"></div>
+              </div>
+              <div style="width:90px;font-size:12px;font-weight:600;color:${color};text-align:right;flex-shrink:0;">${fmt(v.net)}</div>
+            </div>`;
+          }).join('');
+        })()}
+      </div>
+    </div>
+
+    ${renderExpenseBreakdown(expSnaps)}
+
+    <!-- Period summary table -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>${isYear?'Yearly':(isQuarter?'Quarterly':'Monthly')} Summary</h3>
+        <span style="font-size:12px;color:var(--text-muted);">All time: Revenue ${fmt(totalRevAllTime)} | Expenses ${fmt(totalExpAllTime)} | Net ${fmt(totalNetAllTime)}</span>
+      </div>
+      <table class="data-table">
+        <thead><tr>
+          <th>${isYear?'Year':(isQuarter?'Quarter':'Month')}</th>
+          <th style="text-align:right;">Revenue</th>
+          <th style="text-align:right;">Expenses</th>
+          <th style="text-align:right;">Net Profit</th>
+          <th style="text-align:right;">Margin</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
     </div>
   `;
 }
@@ -9341,8 +14458,780 @@ function setReportPeriod(from, to) {
   loadReports();
 }
 
+function setComparePreset(kind) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  if (kind === 'week_prior') {
+    const mon = getMonday(now);
+    const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+    reportDateFrom = ymd(mon); reportDateTo = ymd(sun);
+    reportCompareMode = 'prior';
+  } else if (kind === 'month_prior') {
+    const f = new Date(now.getFullYear(), now.getMonth(), 1);
+    const t = new Date(now.getFullYear(), now.getMonth()+1, 0);
+    reportDateFrom = ymd(f); reportDateTo = ymd(t);
+    reportCompareMode = 'prior';
+  } else if (kind === 'month_yoy') {
+    const f = new Date(now.getFullYear(), now.getMonth(), 1);
+    const t = new Date(now.getFullYear(), now.getMonth()+1, 0);
+    reportDateFrom = ymd(f); reportDateTo = ymd(t);
+    reportCompareMode = 'yoy';
+  } else if (kind === 'quarter_prior' || kind === 'quarter_yoy') {
+    const q = Math.floor(now.getMonth()/3);
+    const f = new Date(now.getFullYear(), q*3, 1);
+    const t = new Date(now.getFullYear(), q*3+3, 0);
+    reportDateFrom = ymd(f); reportDateTo = ymd(t);
+    reportCompareMode = kind === 'quarter_yoy' ? 'yoy' : 'prior';
+  } else if (kind === 'custom') {
+    // Activate custom mode. If compare dates aren't set, pre-fill with same range a year prior as a sensible starting point.
+    reportCompareMode = 'custom';
+    if (!reportCompareFrom || !reportCompareTo) {
+      if (reportDateFrom && reportDateTo) {
+        const shiftYear = (dStr, years) => {
+          const d = new Date(dStr + 'T00:00:00');
+          d.setFullYear(d.getFullYear() + years);
+          return ymd(d);
+        };
+        reportCompareFrom = shiftYear(reportDateFrom, -1);
+        reportCompareTo = shiftYear(reportDateTo, -1);
+      }
+    }
+  }
+  loadReports();
+}
+
+function swapCompareRanges() {
+  const tmpFrom = reportDateFrom, tmpTo = reportDateTo;
+  reportDateFrom = reportCompareFrom;
+  reportDateTo = reportCompareTo;
+  reportCompareFrom = tmpFrom;
+  reportCompareTo = tmpTo;
+  loadReports();
+}
+
 async function exportReportPdf() {
   showToast('PDF export coming soon!', 'info');
+}
+
+async function generateStatement(sendEmail = false) {
+  const customerId = document.getElementById('stmtCustomerId')?.value;
+  const from = document.getElementById('stmtFrom')?.value;
+  const to = document.getElementById('stmtTo')?.value;
+  if (!customerId) { showToast('Please select a customer.', 'error'); return; }
+  if (!from || !to) { showToast('Please select a date range.', 'error'); return; }
+
+  const { data: customer } = await window.api.getCustomer(customerId);
+  const { data: invoicesFull } = await window.api.getInvoices({ customerId, dateFrom: from, dateTo: to });
+  const { data: payments } = await window.api.getPayments(customerId);
+  const { data: settings } = await window.api.getSettings();
+  const s = settings || {};
+
+  const periodPayments = payments.filter(p => p.date >= from && p.date <= to);
+  const totalCharged = invoicesFull.reduce((sum, i) => sum + (parseFloat(i.total) || 0), 0);
+  const totalPaid = periodPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+  const balance = invoicesFull.reduce((sum, i) => sum + (parseFloat(i.total) || 0) - (parseFloat(i.amount_paid) || 0), 0);
+
+  const fmt = v => '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <style>
+    body{font-family:Arial,sans-serif;font-size:13px;color:#222;margin:0;padding:32px;}
+    h1{font-size:22px;margin:0;} h2{font-size:15px;margin:0 0 4px;}
+    .header{display:flex;justify-content:space-between;margin-bottom:24px;padding-bottom:16px;border-bottom:2px solid #1565c0;}
+    table{width:100%;border-collapse:collapse;margin-bottom:20px;}
+    th{background:#1565c0;color:white;padding:7px 10px;text-align:left;font-size:12px;}
+    td{padding:6px 10px;border-bottom:1px solid #eee;font-size:12px;}
+    .totals td{font-weight:700;border-top:2px solid #1565c0;background:#f5f5f5;}
+    .balance{font-size:18px;font-weight:700;color:${balance>0?'#c62828':'#2e7d32'};text-align:right;margin-top:12px;}
+  </style></head><body>
+  <div class="header">
+    <div>
+      <h1>${esc(s.company_name || 'Interstate Septic')}</h1>
+      ${s.address ? `<div>${esc(s.address)}</div>` : ''}
+      ${s.phone ? `<div>${esc(s.phone)}</div>` : ''}
+    </div>
+    <div style="text-align:right;">
+      <h2>STATEMENT</h2>
+      <div><strong>Period:</strong> ${from} — ${to}</div>
+      <div><strong>Date:</strong> ${formatDate(new Date())}</div>
+    </div>
+  </div>
+  <div style="margin-bottom:20px;">
+    <strong>Bill To:</strong><br>
+    ${esc(customer.name)}<br>
+    ${customer.address ? esc(customer.address) + '<br>' : ''}
+    ${(customer.city||customer.state||customer.zip) ? esc((customer.city||'')+(customer.state?', '+customer.state:'')+(customer.zip?' '+customer.zip:'')) + '<br>' : ''}
+    ${customer.email ? esc(customer.email) : ''}
+  </div>
+  <table>
+    <thead><tr><th>Date</th><th>Invoice #</th><th>Description</th><th style="text-align:right;">Amount</th><th style="text-align:right;">Paid</th><th style="text-align:right;">Balance</th></tr></thead>
+    <tbody>
+      ${invoicesFull.length === 0 ? `<tr><td colspan="6" style="color:#999;text-align:center;">No invoices in this period.</td></tr>` :
+        invoicesFull.map(i => {
+          const bal = (parseFloat(i.total)||0) - (parseFloat(i.amount_paid)||0);
+          return `<tr>
+            <td>${i.svc_date||''}</td>
+            <td>${esc(i.invoice_number||'')}</td>
+            <td>${esc(i.service_type||i.job_type||'Service')}</td>
+            <td style="text-align:right;">${fmt(i.total||0)}</td>
+            <td style="text-align:right;color:#2e7d32;">${fmt(i.amount_paid||0)}</td>
+            <td style="text-align:right;color:${bal>0?'#c62828':'inherit'};">${fmt(bal)}</td>
+          </tr>`;
+        }).join('')}
+    </tbody>
+    <tfoot class="totals"><tr>
+      <td colspan="3">Totals</td>
+      <td style="text-align:right;">${fmt(totalCharged)}</td>
+      <td style="text-align:right;color:#2e7d32;">${fmt(totalPaid)}</td>
+      <td style="text-align:right;">${fmt(balance)}</td>
+    </tr></tfoot>
+  </table>
+  ${periodPayments.length > 0 ? `
+  <h2 style="margin-bottom:8px;">Payments Received</h2>
+  <table>
+    <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th style="text-align:right;">Amount</th></tr></thead>
+    <tbody>${periodPayments.map(p => `<tr>
+      <td>${p.date||''}</td><td>${esc(p.payment_method||'')}</td><td>${esc(p.reference||p.check_number||'')}</td>
+      <td style="text-align:right;color:#2e7d32;">${fmt(p.amount||0)}</td>
+    </tr>`).join('')}</tbody>
+  </table>` : ''}
+  <div class="balance">Balance Due: ${fmt(balance)}${balance < 0 ? ' (Credit)' : ''}</div>
+  </body></html>`;
+
+  const filename = `Statement_${esc(customer.name).replace(/\s+/g,'_')}_${from}_${to}.pdf`;
+  const result = await window.api.generatePdf(html, filename, {});
+  if (result?.path) {
+    if (sendEmail && customer.email) {
+      const subject = `Your Statement from ${s.company_name || 'Interstate Septic'} — ${from} to ${to}`;
+      const body = `Dear ${customer.name},\n\nPlease find your account statement for ${from} to ${to} attached.\n\nBalance Due: ${fmt(balance)}\n\nThank you,\n${s.company_name || 'Interstate Septic'}`;
+      await window.api.sendEmail(customer.email, subject, body, result.path);
+      showToast('Statement emailed to ' + customer.email, 'success');
+    } else {
+      await window.api.openFile(result.path);
+      showToast('Statement generated.', 'success');
+    }
+  } else {
+    showToast(result?.error || 'Failed to generate PDF.', 'error');
+  }
+}
+
+// ===== RECYCLING BIN =====
+// ============================================================
+// AUTOMATIC FILTER CLEANINGS (AFC)
+// ============================================================
+
+let _afcTab = 'leads'; // 'leads' | 'active'
+
+async function loadAFC() {
+  const page = document.getElementById('page-afc');
+  if (!page) return;
+  page.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9203;</div><p>Loading...</p></div>';
+
+  const [{ data: leads }, { data: afcs }] = await Promise.all([
+    window.api.getFilterLeads({}),
+    window.api.getAfcs({}),
+  ]);
+
+  const pendingLeads = leads.filter(l => l.status === 'pending');
+  const hasAFCLeads = leads.filter(l => l.has_afc && l.status === 'pending');
+  const activeAfcs = afcs.filter(a => a.status === 'active');
+  const today = new Date().toISOString().split('T')[0];
+
+  page.innerHTML = `
+    <div style="display:flex;gap:0;height:calc(100vh - 120px);">
+      <!-- SIDEBAR -->
+      <div class="inv-filter-sidebar" style="min-width:180px;max-width:200px;">
+        <strong style="font-size:12px;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:14px;">Filter Cleanings</strong>
+
+        <button onclick="_afcTab='leads';loadAFC()" style="display:block;width:100%;text-align:left;padding:8px 10px;margin-bottom:4px;border-radius:5px;border:none;cursor:pointer;font-size:13px;background:${_afcTab==='leads'?'#1565c0':'transparent'};color:${_afcTab==='leads'?'white':'inherit'};font-weight:${_afcTab==='leads'?'600':'400'};">
+          &#128276; Needs Follow-Up
+          ${pendingLeads.length > 0 ? `<span style="background:${_afcTab==='leads'?'white':'#f44336'};color:${_afcTab==='leads'?'#1565c0':'white'};border-radius:10px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700;">${pendingLeads.length}</span>` : ''}
+        </button>
+
+        <button onclick="_afcTab='active';loadAFC()" style="display:block;width:100%;text-align:left;padding:8px 10px;margin-bottom:4px;border-radius:5px;border:none;cursor:pointer;font-size:13px;background:${_afcTab==='active'?'#1565c0':'transparent'};color:${_afcTab==='active'?'white':'inherit'};font-weight:${_afcTab==='active'?'600':'400'};">
+          &#10003; Active Cleanings
+          ${activeAfcs.length > 0 ? `<span style="background:${_afcTab==='active'?'white':'#4caf50'};color:${_afcTab==='active'?'#1565c0':'white'};border-radius:10px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700;">${activeAfcs.length}</span>` : ''}
+        </button>
+
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid #eee;font-size:11px;color:var(--text-light);">
+          <div style="margin-bottom:6px;"><strong style="color:#f44336;">${pendingLeads.length}</strong> need follow-up</div>
+          <div style="margin-bottom:6px;"><strong style="color:#4caf50;">${activeAfcs.length}</strong> active cleanings</div>
+          <div><strong style="color:#ff9800;">${afcs.filter(a=>a.status==='active'&&a.next_service_date&&a.next_service_date<=today).length}</strong> overdue</div>
+        </div>
+      </div>
+
+      <!-- MAIN -->
+      <div style="flex:1;overflow:auto;padding:20px;">
+        ${_afcTab === 'leads' ? renderAfcLeadsTab(leads) : renderAfcActiveTab(afcs, today)}
+      </div>
+    </div>`;
+}
+
+function renderAfcLeadsTab(leads) {
+  const pending = leads.filter(l => l.status === 'pending');
+  const other = leads.filter(l => l.status !== 'pending');
+
+  if (leads.length === 0) return `
+    <div class="empty-state">
+      <div class="empty-icon">&#128388;</div>
+      <p>No filter follow-ups yet.<br><small>When a tech taps "Flag Filter Cleaning Follow-Up" on a work order, it will appear here.</small></p>
+    </div>`;
+
+  const renderLead = (l) => {
+    const statusColors = { pending:'#ff9800', approved:'#4caf50', declined:'#9e9e9e', no_answer:'#2196f3' };
+    const statusLabels = { pending:'Needs Call', approved:'Cleaning Set Up', declined:'Declined', no_answer:'No Answer' };
+    const sc = statusColors[l.status] || '#999';
+    const sl = statusLabels[l.status] || l.status;
+    const hasAFC = l.has_afc;
+    return `
+      <div style="background:white;border:1px solid #e0e0e0;border-left:4px solid ${l.status==='pending'?(hasAFC?'#4caf50':'#ff9800'):'#ccc'};border-radius:6px;padding:14px 16px;margin-bottom:10px;cursor:pointer;" onclick="openCustomerDetail('${l.customer_id}')">
+        <div style="display:flex;align-items:flex-start;gap:12px;">
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:14px;">${esc(l.customer?.name || l.customer_name || '—')}</div>
+            <div style="font-size:12px;color:var(--text-light);margin-top:2px;">${esc(l.property?.address || l.property_address || '')}${l.property?.city ? ', ' + esc(l.property.city) : ''}</div>
+            ${hasAFC && l.status==='pending' ? `<div style="font-size:11px;color:#4caf50;margin-top:4px;font-weight:600;">&#10003; Already has an active Automatic Filter Cleaning</div>` : ''}
+            <div style="font-size:11px;color:#888;margin-top:4px;">Filter flagged on: ${esc(l.scheduled_date || l.job?.scheduled_date || '')}</div>
+            ${l.notes ? `<div style="font-size:11px;color:#555;margin-top:4px;font-style:italic;">${esc(l.notes)}</div>` : ''}
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+            <span style="background:${sc};color:white;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">${sl}</span>
+            <span style="font-size:10px;color:#aaa;">${l.created_at ? new Date(l.created_at).toLocaleDateString() : ''}</span>
+            <button class="btn btn-secondary" style="font-size:11px;padding:3px 10px;" onclick="event.stopPropagation();openAfcLeadDetail('${l.id}')">Actions</button>
+          </div>
+        </div>
+      </div>`;
+  };
+
+  return `
+    <h3 style="margin:0 0 14px;font-size:16px;">&#128276; Needs Follow-Up (${pending.length})</h3>
+    ${pending.length === 0 ? '<p style="color:var(--text-light);font-size:13px;">No pending follow-ups.</p>' : pending.map(renderLead).join('')}
+    ${other.length > 0 ? `
+      <h3 style="margin:20px 0 10px;font-size:14px;color:var(--text-light);">Resolved (${other.length})</h3>
+      ${other.map(renderLead).join('')}
+    ` : ''}`;
+}
+
+function renderAfcActiveTab(afcs, today) {
+  const freqLabels = { '6_month':'Every 6 Months', '1_year':'Annually', '2_year':'Every 2 Years', 'custom':'Custom' };
+  const active = afcs.filter(a => a.status === 'active');
+  const paused = afcs.filter(a => a.status === 'paused');
+  const cancelled = afcs.filter(a => a.status === 'cancelled');
+
+  if (afcs.length === 0) return `
+    <div class="empty-state">
+      <div class="empty-icon">&#128388;</div>
+      <p>No Automatic Filter Cleanings set up yet.</p>
+    </div>`;
+
+  const renderAfc = (a) => {
+    const overdue = a.next_service_date && a.next_service_date < today && a.status === 'active';
+    const soon = a.next_service_date && a.next_service_date >= today && a.next_service_date <= today.slice(0,7) + '-31' && a.status === 'active';
+    const borderColor = overdue ? '#f44336' : soon ? '#ff9800' : a.status === 'active' ? '#4caf50' : '#ccc';
+    return `
+      <div style="background:white;border:1px solid #e0e0e0;border-left:4px solid ${borderColor};border-radius:6px;padding:14px 16px;margin-bottom:10px;cursor:pointer;" onclick="openAfcDetail('${a.id}')">
+        <div style="display:flex;align-items:flex-start;gap:12px;">
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:14px;">${esc(a.customer?.name || '—')}</div>
+            <div style="font-size:12px;color:var(--text-light);margin-top:2px;">${esc(a.property?.address || '')}${a.property?.city ? ', ' + esc(a.property.city) : ''}</div>
+            <div style="display:flex;gap:12px;margin-top:6px;font-size:12px;">
+              <span>&#128197; Next: <strong style="color:${overdue?'#f44336':overdue?'#ff9800':'inherit'}">${a.next_service_date || 'Not set'}</strong></span>
+              <span>&#128260; ${freqLabels[a.frequency] || a.frequency || '—'}</span>
+              <span>&#128181; $${parseFloat(a.price||150).toFixed(2)}</span>
+              ${a.call_ahead ? '<span>&#128222; Call Ahead</span>' : ''}
+            </div>
+            ${a.notes ? `<div style="font-size:11px;color:#555;margin-top:4px;font-style:italic;">${esc(a.notes)}</div>` : ''}
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+            ${overdue ? '<span style="background:#f44336;color:white;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">OVERDUE</span>' : ''}
+            <span style="background:${a.status==='active'?'#4caf50':a.status==='paused'?'#ff9800':'#9e9e9e'};color:white;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">${(a.status||'').toUpperCase()}</span>
+          </div>
+        </div>
+      </div>`;
+  };
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h3 style="margin:0;font-size:16px;">&#10003; Active Filter Cleanings (${active.length})</h3>
+      <button class="btn btn-primary btn-sm" onclick="openAfcSetupModal(null,null,null)">+ New Cleaning</button>
+    </div>
+    ${active.length === 0 ? '<p style="color:var(--text-light);font-size:13px;">No active filter cleanings.</p>' : active.map(renderAfc).join('')}
+    ${paused.length > 0 ? `<h3 style="margin:20px 0 10px;font-size:14px;color:#ff9800;">Paused (${paused.length})</h3>${paused.map(renderAfc).join('')}` : ''}
+    ${cancelled.length > 0 ? `<h3 style="margin:20px 0 10px;font-size:14px;color:#9e9e9e;">Cancelled (${cancelled.length})</h3>${cancelled.map(renderAfc).join('')}` : ''}`;
+}
+
+async function openAfcLeadDetail(leadId) {
+  const { data: leads } = await window.api.getFilterLeads({});
+  const lead = leads.find(l => l.id === leadId);
+  if (!lead) return;
+
+  const custName = esc(lead.customer?.name || lead.customer_name || '—');
+  const addr = esc((lead.property?.address || lead.property_address || '') + (lead.property?.city ? ', ' + lead.property.city : ''));
+
+  openModal(`&#128388; Filter Lead — ${custName}`, `
+    <div style="background:#f9f9f9;border-radius:6px;padding:12px 14px;margin-bottom:14px;">
+      <div style="font-weight:700;font-size:15px;">${custName}</div>
+      <div style="font-size:13px;color:var(--text-light);">${addr}</div>
+      <div style="font-size:12px;margin-top:6px;">Filter found on <strong>${esc(lead.scheduled_date || lead.job?.scheduled_date || '')}</strong></div>
+      ${lead.has_afc ? `<div style="margin-top:6px;font-size:12px;color:#4caf50;font-weight:600;">&#10003; This customer already has an active Automatic Filter Cleaning.</div>` : ''}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <button class="btn btn-primary" onclick="closeModal();_afcTab='active';openAfcSetupModal('${lead.id}','${lead.customer_id}','${lead.property_id}')">&#10003; Set Up Automatic Filter Cleaning</button>
+      <button class="btn btn-secondary" onclick="afcLeadViewJob('${lead.job_id}')">&#128203; View Work Order</button>
+      <button class="btn btn-secondary" onclick="afcLeadStatus('${lead.id}','no_answer')">&#128222; No Answer</button>
+      <button class="btn btn-danger" onclick="afcLeadStatus('${lead.id}','declined')">&#10007; Declined</button>
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="afcLeadNotes" rows="3" style="width:100%;" placeholder="Call notes, follow-up info...">${esc(lead.notes || '')}</textarea>
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    <button class="btn btn-primary" onclick="afcSaveLeadNotes('${lead.id}')">Save Notes</button>
+  `);
+}
+
+async function afcLeadStatus(leadId, status) {
+  const { data: leads } = await window.api.getFilterLeads({});
+  const lead = leads.find(l => l.id === leadId);
+  if (!lead) return;
+  await window.api.saveFilterLead({ ...lead, status });
+  closeModal();
+  showToast(`Lead marked as ${status === 'no_answer' ? 'No Answer' : 'Declined'}.`, 'success');
+  loadAFC();
+}
+
+async function afcSaveLeadNotes(leadId) {
+  const notes = document.getElementById('afcLeadNotes')?.value || '';
+  const { data: leads } = await window.api.getFilterLeads({});
+  const lead = leads.find(l => l.id === leadId);
+  if (!lead) return;
+  await window.api.saveFilterLead({ ...lead, notes });
+  showToast('Notes saved.', 'success');
+  closeModal();
+  loadAFC();
+}
+
+async function afcLeadViewJob(jobId) {
+  if (!jobId) { showToast('No work order linked.', 'error'); return; }
+  closeModal();
+  const { data: job } = await window.api.getJob(jobId);
+  if (job) openJobModal(job);
+}
+
+async function openAfcDetail(afcId) {
+  const { data: afcs } = await window.api.getAfcs({});
+  const a = afcs.find(x => x.id === afcId);
+  if (!a) return;
+  const freqLabels = { '6_month':'Every 6 Months', '1_year':'Annually', '2_year':'Every 2 Years', 'custom':'Custom' };
+
+  openModal(`&#128388; Automatic Filter Cleaning — ${esc(a.customer?.name || '—')}`, `
+    <div style="background:#f9f9f9;border-radius:6px;padding:12px 14px;margin-bottom:14px;">
+      <div style="font-weight:700;font-size:15px;">${esc(a.customer?.name || '—')}</div>
+      <div style="font-size:13px;color:var(--text-light);">${esc(a.property?.address || '')}${a.property?.city ? ', ' + esc(a.property.city) : ''}</div>
+      <div style="display:flex;gap:16px;margin-top:8px;font-size:13px;flex-wrap:wrap;">
+        <span>&#128260; ${freqLabels[a.frequency] || a.frequency}</span>
+        <span>&#128197; Next: <strong>${a.next_service_date || '—'}</strong></span>
+        <span>&#128181; $${parseFloat(a.price || 150).toFixed(2)}</span>
+        ${a.call_ahead ? '<span>&#128222; Call Ahead</span>' : ''}
+      </div>
+      ${a.notes ? `<div style="margin-top:8px;font-size:12px;color:#555;font-style:italic;">${esc(a.notes)}</div>` : ''}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <button class="btn btn-primary" onclick="closeModal();openAfcSetupModal(null,'${a.customer_id}','${a.property_id}','${a.id}')">&#9998; Edit</button>
+      ${a.status === 'active' ? `<button class="btn btn-secondary" onclick="afcSetStatus('${a.id}','paused')">&#9646;&#9646; Pause</button>` : `<button class="btn btn-primary" onclick="afcSetStatus('${a.id}','active')">&#9654; Reactivate</button>`}
+      <button class="btn btn-danger" onclick="afcSetStatus('${a.id}','cancelled')">Cancel Cleaning</button>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
+async function afcSetStatus(afcId, status) {
+  const { data: afcs } = await window.api.getAfcs({});
+  const a = afcs.find(x => x.id === afcId);
+  if (!a) return;
+  await window.api.saveAfc({ ...a, status });
+  closeModal();
+  showToast(`Cleaning ${status}.`, 'success');
+  loadAFC();
+}
+
+function afcNextDates(frequency) {
+  // Compute the next two service dates based on frequency
+  // 6-month: end of March and end of September
+  const now = new Date();
+  const yr = now.getFullYear();
+  if (frequency === '6_month') {
+    const candidates = [new Date(yr, 2, 28), new Date(yr, 8, 28), new Date(yr+1, 2, 28), new Date(yr+1, 8, 28)];
+    return candidates.find(d => d > now)?.toISOString().split('T')[0] || '';
+  }
+  if (frequency === '1_year') {
+    const next = new Date(yr + 1, now.getMonth(), now.getDate());
+    return next.toISOString().split('T')[0];
+  }
+  if (frequency === '2_year') {
+    const next = new Date(yr + 2, now.getMonth(), now.getDate());
+    return next.toISOString().split('T')[0];
+  }
+  return '';
+}
+
+// Safely add N months to a date without day-overflow (e.g. Jan 31 + 1 month = Feb 28, not Mar 3)
+function afcAddMonths(date, n) {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + n);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return d;
+}
+
+// Generate all service dates from startDateStr forward for yearsAhead years
+function generateAfcSchedule(startDateStr, frequency, yearsAhead = 5) {
+  if (frequency === 'custom') return [startDateStr];
+  const monthsPerCycle = frequency === '6_month' ? 6 : frequency === '2_year' ? 24 : 12;
+  const dates = [];
+  let current = new Date(startDateStr + 'T12:00:00');
+  const cutoff = new Date(current);
+  cutoff.setFullYear(cutoff.getFullYear() + yearsAhead);
+  while (current <= cutoff) {
+    dates.push(current.toISOString().split('T')[0]);
+    current = afcAddMonths(current, monthsPerCycle);
+  }
+  return dates;
+}
+
+function openAfcSetupModal(leadId, customerId, propertyId, existingAfcId) {
+  const isEdit = !!existingAfcId;
+  // Load the existing AFC or start fresh
+  (async () => {
+    let existing = null;
+    if (isEdit) {
+      const { data: afcs } = await window.api.getAfcs({});
+      existing = afcs.find(a => a.id === existingAfcId) || null;
+    }
+    const freq = existing?.frequency || '6_month';
+    const nextDate = existing?.next_service_date || afcNextDates(freq);
+
+    openModal(isEdit ? '&#9998; Edit Automatic Filter Cleaning' : '&#10003; Set Up Automatic Filter Cleaning', `
+      <div style="margin-bottom:12px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:6px;padding:10px 14px;font-size:13px;">
+        <strong>Automatic Filter Cleanings — $150</strong> · No digging fees · Service at our convenience
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:1;">
+          <label>Frequency *</label>
+          <select id="afcFreq" class="form-control" onchange="document.getElementById('afcNextDate').value=afcNextDates(this.value)">
+            <option value="6_month" ${freq==='6_month'?'selected':''}>Every 6 Months (~March & September)</option>
+            <option value="1_year" ${freq==='1_year'?'selected':''}>Annually (1 Year)</option>
+            <option value="2_year" ${freq==='2_year'?'selected':''}>Every 2 Years</option>
+            <option value="custom" ${freq==='custom'?'selected':''}>Custom Date</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Next Service Date *</label>
+          <input type="date" id="afcNextDate" class="form-control" value="${nextDate}">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:1;">
+          <label>Price</label>
+          <input type="number" id="afcPrice" class="form-control" value="${existing?.price || 150}" step="0.01">
+        </div>
+        <div class="form-group" style="flex:1;display:flex;align-items:center;gap:8px;padding-top:24px;">
+          <input type="checkbox" id="afcCallAhead" ${existing?.call_ahead ? 'checked' : ''} style="width:16px;height:16px;">
+          <label for="afcCallAhead" style="margin:0;cursor:pointer;">Call customer on the way</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="afcNotes" rows="2" style="width:100%;" placeholder="Access instructions, gate codes, preferences...">${esc(existing?.notes || '')}</textarea>
+      </div>
+    `, `
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveAfcSetup('${leadId||''}','${customerId||existing?.customer_id||''}','${propertyId||existing?.property_id||''}','${existingAfcId||''}')">&#10003; ${isEdit ? 'Save Changes' : 'Confirm Cleaning'}</button>
+    `);
+  })();
+}
+
+async function saveAfcSetup(leadId, customerId, propertyId, existingAfcId) {
+  const frequency = document.getElementById('afcFreq').value;
+  const nextServiceDate = document.getElementById('afcNextDate').value;
+  const price = parseFloat(document.getElementById('afcPrice').value) || 150;
+  const callAhead = document.getElementById('afcCallAhead').checked;
+  const notes = document.getElementById('afcNotes').value.trim();
+
+  if (!nextServiceDate) { showToast('Next service date is required.', 'error'); return; }
+  if (!customerId) { showToast('No customer linked.', 'error'); return; }
+
+  // Load existing AFC to get previously scheduled job IDs (for cleanup on edit)
+  let existingAfc = null;
+  if (existingAfcId) {
+    const { data: afcs } = await window.api.getAfcs({});
+    existingAfc = afcs.find(a => a.id === existingAfcId) || null;
+  }
+
+  const custId = customerId || existingAfc?.customer_id;
+  const propId = propertyId || existingAfc?.property_id;
+
+  const afcData = {
+    ...(existingAfcId ? { id: existingAfcId } : {}),
+    customer_id: custId,
+    property_id: propId,
+    filter_lead_id: leadId || null,
+    frequency,
+    next_service_date: nextServiceDate,
+    price,
+    call_ahead: callAhead,
+    notes,
+    status: 'active',
+  };
+
+  const afcResult = await window.api.saveAfc(afcData);
+  if (!afcResult.success) { showToast('Failed to save.', 'error'); return; }
+
+  const afcId = afcResult.data.id;
+  const today = new Date().toISOString().split('T')[0];
+
+  // On edit: soft-delete any previously scheduled pending future jobs
+  if (existingAfcId && existingAfc?.scheduled_job_ids?.length) {
+    for (const jobId of existingAfc.scheduled_job_ids) {
+      try {
+        const { data: oldJob } = await window.api.getJob(jobId);
+        if (oldJob && oldJob.status === 'pending' && (oldJob.scheduled_date || '') >= today) {
+          await window.api.deleteJob(jobId);
+        }
+      } catch (_) { /* skip if job already gone */ }
+    }
+  }
+
+  // Generate all dates for 5 years and create a job for each
+  const { data: vehicles } = await window.api.getVehicles();
+  const serviceTruck = vehicles.find(v => v.name === 'Service Truck') || vehicles[0];
+  const dates = generateAfcSchedule(nextServiceDate, frequency, 5);
+  const scheduledJobIds = [];
+
+  for (const date of dates) {
+    const jobResult = await window.api.saveJob({
+      customer_id: custId,
+      property_id: propId,
+      vehicle_id: serviceTruck?.id || '',
+      scheduled_date: date,
+      status: 'pending',
+      notes: 'Automatic Filter Cleaning',
+      afc_id: afcId,
+      line_items: [{ description: 'Automatic Filter Cleaning', qty: 1, unit_price: price }],
+    });
+    if (jobResult.success) scheduledJobIds.push(jobResult.data.id);
+  }
+
+  // Store all scheduled job IDs on the AFC so we can manage them later
+  await window.api.saveAfc({ ...afcResult.data, scheduled_job_ids: scheduledJobIds });
+
+  // Mark the lead as approved
+  if (leadId) {
+    const { data: leads } = await window.api.getFilterLeads({});
+    const lead = leads.find(l => l.id === leadId);
+    if (lead) await window.api.saveFilterLead({ ...lead, status: 'approved', has_afc: true });
+  }
+
+  const lastDate = dates[dates.length - 1];
+  closeModal();
+  showToast(
+    existingAfcId
+      ? `Schedule updated — ${dates.length} jobs regenerated through ${lastDate}.`
+      : `Set up! ${dates.length} jobs scheduled on Service Truck through ${lastDate}.`,
+    'success'
+  );
+  _afcTab = 'active';
+  loadAFC();
+}
+
+async function loadTrash() {
+  const page = document.getElementById('page-trash');
+  if (!page) return;
+  page.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9203;</div><p>Loading...</p></div>';
+
+  const { data: items } = await window.api.getTrash();
+
+  page.innerHTML = `
+    <div style="padding:20px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+        <h2 style="margin:0;">&#128465; Recycling Bin</h2>
+        <span style="font-size:13px;color:var(--text-light);">${items.length} item${items.length !== 1 ? 's' : ''}</span>
+        <input type="text" id="trashSearch" placeholder="Search..." oninput="filterTrash()" style="padding:5px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;width:200px;">
+        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="trashBatchRestoreBtn" class="btn btn-secondary btn-sm" style="display:none;" onclick="batchTrashAction('restore')">&#8617; Restore Selected</button>
+          <button id="trashBatchDeleteBtn" class="btn btn-danger btn-sm" style="display:none;" onclick="batchTrashAction('purge')">&#128465; Delete Selected Forever</button>
+          ${items.length > 0 ? `<button class="btn btn-danger btn-sm" onclick="purgeAllTrash()">Empty Bin</button>` : ''}
+        </div>
+      </div>
+      ${items.length === 0 ? `
+        <div class="empty-state">
+          <div class="empty-icon">&#128465;</div>
+          <p>Recycling bin is empty.</p>
+        </div>
+      ` : `
+        <table class="data-table" style="width:100%;font-size:13px;">
+          <thead>
+            <tr>
+              <th style="padding:8px;width:32px;"><input type="checkbox" id="trashSelectAll" onchange="toggleAllTrashChecks(this.checked)"></th>
+              <th style="padding:8px 12px;text-align:left;cursor:pointer;" onclick="sortTrash('type')">Type &#8597;</th>
+              <th style="padding:8px 12px;text-align:left;cursor:pointer;" onclick="sortTrash('desc')">Description &#8597;</th>
+              <th style="padding:8px 12px;text-align:left;cursor:pointer;" onclick="sortTrash('service_date')">Service Date &#8597;</th>
+              <th style="padding:8px 12px;text-align:left;cursor:pointer;" onclick="sortTrash('deleted_at')">Deleted On &#8597;</th>
+              <th style="padding:8px 12px;text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(item => {
+              const type = item.trash_type;
+              const meta = {
+                job:                { label: 'Work Order',     icon: '&#128203;' },
+                payment:            { label: 'Payment',        icon: '&#128181;' },
+                manifest:           { label: 'Manifest',       icon: '&#128204;' },
+                invoice:            { label: 'Invoice',        icon: '&#129534;' },
+                service_due_notice: { label: 'Service Due',    icon: '&#128276;' },
+                disposal_load:      { label: 'Disposal Load',  icon: '&#128666;' },
+              }[type] || { label: 'Item', icon: '&#128230;' };
+              let descLines = [];
+              let serviceDate = '';
+              if (type === 'payment') {
+                const amt = parseFloat(item.amount || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+                descLines.push(`<strong>${esc(item.customer_name || '—')}</strong>`);
+                descLines.push(`${amt}${item.method ? ' · ' + esc(item.method) : ''}${item.invoice_number ? ' · Invoice #' + esc(item.invoice_number) : ''}`);
+                if (item.note) descLines.push(esc(item.note));
+                serviceDate = item.date || '';
+              } else if (type === 'job') {
+                if (item.customer_name) descLines.push(`<strong>${esc(item.customer_name)}</strong>`);
+                const addr = [item.property_address, item.property_city, item.property_state].filter(Boolean).join(', ');
+                if (addr) descLines.push(esc(addr));
+                if (item.customer_phone) descLines.push(`&#128222; ${esc(item.customer_phone)}`);
+                if (item.customer_email) descLines.push(`&#9993; ${esc(item.customer_email)}`);
+                serviceDate = item.scheduled_date || '';
+              } else if (type === 'manifest') {
+                descLines.push(`<strong>Manifest #${esc(item.manifest_number || '—')}</strong>`);
+                if (item.customer_names) descLines.push(esc(item.customer_names));
+                if (item.addresses) descLines.push(esc(item.addresses));
+                if (item.vehicle_name) descLines.push(`&#128666; ${esc(item.vehicle_name)}`);
+                serviceDate = item.scheduled_date || '';
+              } else if (type === 'invoice') {
+                const total = parseFloat(item.total || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+                descLines.push(`<strong>Invoice #${esc(item.invoice_number || '—')} · ${total}</strong>`);
+                if (item.customer_name) descLines.push(esc(item.customer_name));
+                const addr = [item.property_address, item.property_city, item.property_state].filter(Boolean).join(', ');
+                if (addr) descLines.push(esc(addr));
+                if (item.payment_status) descLines.push(`Status: ${esc(item.payment_status)}`);
+                serviceDate = item.invoice_date || item.date || '';
+              } else if (type === 'service_due_notice') {
+                descLines.push(`<strong>${esc(item.service_type || 'Service')} due</strong>`);
+                if (item.customer_name) descLines.push(esc(item.customer_name));
+                const addr = [item.property_address, item.property_city, item.property_state].filter(Boolean).join(', ');
+                if (addr) descLines.push(esc(addr));
+                if (item.status) descLines.push(`Status: ${esc(item.status)}`);
+                serviceDate = item.due_date || '';
+              } else if (type === 'disposal_load') {
+                const gal = item.volume_gallons ? Number(item.volume_gallons).toLocaleString() + ' gal' : '';
+                const num = item.disposal_number ? `#${esc(item.disposal_number)}` : '';
+                descLines.push(`<strong>Disposal ${num}${gal ? ' · ' + gal : ''}</strong>`);
+                if (item.customer_name) descLines.push(esc(item.customer_name));
+                if (item.waste_site) descLines.push(`Site: ${esc(item.waste_site)}`);
+                serviceDate = item.disposal_date || '';
+              }
+              const desc = descLines.join('<br>');
+              const deletedDate = item.deleted_at ? new Date(item.deleted_at).toLocaleDateString() : '';
+              return `<tr style="border-bottom:1px solid #eee;">
+                <td style="padding:8px;text-align:center;" onclick="event.stopPropagation()">
+                  <input type="checkbox" class="trash-row-check" data-id="${item.id}" data-type="${item.trash_type}" onchange="updateTrashBatchBtns()">
+                </td>
+                <td style="padding:8px 12px;white-space:nowrap;">${meta.icon} ${meta.label}</td>
+                <td style="padding:8px 12px;">${desc}</td>
+                <td style="padding:8px 12px;color:var(--text-light);">${esc(serviceDate)}</td>
+                <td style="padding:8px 12px;color:var(--text-light);font-size:12px;">${deletedDate}</td>
+                <td style="padding:8px 12px;text-align:right;white-space:nowrap;">
+                  <button class="btn btn-secondary btn-sm" onclick="restoreTrashItem('${item.id}','${item.trash_type}')">Restore</button>
+                  <button class="btn btn-danger btn-sm" style="margin-left:4px;" onclick="purgeTrashItem('${item.id}','${item.trash_type}')">Delete Forever</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      `}
+    </div>
+  `;
+}
+
+let _trashSortCol = 'deleted_at';
+let _trashSortAsc = false;
+
+function filterTrash() {
+  const q = (document.getElementById('trashSearch')?.value || '').toLowerCase();
+  document.querySelectorAll('#page-trash tbody tr').forEach(row => {
+    row.style.display = !q || row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+  updateTrashBatchBtns();
+}
+
+function sortTrash(col) {
+  if (_trashSortCol === col) _trashSortAsc = !_trashSortAsc;
+  else { _trashSortCol = col; _trashSortAsc = true; }
+  const tbody = document.querySelector('#page-trash tbody');
+  if (!tbody) return;
+  const rows = [...tbody.querySelectorAll('tr')];
+  const colIdx = { type: 1, desc: 2, service_date: 3, deleted_at: 4 }[col] ?? 3;
+  rows.sort((a, b) => {
+    const av = a.cells[colIdx]?.textContent.trim() || '';
+    const bv = b.cells[colIdx]?.textContent.trim() || '';
+    return _trashSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+function updateTrashBatchBtns() {
+  const any = document.querySelectorAll('.trash-row-check:checked').length > 0;
+  const r = document.getElementById('trashBatchRestoreBtn');
+  const d = document.getElementById('trashBatchDeleteBtn');
+  if (r) r.style.display = any ? '' : 'none';
+  if (d) d.style.display = any ? '' : 'none';
+}
+
+function toggleAllTrashChecks(checked) {
+  document.querySelectorAll('.trash-row-check').forEach(cb => cb.checked = checked);
+  updateTrashBatchBtns();
+}
+
+async function batchTrashAction(action) {
+  const checked = [...document.querySelectorAll('.trash-row-check:checked')];
+  if (checked.length === 0) return;
+  if (action === 'purge' && !confirm(`Permanently delete ${checked.length} item${checked.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+  for (const cb of checked) {
+    if (action === 'restore') await window.api.restoreTrashItem(cb.dataset.id, cb.dataset.type);
+    else await window.api.purgeTrashItem(cb.dataset.id, cb.dataset.type);
+  }
+  showToast(`${checked.length} item${checked.length > 1 ? 's' : ''} ${action === 'restore' ? 'restored' : 'permanently deleted'}.`, 'success');
+  loadTrash();
+}
+
+async function restoreTrashItem(id, type) {
+  await window.api.restoreTrashItem(id, type);
+  showToast(`${type === 'job' ? 'Work order' : 'Manifest'} restored.`, 'success');
+  loadTrash();
+}
+
+async function purgeTrashItem(id, type) {
+  if (!confirm('Permanently delete this item? It cannot be recovered.')) return;
+  await window.api.purgeTrashItem(id, type);
+  showToast('Permanently deleted.', 'success');
+  loadTrash();
+}
+
+async function purgeAllTrash() {
+  if (!confirm('Permanently delete everything in the recycling bin? This cannot be undone.')) return;
+  const { data: items } = await window.api.getTrash();
+  for (const item of items) {
+    await window.api.purgeTrashItem(item.id, item.trash_type);
+  }
+  showToast('Recycling bin emptied.', 'success');
+  loadTrash();
 }
 
 // ===== SETTINGS =====
@@ -9420,7 +15309,77 @@ async function loadSettings() {
     </div>
 
     <div class="card">
+      <div class="card-header"><h3>Fleet</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">
+        Manage trucks, drivers, tank capacities, and daily truck-driver assignments.
+      </p>
+      <button class="btn btn-primary" type="button" onclick="openTab('vehicles')">🚚 Manage Vehicles</button>
+    </div>
+
+    <div class="card">
       <div class="card-header"><h3>Email (SMTP)</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;">
+        Used for sending customer statements and service reminders directly from the app.
+        Choose your provider below and follow the one-time setup steps.
+      </p>
+
+      <!-- Setup Instructions accordion -->
+      <details style="margin-bottom:18px;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;">
+        <summary style="cursor:pointer;padding:10px 16px;background:#f5f5f5;font-weight:600;font-size:13px;list-style:none;display:flex;justify-content:space-between;align-items:center;">
+          📧 Setup Instructions <span style="font-weight:400;color:var(--text-light);font-size:12px;">click to expand</span>
+        </summary>
+        <div style="padding:16px;font-size:13px;line-height:1.7;color:var(--text);">
+
+          <div style="margin-bottom:14px;">
+            <strong style="color:#1565c0;">Gmail</strong>
+            <ol style="margin:6px 0 0 18px;padding:0;">
+              <li>Go to <strong>myaccount.google.com → Security → 2-Step Verification</strong> and make sure it is ON.</li>
+              <li>Then go to <strong>myaccount.google.com/apppasswords</strong> and create an App Password (name it "ISM" or anything).</li>
+              <li>Copy the 16-character password shown — use that as your SMTP Password below.</li>
+              <li>Enter these settings:<br>
+                <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px;">Host: smtp.gmail.com &nbsp;|&nbsp; Port: 587 &nbsp;|&nbsp; User: your full Gmail address</code>
+              </li>
+            </ol>
+          </div>
+
+          <div style="margin-bottom:14px;">
+            <strong style="color:#1565c0;">Outlook / Microsoft 365</strong>
+            <ol style="margin:6px 0 0 18px;padding:0;">
+              <li>Sign in to <strong>account.microsoft.com → Security → Advanced security options</strong>.</li>
+              <li>Enable <strong>App passwords</strong> and create one for ISM.</li>
+              <li>Enter these settings:<br>
+                <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px;">Host: smtp.office365.com &nbsp;|&nbsp; Port: 587 &nbsp;|&nbsp; User: your full email address</code>
+              </li>
+            </ol>
+          </div>
+
+          <div style="margin-bottom:14px;">
+            <strong style="color:#1565c0;">Apple iCloud Mail</strong>
+            <ol style="margin:6px 0 0 18px;padding:0;">
+              <li>Go to <strong>appleid.apple.com → Sign-In and Security → App-Specific Passwords</strong>.</li>
+              <li>Generate a password for ISM and copy it.</li>
+              <li>Enter these settings:<br>
+                <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px;">Host: smtp.mail.me.com &nbsp;|&nbsp; Port: 587 &nbsp;|&nbsp; User: your @icloud.com address</code>
+              </li>
+            </ol>
+          </div>
+
+          <div>
+            <strong style="color:#1565c0;">Custom / Business Domain (e.g. info@yourcompany.com)</strong>
+            <ol style="margin:6px 0 0 18px;padding:0;">
+              <li>Log in to your hosting control panel (cPanel, Plesk, Cloudflare, etc.).</li>
+              <li>Find your outgoing SMTP settings — usually under <strong>Email Accounts</strong> or <strong>Mail Settings</strong>.</li>
+              <li>Use your full email address as the username and your normal email password (or an app password if your host supports it).</li>
+              <li>Common ports: <strong>587</strong> (STARTTLS, recommended) or <strong>465</strong> (SSL).</li>
+            </ol>
+          </div>
+
+          <div style="margin-top:12px;padding:10px 12px;background:#fff8e1;border-left:3px solid #ffc107;border-radius:4px;font-size:12px;color:#5d4037;">
+            ⚠️ Never use your regular account password here — always use an <strong>App Password</strong>. It's a separate password that only gives email-sending access and can be revoked anytime.
+          </div>
+        </div>
+      </details>
+
       <div class="form-row">
         <div class="form-group">
           <label>SMTP Host</label>
@@ -9440,6 +15399,141 @@ async function loadSettings() {
           <label>SMTP Password</label>
           <input type="password" id="settingsSmtpPass" value="${esc(s.smtp_pass || '')}">
         </div>
+      </div>
+
+      <!-- SMTP TEST BUTTON -->
+      <div style="border:1px dashed #c8c8c8;border-radius:6px;padding:12px 14px;background:#fafafa;margin-top:4px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <label style="font-size:13px;font-weight:600;margin:0;">Send test email to:</label>
+          <input type="email" id="settingsTestEmailTo" value="tyler.interstateseptic@gmail.com" style="flex:1;min-width:240px;padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;">
+          <button type="button" id="settingsSendTestEmailBtn" class="btn btn-primary" onclick="sendSmtpTestEmail()" style="white-space:nowrap;">📧 Send Test Email</button>
+        </div>
+        <div id="settingsTestEmailResult" style="margin-top:10px;font-size:13px;display:none;"></div>
+        <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
+          Uses the values <strong>currently typed above</strong> (you don't have to save first). Delivers a sample appointment confirmation so you can see what customers will receive.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>Geocoding &amp; Map Accuracy</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">
+        Converts customer addresses into map coordinates. Rural Maine addresses (private lanes, RR-numbered roads, new subdivisions) often fail the free OSM geocoder — so ISM supports <strong>Mapbox</strong> as a better provider.
+      </p>
+
+      <details style="margin-bottom:14px;background:#f0f7ff;border:1px solid #bbdefb;border-radius:6px;padding:10px 14px;">
+        <summary style="cursor:pointer;font-weight:600;color:#1565c0;">How to get a free Mapbox token (2-minute setup)</summary>
+        <div style="margin-top:10px;font-size:13px;line-height:1.7;color:#333;">
+          <ol style="margin:4px 0 0 18px;padding:0;">
+            <li>Go to <strong>mapbox.com/signup</strong> and create a free account (no credit card required).</li>
+            <li>After logging in, open your <strong>Account → Tokens</strong> page.</li>
+            <li>Copy the <strong>Default public token</strong> (starts with <code>pk.</code>) OR click <em>Create a token</em> for one scoped only to Geocoding.</li>
+            <li>Paste the token below and click <strong>Test Token</strong>.</li>
+            <li>Switch mode to <strong>Hybrid</strong> (recommended) or <strong>Mapbox</strong> and save.</li>
+          </ol>
+          <div style="margin-top:10px;padding:8px 10px;background:#fff;border-left:3px solid #1565c0;border-radius:4px;font-size:12px;">
+            💡 Free tier includes <strong>100,000 geocoding requests / month</strong>. A septic company with 5,000 customers geocodes each address once (cached forever), so you'll typically use well under 100/month after initial import. You will never pay.
+          </div>
+        </div>
+      </details>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Provider Mode</label>
+          <select id="settingsGeocodeProvider" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;">
+            <option value="auto" ${(!s.geocoding_provider || s.geocoding_provider === 'auto') ? 'selected' : ''}>Auto — use Mapbox if token is set, else OSM</option>
+            <option value="osm" ${s.geocoding_provider === 'osm' ? 'selected' : ''}>OSM only (free, gaps on rural roads)</option>
+            <option value="mapbox" ${s.geocoding_provider === 'mapbox' ? 'selected' : ''}>Mapbox only (best accuracy)</option>
+            <option value="hybrid" ${s.geocoding_provider === 'hybrid' ? 'selected' : ''}>Hybrid — OSM first, Mapbox on miss (cheapest)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Mapbox Access Token <span style="font-size:11px;color:var(--text-light);">(starts with <code>pk.</code>)</span></label>
+          <input type="password" id="settingsMapboxToken" value="${esc(s.mapbox_token || '')}" placeholder="pk.eyJ1Ijo...">
+        </div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid var(--border);margin:20px 0;">
+      <div class="form-group">
+        <label>Anthropic Claude API Key <span style="font-size:11px;color:var(--text-light);">(starts with <code>sk-ant-</code>) — used for AI PDF expense import on the P&amp;L tab</span></label>
+        <input type="password" id="settingsAnthropicKey" value="${esc(s.anthropic_api_key || '')}" placeholder="sk-ant-api03-...">
+        <p style="font-size:11px;color:var(--text-light);margin-top:6px;">Get a key at <strong>console.anthropic.com</strong> → API Keys. Cost: roughly $0.02-0.10 per PDF scanned.</p>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+        <button type="button" class="btn btn-secondary" onclick="testMapboxTokenBtn()">🧪 Test Token</button>
+        <button type="button" class="btn btn-secondary" onclick="clearGeocodeCacheBtn()" title="Deletes all saved coordinates. Next time the map opens, every address will be re-geocoded using your currently-selected provider.">♻️ Clear Geocode Cache</button>
+        <span id="mapboxTestResult" style="font-size:12px;"></span>
+      </div>
+      <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
+        After switching providers, click <strong>Clear Geocode Cache</strong> to force every address to re-resolve through the new provider. Otherwise already-cached (possibly wrong) coords will keep being used.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>Appointment Confirmation Email</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;">
+        When a new job is scheduled, ISM automatically emails the customer an appointment confirmation. Customize what goes in the email below.
+      </p>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:16px;">
+        <input type="checkbox" id="settingsConfirmEmailEnabled" ${s.confirm_email_enabled !== false ? 'checked' : ''} style="width:18px;height:18px;">
+        <span style="font-weight:600;">Send confirmation email when a job is scheduled</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:20px;">
+        <input type="checkbox" id="settingsConfirmEmailReschedule" ${s.confirm_email_send_on_reschedule ? 'checked' : ''} style="width:18px;height:18px;">
+        <span>Also send when appointment date is changed (reschedule)</span>
+      </label>
+      <div class="form-row">
+        <div class="form-group">
+          <label>From Name <span style="font-size:11px;color:var(--text-light);">(shown in customer's inbox)</span></label>
+          <input type="text" id="settingsConfirmFromName" value="${esc(s.confirm_email_from_name || s.company_name || '')}" placeholder="Interstate Septic Systems">
+        </div>
+        <div class="form-group">
+          <label>Subject Line <span style="font-size:11px;color:var(--text-light);">(use {company} for company name)</span></label>
+          <input type="text" id="settingsConfirmSubject" value="${esc(s.confirm_email_subject || '')}" placeholder="Your Appointment Confirmation — {company}">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Policy / Additional Info Bullets <span style="font-size:11px;color:var(--text-light);">(one bullet per line — shown under "Attention: Possible Additional Costs")</span></label>
+        <textarea id="settingsConfirmPolicy" rows="12" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;font-size:13px;resize:vertical;line-height:1.6;">${esc(s.confirm_email_policy != null ? s.confirm_email_policy : `Thank you for scheduling your service with us. If this is a routine pump-out, please note that we are unable to provide an exact arrival time. You are not required to be home for this service. If being home is important to you, we recommend rescheduling for one of our limited 7:30 AM time slots, as these offer the most predictable arrival time. Our drivers' arrival times vary, and we don't want to make a commitment we can't deliver on. We appreciate your understanding and flexibility.
+If you must cancel or reschedule please call the office
+Please ensure the proper septic covers are exposed if you plan to dig them up.
+If a garden hose is available, please have it nearby for the pumper
+The following is a breakdown of our pricing.
+If the tank is difficult to find, the technician may occasionally in rare instances require radio detection, which is an additional $125
+If the distance from the truck to the tank exceeds 100 feet, an additional $10 will be charged for every 40 feet of extra hose required.
+If the driver has to take his shovel off to expose any covers or do any digging, it is an additional $20 per cubic foot of digging.
+If your pump or leachfield has failed, your tank may contain more liquid than expected. Any additional volume will be billed at our standard rates of $250 per 1,000 gallons to pump and $140 per 1,000 gallons to dispose, prorated in 500-gallon increments.
+Our minimum charge is $175, which covers the service call to the property. This fee applies when pumping or other scheduled services are determined to be unnecessary upon arrival. It covers travel time, labor, and scheduling costs.`)}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Footer / Cancellation Notice</label>
+        <input type="text" id="settingsConfirmFooter" value="${esc(s.confirm_email_footer || 'Please respond at least 48 hours before your appointment if you need to reschedule or cancel.')}" style="width:100%;">
+      </div>
+      <p style="font-size:12px;color:var(--text-light);margin-top:4px;">
+        💡 The <strong>Agree &amp; Confirm</strong> button in the email links to your Customer Confirmation Server (configured below). If no public URL is set, a <em>Call to Confirm</em> phone link is shown instead.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>Square Payments</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">
+        Enter your Square API credentials to enable one-click card-on-file charges from the customer accounting screen.
+        Get these from <strong>developer.squareup.com</strong> → your app → Production credentials.
+      </p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Square Access Token</label>
+          <input type="password" id="settingsSquareToken" value="${esc(s.square_access_token || '')}" placeholder="EAAAl...">
+        </div>
+        <div class="form-group">
+          <label>Square Location ID</label>
+          <input type="text" id="settingsSquareLocationId" value="${esc(s.square_location_id || '')}" placeholder="LXXXXXXXXXXXXXXXXX">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+        <button class="btn btn-secondary" onclick="testSquareConnection()">Test Connection</button>
+        <span id="squareTestResult" style="font-size:12px;"></span>
       </div>
     </div>
 
@@ -9558,6 +15652,17 @@ async function loadSettings() {
       `}
     </div>
 
+    <div class="card mt-24" id="cloudUsersCard">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div>
+          <h3 style="margin:0;">Cloud Users (Multi-Device Login)</h3>
+          <div style="font-size:12px;color:var(--text-light);margin-top:4px;">Manage accounts that work on PC, Android, and iPhone via Supabase.</div>
+        </div>
+        <div id="cloudUsersHeaderActions"></div>
+      </div>
+      <div id="cloudUsersBody" style="padding:8px 0;">Loading…</div>
+    </div>
+
     <div class="card mt-24">
       <div class="card-header"><h3>My Account</h3></div>
       <div class="form-row">
@@ -9661,6 +15766,203 @@ async function loadSettings() {
       </div>
     </div>
   `;
+
+  // Render the Cloud Users card after the page is in the DOM
+  renderCloudUsersCard();
+}
+
+// =====================================================================
+// CLOUD USERS — Supabase-backed multi-device account management
+// =====================================================================
+
+async function renderCloudUsersCard() {
+  const body = document.getElementById('cloudUsersBody');
+  const actions = document.getElementById('cloudUsersHeaderActions');
+  if (!body || !actions) return;
+
+  const status = await window.api.cloudConfigStatus();
+  if (!status.configured) {
+    body.innerHTML = `<div style="padding:12px;color:#ff9800;">⚠ Supabase is not configured. Cloud users unavailable.</div>`;
+    actions.innerHTML = '';
+    return;
+  }
+
+  if (!status.signedIn) {
+    actions.innerHTML = '';
+    body.innerHTML = `
+      <div style="padding:8px 0;">
+        <div style="margin-bottom:12px;color:var(--text-light);font-size:13px;">Sign in with your cloud account (owner role) to manage users that work across devices.</div>
+        <div class="form-row" style="max-width:520px;">
+          <div class="form-group">
+            <label>Cloud username</label>
+            <input type="text" id="cloudLoginUsername" placeholder="e.g. tyler" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="cloudLoginPassword" autocomplete="current-password">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="cloudSignIn()">Sign in to Cloud</button>
+        <div id="cloudLoginError" style="color:#e53935;margin-top:8px;font-size:13px;"></div>
+      </div>`;
+    return;
+  }
+
+  // Signed in — show user list
+  actions.innerHTML = `
+    <button class="btn btn-primary btn-sm" onclick="openCloudUserModal()">+ Add Cloud User</button>
+    <button class="btn btn-secondary btn-sm" onclick="cloudSignOut()" style="margin-left:6px;">Sign out</button>`;
+
+  const res = await window.api.cloudUsersList();
+  if (!res.success) {
+    body.innerHTML = `<div style="color:#e53935;padding:12px;">Failed to load: ${esc(res.error)}</div>`;
+    return;
+  }
+  const users = res.data;
+  if (!users.length) {
+    body.innerHTML = `<p style="color:var(--text-light);padding:12px;">No cloud users yet.</p>`;
+    return;
+  }
+  body.innerHTML = `
+    <div style="font-size:12px;color:var(--text-light);margin-bottom:8px;">
+      Signed in as <strong>${esc(status.sessionUser || '')}</strong>. ${users.length} cloud user${users.length === 1 ? '' : 's'}.
+    </div>
+    <table class="data-table">
+      <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Linked</th><th></th></tr></thead>
+      <tbody>
+        ${users.map(u => {
+          const roleColor = u.role === 'owner' ? '#7c4dff' : (u.role === 'office' ? '#1565c0' : '#388e3c');
+          return `
+          <tr>
+            <td><code style="background:#f3f4f6;padding:2px 6px;border-radius:3px;">${esc(u.username || '')}</code></td>
+            <td><strong>${esc(u.name || '')}</strong></td>
+            <td><span class="badge" style="background:${roleColor}20;color:${roleColor};font-weight:600;">${esc(u.role)}</span></td>
+            <td>${u.linked ? '<span style="color:#388e3c;">✓ linked</span>' : '<span style="color:#e53935;">✗ not linked</span>'}</td>
+            <td style="text-align:right;">
+              <button class="btn btn-sm btn-secondary" onclick="openEditCloudUserModal('${u.id}')">Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteCloudUser('${u.id}', '${esc(u.username)}')">Remove</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function cloudSignIn() {
+  const username = document.getElementById('cloudLoginUsername').value.trim();
+  const password = document.getElementById('cloudLoginPassword').value;
+  const errEl = document.getElementById('cloudLoginError');
+  if (!username || !password) {
+    errEl.textContent = 'Username and password are required.';
+    return;
+  }
+  errEl.textContent = '';
+  const res = await window.api.cloudLogin(username, password);
+  if (!res.success) {
+    errEl.textContent = res.error || 'Sign in failed.';
+    return;
+  }
+  if (!res.user || res.user.role !== 'owner') {
+    await window.api.cloudLogout();
+    errEl.textContent = 'Only the owner can manage cloud users from this screen.';
+    return;
+  }
+  showToast('Signed in to cloud as ' + res.user.name, 'success');
+  renderCloudUsersCard();
+}
+
+async function cloudSignOut() {
+  await window.api.cloudLogout();
+  showToast('Signed out of cloud.', 'info');
+  renderCloudUsersCard();
+}
+
+function openCloudUserModal(existing) {
+  const u = existing || {};
+  const isEdit = !!u.id;
+  openModal(isEdit ? 'Edit Cloud User' : 'Add Cloud User', `
+    <input type="hidden" id="cuId" value="${u.id || ''}">
+    <div class="form-group">
+      <label>Username * (used to log in)</label>
+      <input type="text" id="cuUsername" value="${esc(u.username || '')}" placeholder="e.g. john.smith" autocomplete="off" ${isEdit ? 'readonly style="background:#f3f4f6;"' : ''}>
+      ${isEdit ? '<div style="font-size:11px;color:var(--text-light);margin-top:4px;">Username cannot be changed after creation. Delete and re-create to rename.</div>' : ''}
+    </div>
+    <div class="form-group">
+      <label>Full Name *</label>
+      <input type="text" id="cuName" value="${esc(u.name || '')}" placeholder="e.g. John Smith">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Role *</label>
+        <select id="cuRole">
+          <option value="tech" ${u.role === 'tech' ? 'selected' : ''}>Tech (read-only field access)</option>
+          <option value="office" ${u.role === 'office' ? 'selected' : ''}>Office (full operational access)</option>
+          <option value="owner" ${u.role === 'owner' ? 'selected' : ''}>Owner (everything including settings)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" id="cuPhone" value="${esc(u.phone || '')}" placeholder="(207) 555-0100">
+      </div>
+    </div>
+    ${isEdit ? '' : `
+    <div class="form-group">
+      <label>Initial Password * (min 6 chars)</label>
+      <input type="password" id="cuPassword" placeholder="Choose a temporary password" autocomplete="new-password">
+      <div style="font-size:11px;color:var(--text-light);margin-top:4px;">Share this password with the user — they can change it after login.</div>
+    </div>`}
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveCloudUserForm()">${isEdit ? 'Save Changes' : 'Create User'}</button>
+  `);
+}
+
+async function openEditCloudUserModal(id) {
+  const res = await window.api.cloudUsersList();
+  if (!res.success) { showToast('Could not load user: ' + res.error, 'error'); return; }
+  const u = res.data.find(x => x.id === id);
+  if (!u) { showToast('User not found.', 'error'); return; }
+  openCloudUserModal(u);
+}
+
+async function saveCloudUserForm() {
+  const id = document.getElementById('cuId').value;
+  const isEdit = !!id;
+  const username = document.getElementById('cuUsername').value.trim();
+  const name = document.getElementById('cuName').value.trim();
+  const role = document.getElementById('cuRole').value;
+  const phone = document.getElementById('cuPhone').value.trim();
+
+  if (!username) { showToast('Username is required.', 'error'); return; }
+  if (!name) { showToast('Full name is required.', 'error'); return; }
+
+  let res;
+  if (isEdit) {
+    res = await window.api.cloudUsersUpdate(id, { name, role, phone });
+  } else {
+    const password = document.getElementById('cuPassword').value;
+    if (!password || password.length < 6) {
+      showToast('Password must be at least 6 characters.', 'error');
+      return;
+    }
+    res = await window.api.cloudUsersCreate({ username, name, role, phone, password });
+  }
+
+  if (!res.success) {
+    showToast('Failed: ' + res.error, 'error');
+    return;
+  }
+  closeModal();
+  showToast(isEdit ? 'User updated.' : 'User created. Share the password with them.', 'success');
+  renderCloudUsersCard();
+}
+
+async function deleteCloudUser(id, username) {
+  if (!confirm(`Remove cloud user "${username}"? They will no longer be able to log in. (The orphaned auth record can be cleaned via Supabase dashboard.)`)) return;
+  const res = await window.api.cloudUsersDelete(id);
+  if (!res.success) { showToast('Delete failed: ' + res.error, 'error'); return; }
+  showToast('User removed.', 'success');
+  renderCloudUsersCard();
 }
 
 function openTankTypeModal(ttJson) {
@@ -9807,6 +16109,218 @@ async function browsePdfFolder() {
   }
 }
 
+// ===== SQUARE =====
+async function testSquareConnection() {
+  const el = document.getElementById('squareTestResult');
+  if (el) el.innerHTML = '<span style="color:#999;">Testing...</span>';
+  // Save only square fields (safe merge now)
+  const token = document.getElementById('settingsSquareToken').value.trim();
+  const locId = document.getElementById('settingsSquareLocationId').value.trim();
+  if (!token) { if (el) el.innerHTML = '<span style="color:#c62828;">&#10007; Enter an access token first.</span>'; return; }
+  await window.api.saveSettings({ square_access_token: token, square_location_id: locId });
+  const result = await window.api.squareTest();
+  if (el) el.innerHTML = result.success
+    ? `<span style="color:#2e7d32;font-weight:600;">&#10003; Connected — ${esc(result.name)}</span>`
+    : `<span style="color:#c62828;">&#10007; ${esc(result.error)}</span>`;
+}
+
+async function openSquarePayModal(customerId, defaultAmount) {
+  const { data: customer } = await window.api.getCustomer(customerId);
+  if (!customer.square_customer_id) {
+    openSquareLinkModal(customerId);
+    return;
+  }
+  const result = await window.api.squareListCards(customer.square_customer_id);
+  const cards = result.cards || [];
+  if (cards.length === 0) {
+    showToast('No cards on file in Square for this customer. Add one in your Square dashboard.', 'error');
+    return;
+  }
+
+  // Build auto-note from most recent unpaid invoice(s)
+  const { data: invoices } = await window.api.getInvoices({ customerId, paymentStatus: 'unpaid' });
+  const unpaid = (invoices || []).filter(i => i.payment_status !== 'paid').sort((a, b) => (b.svc_date || '').localeCompare(a.svc_date || ''));
+  let autoNote = customer.name;
+  if (unpaid.length > 0) {
+    const inv = unpaid[0];
+    const parts = [];
+    if (inv.invoice_number) parts.push('Inv #' + inv.invoice_number);
+    if (inv.svc_date) parts.push(inv.svc_date);
+    if (parts.length) autoNote = customer.name + ' — ' + parts.join(' ');
+  }
+
+  const cardOptions = cards.map(c =>
+    `<option value="${c.id}">${esc(c.card_brand || 'Card')} ****${c.last_4} exp ${c.exp_month}/${c.exp_year}</option>`
+  ).join('');
+  openModal('Charge Square Card on File', `
+    <input type="hidden" id="squarePayCustomerId" value="${customerId}">
+    <input type="hidden" id="squarePaySquareCustId" value="${customer.square_customer_id}">
+    <div class="form-group">
+      <label>Card</label>
+      <select id="squarePayCardId">${cardOptions}</select>
+    </div>
+    <div class="form-group">
+      <label>Amount ($)</label>
+      <input type="number" id="squarePayAmount" value="${defaultAmount || ''}" min="0.01" step="0.01" placeholder="0.00" style="font-size:20px;font-weight:700;">
+    </div>
+    <div class="form-group">
+      <label>Note</label>
+      <input type="text" id="squarePayNote" value="${esc(autoNote)}">
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" style="background:#006aff;" onclick="runSquareCharge()">Charge Card</button>
+  `);
+}
+
+async function runSquareCharge() {
+  const customerId = document.getElementById('squarePayCustomerId').value;
+  const squareCustomerId = document.getElementById('squarePaySquareCustId').value;
+  const cardId = document.getElementById('squarePayCardId').value;
+  const amount = parseFloat(document.getElementById('squarePayAmount').value);
+  const note = document.getElementById('squarePayNote').value.trim();
+  if (!amount || amount <= 0) { showToast('Enter a valid amount.', 'error'); return; }
+  const amountCents = Math.round(amount * 100);
+
+  const btn = document.querySelector('#modalFooter .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
+
+  const result = await window.api.squareCharge({ squareCustomerId, cardId, amountCents, note });
+  if (result.error) {
+    showToast('Square error: ' + result.error, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Charge Card'; }
+    return;
+  }
+
+  const payment = result.payment;
+  const receiptUrl = payment?.receipt_url;
+
+  // Record payment in app
+  const { data: customer } = await window.api.getCustomer(customerId);
+  await window.api.savePayment({
+    customer_id: customerId,
+    amount,
+    date: new Date().toISOString().split('T')[0],
+    payment_method: 'Square',
+    reference: payment?.id || '',
+    notes: note || '',
+    type: 'payment',
+  });
+
+  closeModal();
+  showToast(`Charged $${amount.toFixed(2)} via Square successfully.`, 'success');
+
+  // Send receipt email
+  if (customer.email) {
+    const { data: settings } = await window.api.getSettings();
+    const co = settings?.company_name || 'Interstate Septic';
+    const dateStr = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+    const subject = `Payment Receipt — ${co}`;
+    const htmlBody = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>body{font-family:Arial,sans-serif;font-size:14px;color:#222;background:#f5f5f5;margin:0;padding:24px;}
+.card{background:#fff;border-radius:8px;padding:32px;max-width:520px;margin:0 auto;box-shadow:0 2px 8px rgba(0,0,0,.08);}
+h2{margin:0 0 4px;color:#1565c0;} .amount{font-size:32px;font-weight:700;color:#2e7d32;margin:16px 0;}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px;}
+.footer{margin-top:20px;font-size:12px;color:#999;text-align:center;}
+</style></head><body><div class="card">
+<h2>${esc(co)}</h2>
+<div style="font-size:13px;color:#666;margin-bottom:16px;">Payment Receipt</div>
+<div class="amount">$${amount.toFixed(2)}</div>
+<div class="row"><span>Date</span><span>${dateStr}</span></div>
+<div class="row"><span>Customer</span><span>${esc(customer.name)}</span></div>
+${note ? `<div class="row"><span>Description</span><span>${esc(note)}</span></div>` : ''}
+<div class="row"><span>Payment Method</span><span>Card on File (Square)</span></div>
+<div class="row"><span>Transaction ID</span><span style="font-size:11px;color:#999;">${esc(payment?.id || 'N/A')}</span></div>
+${receiptUrl ? `<div style="margin-top:16px;text-align:center;"><a href="${receiptUrl}" style="background:#006aff;color:#fff;padding:10px 24px;border-radius:4px;text-decoration:none;font-weight:700;font-size:13px;">View Square Receipt</a></div>` : ''}
+<div class="footer">Thank you for your business!<br>${esc(settings?.company_phone || '')}</div>
+</div></body></html>`;
+    await window.api.sendEmail(customer.email, subject, htmlBody, null);
+    showToast('Receipt emailed to ' + customer.email, 'success');
+  }
+
+  // Refresh accounting view
+  openCustomerAccounting(customerId);
+}
+
+async function openSquareLinkModal(customerId) {
+  const { data: customer } = await window.api.getCustomer(customerId);
+  const prefilledQuery = customer.email || customer.name || '';
+  openModal('Link Square Customer', `
+    <input type="hidden" id="squareLinkCustomerId" value="${customerId}">
+    <div class="form-row">
+      <div class="form-group" style="flex:1;">
+        <label>Search Square</label>
+        <input type="text" id="squareLinkQuery" value="${esc(prefilledQuery)}" placeholder="email or name">
+      </div>
+      <div class="form-group" style="max-width:120px;align-self:flex-end;">
+        <button class="btn btn-secondary" onclick="searchSquareCustomers()">Search</button>
+      </div>
+    </div>
+    <div id="squareLinkResults" style="margin-top:8px;"><div style="color:#999;font-size:12px;">Searching...</div></div>
+    <hr style="margin:12px 0;">
+    <p style="font-size:12px;color:var(--text-light);">Or paste the Square Customer ID directly:</p>
+    <div class="form-row">
+      <div class="form-group" style="flex:1;">
+        <input type="text" id="squareLinkDirectId" placeholder="Square Customer ID">
+      </div>
+      <div class="form-group" style="max-width:120px;align-self:flex-end;">
+        <button class="btn btn-primary" onclick="saveSquareLink()">Link</button>
+      </div>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>`);
+
+  // Auto-search on open using the customer's email
+  if (prefilledQuery) {
+    const result = await window.api.squareSearchCustomers(prefilledQuery);
+    const el = document.getElementById('squareLinkResults');
+    if (!el) return;
+    const customers = result.customers || [];
+    if (customers.length === 0) {
+      el.innerHTML = '<div style="font-size:12px;color:#c62828;">No Square customers found matching that email. Try editing the search above.</div>';
+      return;
+    }
+    el.innerHTML = customers.map(c => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;margin-bottom:4px;background:#f5f5f5;border-radius:4px;font-size:12px;">
+        <div>
+          <div style="font-weight:600;">${esc(c.given_name||'')} ${esc(c.family_name||'')}</div>
+          <div style="color:var(--text-light);">${esc(c.email_address||'')} &bull; ID: ${esc(c.id)}</div>
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('squareLinkDirectId').value='${c.id}';saveSquareLink()">Select</button>
+      </div>`).join('');
+  }
+}
+
+async function searchSquareCustomers() {
+  const query = document.getElementById('squareLinkQuery').value.trim();
+  if (!query) return;
+  const el = document.getElementById('squareLinkResults');
+  el.innerHTML = '<div style="color:#999;font-size:12px;">Searching...</div>';
+  const result = await window.api.squareSearchCustomers(query);
+  const customers = result.customers || [];
+  if (customers.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:#c62828;">No Square customers found. Try a different search or paste the ID directly.</div>';
+    return;
+  }
+  el.innerHTML = customers.map(c => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;margin-bottom:4px;background:#f5f5f5;border-radius:4px;font-size:12px;">
+      <div>
+        <div style="font-weight:600;">${esc(c.given_name||'')} ${esc(c.family_name||'')}</div>
+        <div style="color:var(--text-light);">${esc(c.email_address||'')} &bull; ID: ${esc(c.id)}</div>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="document.getElementById('squareLinkDirectId').value='${c.id}';saveSquareLink()">Select</button>
+    </div>`).join('');
+}
+
+async function saveSquareLink() {
+  const customerId = document.getElementById('squareLinkCustomerId').value;
+  const squareId = document.getElementById('squareLinkDirectId').value.trim();
+  if (!squareId) { showToast('Enter a Square Customer ID.', 'error'); return; }
+  await window.api.saveCustomer({ id: customerId, square_customer_id: squareId });
+  closeModal();
+  showToast('Square customer linked.', 'success');
+  openCustomerAccounting(customerId);
+}
+
 async function saveSettingsForm() {
   const data = {
     company_name: document.getElementById('settingsCompanyName').value.trim(),
@@ -9821,8 +16335,19 @@ async function saveSettingsForm() {
     smtp_port: document.getElementById('settingsSmtpPort').value.trim(),
     smtp_user: document.getElementById('settingsSmtpUser').value.trim(),
     smtp_pass: document.getElementById('settingsSmtpPass').value.trim(),
+    confirm_email_enabled: document.getElementById('settingsConfirmEmailEnabled')?.checked ?? true,
+    confirm_email_send_on_reschedule: document.getElementById('settingsConfirmEmailReschedule')?.checked ?? false,
+    confirm_email_from_name: document.getElementById('settingsConfirmFromName')?.value.trim() || '',
+    confirm_email_subject: document.getElementById('settingsConfirmSubject')?.value.trim() || '',
+    confirm_email_policy: document.getElementById('settingsConfirmPolicy')?.value || '',
+    confirm_email_footer: document.getElementById('settingsConfirmFooter')?.value.trim() || '',
     confirm_public_url: document.getElementById('settingsConfirmPublicUrl').value.trim(),
     confirm_server_port: document.getElementById('settingsConfirmPort').value.trim() || '3456',
+    square_access_token: document.getElementById('settingsSquareToken').value.trim(),
+    square_location_id: document.getElementById('settingsSquareLocationId').value.trim(),
+    geocoding_provider: document.getElementById('settingsGeocodeProvider')?.value || 'auto',
+    mapbox_token: document.getElementById('settingsMapboxToken')?.value.trim() || '',
+    anthropic_api_key: document.getElementById('settingsAnthropicKey')?.value.trim() || '',
   };
 
   const result = await window.api.saveSettings(data);
@@ -9837,6 +16362,118 @@ async function saveSettingsForm() {
     if (statusEl) statusEl.innerHTML = `<span style="color:#388e3c;font-weight:600;">✓ Confirmation server running on port ${serverResult.port}</span>`;
 
     showToast('Settings saved.', 'success');
+  }
+}
+
+// Send a test SMTP email using the values CURRENTLY typed in the Settings form
+// (without forcing a save). Shows a clear inline success / error so the user
+// can diagnose why confirmation emails aren't going out.
+// Test that the Mapbox token works by asking it to geocode a deliberately
+// rural address (8 Raccoon Ln, Cushing — the one OSM misses).
+async function testMapboxTokenBtn() {
+  const tokenEl = document.getElementById('settingsMapboxToken');
+  const resultEl = document.getElementById('mapboxTestResult');
+  if (!tokenEl || !resultEl) return;
+  const token = tokenEl.value.trim();
+  if (!token) {
+    resultEl.innerHTML = '<span style="color:#b71c1c;">Enter a token first.</span>';
+    return;
+  }
+  resultEl.innerHTML = '<span style="color:#555;">Testing…</span>';
+  try {
+    const r = await window.api.testMapboxToken(token);
+    if (r.success) {
+      if (r.match) {
+        resultEl.innerHTML = '<span style="color:#2e7d32;font-weight:600;">✓ Token works.</span> '
+          + '<span style="color:#555;">Geocoded test address as: <strong>' + esc(r.match) + '</strong> '
+          + '(accuracy: ' + esc(r.accuracy || 'unknown') + ', relevance: ' + (r.relevance != null ? r.relevance.toFixed(2) : '—') + ')</span>';
+      } else {
+        resultEl.innerHTML = '<span style="color:#2e7d32;font-weight:600;">✓ Token works.</span> '
+          + '<span style="color:#555;">' + esc(r.note || '') + '</span>';
+      }
+    } else {
+      resultEl.innerHTML = '<span style="color:#b71c1c;font-weight:600;">✗ ' + esc(r.error || 'Token test failed') + '</span>';
+    }
+  } catch (e) {
+    resultEl.innerHTML = '<span style="color:#b71c1c;">✗ ' + esc(e.message || 'Error') + '</span>';
+  }
+}
+
+async function clearGeocodeCacheBtn() {
+  if (!confirm('Delete every saved map coordinate?\n\n'
+    + 'Next time you open the map, every address will re-resolve through your currently-selected geocoding provider. '
+    + 'For 5,000 customers this can take a few minutes (mostly rate-limited if on OSM).\n\n'
+    + 'Do this after switching providers (e.g. OSM → Mapbox) so stale coords get replaced with better ones.')) return;
+  const r = await window.api.clearGeocodeCache();
+  if (r && r.success) {
+    showToast('Geocode cache cleared. Open the map to re-resolve addresses.', 'success');
+    // Also clear in-memory cache so current session picks up the change
+    if (typeof mapGeoCache !== 'undefined') mapGeoCache = {};
+  } else {
+    showToast('Failed to clear geocode cache.', 'error');
+  }
+}
+
+async function sendSmtpTestEmail() {
+  const btn = document.getElementById('settingsSendTestEmailBtn');
+  const resultEl = document.getElementById('settingsTestEmailResult');
+  const toEl = document.getElementById('settingsTestEmailTo');
+  const to = (toEl?.value || '').trim();
+
+  if (!resultEl || !btn) return;
+  resultEl.style.display = 'block';
+
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    resultEl.innerHTML = '<span style="color:#b71c1c;">✗ Enter a valid recipient email address.</span>';
+    return;
+  }
+
+  // Gather live form values so we test exactly what the user is looking at.
+  const liveSettings = {
+    smtp_host: document.getElementById('settingsSmtpHost')?.value.trim() || '',
+    smtp_port: document.getElementById('settingsSmtpPort')?.value.trim() || '587',
+    smtp_user: document.getElementById('settingsSmtpUser')?.value.trim() || '',
+    smtp_pass: document.getElementById('settingsSmtpPass')?.value || '',
+    company_name: document.getElementById('settingsCompanyName')?.value.trim() || '',
+    company_phone: document.getElementById('settingsCompanyPhone')?.value.trim() || '',
+    company_address: document.getElementById('settingsCompanyAddress')?.value.trim() || '',
+    confirm_email_from_name: document.getElementById('settingsConfirmFromName')?.value.trim() || '',
+    confirm_email_subject: document.getElementById('settingsConfirmSubject')?.value.trim() || '',
+    confirm_email_policy: document.getElementById('settingsConfirmPolicy')?.value || '',
+    confirm_email_footer: document.getElementById('settingsConfirmFooter')?.value.trim() || '',
+    confirm_public_url: document.getElementById('settingsConfirmPublicUrl')?.value.trim() || '',
+    confirm_server_port: document.getElementById('settingsConfirmPort')?.value.trim() || '3456',
+  };
+
+  btn.disabled = true;
+  const originalLabel = btn.innerHTML;
+  btn.innerHTML = '⏳ Sending...';
+  resultEl.innerHTML = '<span style="color:#555;">Connecting to SMTP server and sending test message...</span>';
+
+  try {
+    const res = await window.api.sendTestEmail({ to, settings: liveSettings });
+    if (res && res.success) {
+      resultEl.innerHTML = `<div style="background:#e8f5e9;border:1px solid #81c784;border-radius:4px;padding:10px 12px;color:#1b5e20;">
+        ✓ Test email sent to <strong>${esc(to)}</strong>. Check the inbox (and spam folder) in the next minute.
+        <div style="font-size:11px;color:#555;margin-top:4px;">Message ID: ${esc(res.messageId || '')}</div>
+      </div>`;
+    } else {
+      const msg = (res && res.error) || 'Unknown error';
+      resultEl.innerHTML = `<div style="background:#ffebee;border:1px solid #ef9a9a;border-radius:4px;padding:10px 12px;color:#b71c1c;">
+        ✗ Test email failed: <strong>${esc(msg)}</strong>
+        <div style="font-size:11px;color:#555;margin-top:6px;">
+          Common fixes:<br>
+          • For Gmail, SMTP Password must be a 16-char <strong>App Password</strong> (no spaces) — not your regular Google password<br>
+          • SMTP Host: <code>smtp.gmail.com</code> &nbsp; Port: <code>587</code> &nbsp; User: your full Gmail address<br>
+          • Make sure 2-Step Verification is enabled on the Google account so App Passwords are available
+        </div>
+      </div>`;
+    }
+  } catch (err) {
+    resultEl.innerHTML = `<span style="color:#b71c1c;">✗ Error: ${esc(err.message || String(err))}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalLabel;
   }
 }
 
@@ -9928,7 +16565,58 @@ async function saveUserForm() {
 let _importFilePath = null;
 let _importPreview = null;
 
+function _importProgressHTML(title) {
+  return `
+    <div style="background:var(--bg);border-radius:8px;padding:20px;border:1px solid var(--border);">
+      <div style="font-size:15px;font-weight:600;margin-bottom:12px;" id="importProgTitle">${esc(title)}</div>
+      <div style="font-size:12px;color:var(--text-light);margin-bottom:6px;" id="importProgMessage">Preparing…</div>
+      <div style="height:14px;background:#e0e0e0;border-radius:7px;overflow:hidden;margin-bottom:8px;">
+        <div id="importProgBar" style="height:100%;width:0%;background:linear-gradient(90deg,#1565c0,#42a5f5);transition:width 0.15s;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-light);">
+        <span id="importProgCount">0 / 0</span>
+        <span id="importProgStats"></span>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:var(--text-light);font-style:italic;">
+        Keep this window open. The app will stay responsive.
+      </div>
+    </div>
+  `;
+}
+
+function _updateImportProgress(p) {
+  const titleEl = document.getElementById('importProgTitle');
+  const msgEl = document.getElementById('importProgMessage');
+  const barEl = document.getElementById('importProgBar');
+  const countEl = document.getElementById('importProgCount');
+  const statsEl = document.getElementById('importProgStats');
+  if (!barEl) return;
+  const stageLabels = { reading: 'Reading file…', grouping: 'Grouping rows…', importing: 'Importing…', saving: 'Saving to disk…', done: 'Complete!', error: 'Error' };
+  if (titleEl && p.stage && stageLabels[p.stage]) titleEl.textContent = stageLabels[p.stage];
+  if (msgEl) msgEl.textContent = p.message || (p.stage === 'importing' ? 'Processing rows…' : '');
+  if (p.total) {
+    const pct = Math.min(100, Math.round((p.current / p.total) * 100));
+    barEl.style.width = pct + '%';
+    if (countEl) countEl.textContent = `${p.current.toLocaleString()} / ${p.total.toLocaleString()} (${pct}%)`;
+  } else if (p.stage === 'saving' || p.stage === 'done') {
+    barEl.style.width = '100%';
+  }
+  if (statsEl) {
+    const parts = [];
+    if (p.imported != null) parts.push(`${p.imported} imported`);
+    if (p.skipped != null) parts.push(`${p.skipped} skipped`);
+    if (p.propsCreated != null) parts.push(`${p.propsCreated} properties`);
+    if (p.tanksCreated != null) parts.push(`${p.tanksCreated} tanks`);
+    statsEl.textContent = parts.join(' • ');
+  }
+}
+
+function _disableImportButtons(disabled) {
+  document.querySelectorAll('#importArea button').forEach(b => { b.disabled = disabled; });
+}
+
 async function importTankTrackStart() {
+  if (_importInProgress) { showToast('Import already running — please wait.', 'error'); return; }
   const result = await window.api.importSelectFile();
   if (result.canceled) return;
   _importFilePath = result.filePath;
@@ -10000,12 +16688,23 @@ async function importTankTrackStart() {
   `;
 }
 
+let _importInProgress = false;
 async function importTankTrackExecute(max) {
+  if (_importInProgress) { showToast('Import already running — please wait.', 'error'); return; }
+  _importInProgress = true;
   const area = document.getElementById('importArea');
-  const label = max > 0 ? `first ${max}` : 'all';
-  area.innerHTML = `<div style="text-align:center;padding:20px;"><div class="spinner"></div><p style="margin-top:8px;color:var(--text-light);">Importing ${label} customers…</p></div>`;
+  _disableImportButtons(true);
+  area.innerHTML = _importProgressHTML('Importing customers…');
+  window.api.offImportProgress();
+  window.api.onImportProgress((p) => _updateImportProgress(p));
 
-  const result = await window.api.importExecuteTanktrack(_importFilePath, max || 0);
+  let result;
+  try {
+    result = await window.api.importExecuteTanktrack(_importFilePath, max || 0);
+  } finally {
+    window.api.offImportProgress();
+    _importInProgress = false;
+  }
   if (result.error) {
     area.innerHTML = `<div style="color:var(--danger);padding:12px;"><strong>Error:</strong> ${esc(result.error)}</div><button class="btn btn-primary" onclick="importTankTrackStart()">Try Again</button>`;
     return;
@@ -10031,10 +16730,21 @@ async function importTankTrackExecute(max) {
 }
 
 async function importTankTrackInvoices() {
+  if (_importInProgress) { showToast('Import already running — please wait.', 'error'); return; }
+  _importInProgress = true;
   const area = document.getElementById('importArea');
-  area.innerHTML = `<div style="text-align:center;padding:20px;"><div class="spinner"></div><p style="margin-top:8px;color:var(--text-light);">Importing invoices…</p></div>`;
+  _disableImportButtons(true);
+  area.innerHTML = _importProgressHTML('Importing invoices…');
+  window.api.offImportProgress();
+  window.api.onImportProgress((p) => _updateImportProgress(p));
 
-  const result = await window.api.importInvoicesTanktrack(_importFilePath);
+  let result;
+  try {
+    result = await window.api.importInvoicesTanktrack(_importFilePath);
+  } finally {
+    window.api.offImportProgress();
+    _importInProgress = false;
+  }
   if (result.error) {
     area.innerHTML = `<div style="color:var(--danger);padding:12px;"><strong>Error:</strong> ${esc(result.error)}</div><button class="btn btn-primary" onclick="importTankTrackStart()">Try Again</button>`;
     return;
@@ -10271,4 +16981,98 @@ function getMonday(d) {
   date.setDate(diff);
   date.setHours(0, 0, 0, 0);
   return date;
+}
+
+// ===== MOTIVE WEBVIEW CONTROLS =====
+function _motiveWv() { return document.getElementById('motiveWebview'); }
+function motiveGo(dir) {
+  const wv = _motiveWv(); if (!wv) return;
+  try { dir < 0 ? wv.goBack() : wv.goForward(); } catch (_) {}
+}
+function motiveReload() {
+  const wv = _motiveWv(); if (!wv) return;
+  try { wv.reload(); } catch (_) {}
+}
+function motiveHome() {
+  const wv = _motiveWv(); if (!wv) return;
+  try { wv.loadURL('https://app.gomotive.com/en-US/#/fleetview/map'); } catch (_) {}
+}
+
+// ===== MESSENGER WEBVIEW CONTROLS =====
+let _messengerBadgePoll = null;
+
+function _messengerWv() { return document.getElementById('messengerWebview'); }
+
+function messengerGo(dir) {
+  const wv = _messengerWv(); if (!wv) return;
+  try { dir < 0 ? wv.goBack() : wv.goForward(); } catch (_) {}
+}
+function messengerReload() {
+  const wv = _messengerWv(); if (!wv) return;
+  try { wv.reload(); } catch (_) {}
+}
+function messengerHome() {
+  const wv = _messengerWv(); if (!wv) return;
+  try { wv.loadURL('https://www.messenger.com'); } catch (_) {}
+}
+
+let _messengerBadgeDebounce = null;
+
+// Update the red badge — debounced so rapid title-change events don't thrash it
+function _updateMessengerBadge(count) {
+  clearTimeout(_messengerBadgeDebounce);
+  _messengerBadgeDebounce = setTimeout(() => {
+    const navBtn = document.querySelector('[data-page="messenger"]');
+    if (!navBtn) return;
+    let badge = navBtn.querySelector('.messenger-badge');
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'messenger-badge';
+        navBtn.appendChild(badge);
+      }
+      const label = count > 99 ? '99+' : String(count);
+      if (badge.textContent !== label) badge.textContent = label;
+    } else {
+      if (badge) badge.remove();
+    }
+  }, 400);
+}
+
+// Scrape total unread message count from the Messenger webview DOM.
+// Key rule: if the page title says there ARE unread conversations, never return 0
+// (the conversation list may not be rendered in the background, causing false zeros).
+const _MESSENGER_SCRAPE_JS = `(function() {
+  var titleMatch = document.title.match(/^\\((\\d+)\\)/);
+  var titleCount = titleMatch ? parseInt(titleMatch[1]) : 0;
+  var domTotal = 0;
+  var els = document.querySelectorAll('[aria-label]');
+  for (var i = 0; i < els.length; i++) {
+    var lbl = els[i].getAttribute('aria-label') || '';
+    var m = lbl.match(/(\\d+)\\s+unread\\s+message/i);
+    if (m) domTotal += parseInt(m[1]);
+  }
+  if (titleCount === 0) return 0;          // title says clear — trust it
+  return domTotal > 0 ? domTotal : titleCount; // prefer DOM sum, fall back to title
+})()`;
+
+async function _scrapeMessengerUnread() {
+  const wv = _messengerWv();
+  if (!wv) return;
+  try {
+    const count = await wv.executeJavaScript(_MESSENGER_SCRAPE_JS);
+    _updateMessengerBadge(typeof count === 'number' ? count : 0);
+  } catch (_) {}
+}
+
+// Listen for messenger webview title changes to detect unread messages
+function _initMessengerBadge() {
+  if (_messengerBadgePoll) return; // already set up
+  _messengerBadgePoll = true;
+  const wv = _messengerWv();
+  if (!wv) return;
+  // page-title-updated fires instantly whenever the tab title changes — use as trigger to re-scrape
+  wv.addEventListener('page-title-updated', () => _scrapeMessengerUnread());
+  // Also scrape right now in case webview is already loaded with unread messages
+  _scrapeMessengerUnread();
 }

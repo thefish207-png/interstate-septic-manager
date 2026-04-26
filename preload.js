@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   // Customers
   getCustomers: (search) => ipcRenderer.invoke('get-customers', search),
+  getCustomersLite: () => ipcRenderer.invoke('get-customers-lite'),
+  sendTestEmail: (payload) => ipcRenderer.invoke('send-test-email', payload),
   getCustomer: (id) => ipcRenderer.invoke('get-customer', id),
   saveCustomer: (data) => ipcRenderer.invoke('save-customer', data),
   deleteCustomer: (id) => ipcRenderer.invoke('delete-customer', id),
@@ -22,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   getVehicles: () => ipcRenderer.invoke('get-vehicles'),
   saveVehicle: (data) => ipcRenderer.invoke('save-vehicle', data),
   deleteVehicle: (id) => ipcRenderer.invoke('delete-vehicle', id),
+  reorderVehicles: (orderedIds) => ipcRenderer.invoke('reorder-vehicles', orderedIds),
   getTruckDayAssignments: (date) => ipcRenderer.invoke('get-truck-day-assignments', date),
   saveTruckDayAssignment: (data) => ipcRenderer.invoke('save-truck-day-assignment', data),
 
@@ -72,6 +75,11 @@ contextBridge.exposeInMainWorld('api', {
   getDisposalSummary: (period) => ipcRenderer.invoke('get-disposal-summary', period),
   getNextDisposalNumber: () => ipcRenderer.invoke('get-next-disposal-number'),
 
+  // Day Notes
+  getDayNote: (date) => ipcRenderer.invoke('get-day-note', date),
+  saveDayNote: (data) => ipcRenderer.invoke('save-day-note', data),
+  deleteDayNote: (date) => ipcRenderer.invoke('delete-day-note', date),
+
   // Schedule Items (manifests & driver changes on schedule)
   getScheduleItems: (vehicleId, date) => ipcRenderer.invoke('get-schedule-items', vehicleId, date),
   saveScheduleItem: (data) => ipcRenderer.invoke('save-schedule-item', data),
@@ -88,6 +96,38 @@ contextBridge.exposeInMainWorld('api', {
   getOutsidePumpers: () => ipcRenderer.invoke('get-outside-pumpers'),
   saveOutsidePumper: (data) => ipcRenderer.invoke('save-outside-pumper', data),
   deleteOutsidePumper: (id) => ipcRenderer.invoke('delete-outside-pumper', id),
+
+  // AR Report
+  getArReport: () => ipcRenderer.invoke('get-ar-report'),
+
+  // P&L Snapshots
+  getPlSnapshots: () => ipcRenderer.invoke('get-pl-snapshots'),
+  savePlSnapshot: (data) => ipcRenderer.invoke('save-pl-snapshot', data),
+  deletePlSnapshot: (id) => ipcRenderer.invoke('delete-pl-snapshot', id),
+  importPlFile: () => ipcRenderer.invoke('import-pl-file'),
+
+  // Expense snapshots (AI-extracted from PDFs)
+  getExpenseSnapshots: () => ipcRenderer.invoke('get-expense-snapshots'),
+  saveExpenseSnapshot: (data) => ipcRenderer.invoke('save-expense-snapshot', data),
+  deleteExpenseSnapshot: (id) => ipcRenderer.invoke('delete-expense-snapshot', id),
+  importExpensePdfAi: () => ipcRenderer.invoke('import-expense-pdf-ai'),
+  importExpensePdfAiBatch: () => ipcRenderer.invoke('import-expense-pdf-ai-batch'),
+  onExpenseImportProgress: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('expense-import-progress', handler);
+    return () => ipcRenderer.removeListener('expense-import-progress', handler);
+  },
+  onZoomChanged: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('zoom-changed', handler);
+    return () => ipcRenderer.removeListener('zoom-changed', handler);
+  },
+
+  // Square
+  squareSearchCustomers: (query) => ipcRenderer.invoke('square-search-customers', query),
+  squareListCards: (squareCustomerId) => ipcRenderer.invoke('square-list-cards', squareCustomerId),
+  squareCharge: (data) => ipcRenderer.invoke('square-charge', data),
+  squareTest: () => ipcRenderer.invoke('square-test'),
 
   // DEP Reports
   getDepReports: () => ipcRenderer.invoke('get-dep-reports'),
@@ -122,6 +162,22 @@ contextBridge.exposeInMainWorld('api', {
   saveUser: (data) => ipcRenderer.invoke('save-user', data),
   deleteUser: (id) => ipcRenderer.invoke('delete-user', id),
 
+  // Auto-updater
+  installUpdateNow: () => ipcRenderer.invoke('install-update-now'),
+  onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_e, p) => cb(p)),
+  onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_e, p) => cb(p)),
+  onUpdateReady: (cb) => ipcRenderer.on('update-ready', (_e, p) => cb(p)),
+
+  // Cloud (Supabase) Users
+  cloudConfigStatus: () => ipcRenderer.invoke('cloud-config-status'),
+  cloudLogin: (username, password) => ipcRenderer.invoke('cloud-login', username, password),
+  cloudLogout: () => ipcRenderer.invoke('cloud-logout'),
+  cloudRestoreSession: () => ipcRenderer.invoke('cloud-restore-session'),
+  cloudUsersList: () => ipcRenderer.invoke('cloud-users-list'),
+  cloudUsersCreate: (data) => ipcRenderer.invoke('cloud-users-create', data),
+  cloudUsersUpdate: (userId, updates) => ipcRenderer.invoke('cloud-users-update', userId, updates),
+  cloudUsersDelete: (userId) => ipcRenderer.invoke('cloud-users-delete', userId),
+
   // PDF & Email
   generatePdf: (html, filename, options) => ipcRenderer.invoke('generate-pdf', html, filename, options),
   sendEmail: (to, subject, body, attachmentPath) => ipcRenderer.invoke('send-email', to, subject, body, attachmentPath),
@@ -131,13 +187,30 @@ contextBridge.exposeInMainWorld('api', {
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
 
+  // Recycling Bin
+  getTrash: () => ipcRenderer.invoke('get-trash'),
+  restoreTrashItem: (id, type) => ipcRenderer.invoke('restore-trash-item', id, type),
+  purgeTrashItem: (id, type) => ipcRenderer.invoke('purge-trash-item', id, type),
+
+  // Automatic Filter Cleanings (AFC)
+  ensureFilterLead: (data) => ipcRenderer.invoke('ensure-filter-lead', data),
+  getFilterLeads: (filters) => ipcRenderer.invoke('get-filter-leads', filters),
+  saveFilterLead: (data) => ipcRenderer.invoke('save-filter-lead', data),
+  deleteFilterLead: (id) => ipcRenderer.invoke('delete-filter-lead', id),
+  getAfcs: (filters) => ipcRenderer.invoke('get-afcs', filters),
+  saveAfc: (data) => ipcRenderer.invoke('save-afc', data),
+  deleteAfc: (id) => ipcRenderer.invoke('delete-afc', id),
+
   // Seed
   seedTestData: () => ipcRenderer.invoke('seed-test-data'),
   unseedTestData: () => ipcRenderer.invoke('unseed-test-data'),
 
-  // Geocode cache
+  // Geocode cache + provider
   getGeocodeCache: () => ipcRenderer.invoke('get-geocode-cache'),
   saveGeocodeCache: (entry) => ipcRenderer.invoke('save-geocode-cache', entry),
+  geocodeAddress: (parts) => ipcRenderer.invoke('geocode-address', parts),
+  testMapboxToken: (token) => ipcRenderer.invoke('test-mapbox-token', token),
+  clearGeocodeCache: () => ipcRenderer.invoke('clear-geocode-cache'),
 
   // TankTrack Import
   importSelectFile: () => ipcRenderer.invoke('import-select-file'),
@@ -149,6 +222,9 @@ contextBridge.exposeInMainWorld('api', {
   restartConfirmServer: () => ipcRenderer.invoke('restart-confirm-server'),
   getConfirmServerStatus: () => ipcRenderer.invoke('get-confirm-server-status'),
 
+  // Popup windows
+  openPopupWindow: (data) => ipcRenderer.invoke('open-popup-window', data),
+
   // Auto-start
   setAutoStart: (enabled) => ipcRenderer.invoke('set-auto-start', enabled),
   getAutoStart: () => ipcRenderer.invoke('get-auto-start'),
@@ -156,4 +232,26 @@ contextBridge.exposeInMainWorld('api', {
   // Event listeners
   onReminderAlert: (callback) => ipcRenderer.on('reminder-alert', (e, data) => callback(data)),
   onSdnConfirmed: (callback) => ipcRenderer.on('sdn-confirmed', (e, data) => callback(data)),
+  onDataChanged: (callback) => ipcRenderer.on('data-changed', (e, data) => callback(data)),
+  onDockPage: (callback) => ipcRenderer.on('dock-page', (e, page) => callback(page)),
+  onPopupNearTabbar: (callback) => ipcRenderer.on('popup-near-tabbar', (e, data) => callback(data)),
+  onImportProgress: (callback) => ipcRenderer.on('import-progress', (e, data) => callback(data)),
+  offImportProgress: () => ipcRenderer.removeAllListeners('import-progress'),
+  onBulkDeleteProgress: (callback) => ipcRenderer.on('bulk-delete-progress', (e, data) => callback(data)),
+  offBulkDeleteProgress: () => ipcRenderer.removeAllListeners('bulk-delete-progress'),
+  bulkDeleteCustomers: (ids) => ipcRenderer.invoke('bulk-delete-customers', ids),
+  bulkDeleteJobs: (ids) => ipcRenderer.invoke('bulk-delete-jobs', ids),
+  bulkDeleteInvoices: (ids) => ipcRenderer.invoke('bulk-delete-invoices', ids),
+  bulkCancelInvoices: (ids, cancel) => ipcRenderer.invoke('bulk-cancel-invoices', ids, cancel),
+
+  // Dock popup back to main window tab
+  dockToMain: (page) => ipcRenderer.invoke('dock-to-main', page),
+
+  // Motive GPS
+  getMotiveLocations: () => ipcRenderer.invoke('get-motive-locations'),
+
+  // In-page find
+  findInPage: (text, opts) => ipcRenderer.invoke('find-in-page', { text, ...(opts || {}) }),
+  stopFindInPage: () => ipcRenderer.invoke('stop-find-in-page'),
+  onFindInPageResult: (cb) => ipcRenderer.on('find-in-page-result', (_e, r) => cb(r)),
 });
