@@ -4163,9 +4163,41 @@ ipcMain.handle('cloud-login', async (e, username, password) => {
   if (error) return { success: false, error: error.message };
   _sbSession = data.session;
   _saveSbSession(data.session);
-  // Look up role
-  const { data: profile } = await sb.from('users').select('id, name, role, username, color, phone').eq('auth_user_id', data.user.id).single();
-  _currentAppUserId = profile?.id || null;
+  // Look up role. Try by auth_user_id first; fall back to username match (and auto-link the row).
+  let profile = null;
+  let profileErr = null;
+  try {
+    const r = await sb.from('users').select('id, name, role, username, color, phone, auth_user_id').eq('auth_user_id', data.user.id).maybeSingle();
+    profile = r.data; profileErr = r.error;
+  } catch (e) { profileErr = e; }
+  if (!profile) {
+    // Auth row exists but no users row references it yet — find by username and link it.
+    try {
+      const r2 = await sb.from('users').select('id, name, role, username, color, phone, auth_user_id').eq('username', u).maybeSingle();
+      if (r2.data) {
+        profile = r2.data;
+        if (!profile.auth_user_id) {
+          // Auto-link: stamp the missing auth_user_id so future logins succeed via the fast path.
+          try {
+            await sb.from('users').update({ auth_user_id: data.user.id }).eq('id', profile.id);
+            profile.auth_user_id = data.user.id;
+            console.log('[CLOUD] auto-linked users.auth_user_id for', u);
+          } catch (linkErr) {
+            console.warn('[CLOUD] could not auto-link auth_user_id:', linkErr.message);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[CLOUD] username fallback lookup failed:', e.message);
+    }
+  }
+  if (!profile) {
+    return {
+      success: false,
+      error: 'Sign-in succeeded but no user profile is linked to this account. Ask the owner to re-create or re-link this user in Settings → Cloud Users.'
+    };
+  }
+  _currentAppUserId = profile.id;
   // Fire hydrate in background so login returns immediately. The renderer listens for
   // 'data-changed' (broadcast at end of hydrate) and refreshes its views automatically.
   // This keeps the Sign In button responsive instead of dead for 5–15 seconds.
@@ -4188,8 +4220,28 @@ ipcMain.handle('cloud-restore-session', async () => {
   const session = await _restoreSbSession();
   if (!session) return { success: false };
   const sb = _getSbClient();
-  const { data: profile, error } = await sb.from('users').select('id, name, role, username, color, phone').eq('auth_user_id', session.user.id).single();
-  if (error || !profile) {
+  // Try by auth_user_id first; fall back to extracting username from the synthetic email and matching
+  // by username (then auto-linking). Keeps restore robust if the link row was wiped.
+  let profile = null;
+  try {
+    const r = await sb.from('users').select('id, name, role, username, color, phone, auth_user_id').eq('auth_user_id', session.user.id).maybeSingle();
+    profile = r.data;
+  } catch (e) { /* ignored — fall through to username path */ }
+  if (!profile) {
+    try {
+      const emailUsername = (session.user.email || '').split('@')[0];
+      if (emailUsername) {
+        const r2 = await sb.from('users').select('id, name, role, username, color, phone, auth_user_id').eq('username', emailUsername).maybeSingle();
+        if (r2.data) {
+          profile = r2.data;
+          if (!profile.auth_user_id) {
+            try { await sb.from('users').update({ auth_user_id: session.user.id }).eq('id', profile.id); profile.auth_user_id = session.user.id; } catch {}
+          }
+        }
+      }
+    } catch (e) { /* ignored */ }
+  }
+  if (!profile) {
     _clearSbSession();
     _sbSession = null;
     _currentAppUserId = null;

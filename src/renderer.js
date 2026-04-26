@@ -419,14 +419,14 @@ async function doLogin() {
     const cloudStatus = await window.api.cloudConfigStatus();
     if (cloudStatus && cloudStatus.configured) {
       const result = await window.api.cloudLogin(username, password);
-      if (result.success) {
+      if (result && result.success && result.user && result.user.id) {
         currentUser = {
           id: result.user.id,
-          name: result.user.name,
-          role: result.user.role,
-          username: result.user.username,
-          color: result.user.color,
-          phone: result.user.phone
+          name: result.user.name || username,
+          role: result.user.role || 'tech',
+          username: result.user.username || username,
+          color: result.user.color || null,
+          phone: result.user.phone || null
         };
         localStorage.setItem('ism_saved_username', username);
         localStorage.removeItem('ism_saved_password');
@@ -434,7 +434,11 @@ async function doLogin() {
         enterApp();
         return;
       }
-      restoreBtn(result.error || 'Login failed.', true);
+      // Cloud auth ran but didn't yield a usable user record
+      const msg = (result && result.error) ? result.error
+        : (result && result.success && !result.user) ? 'Sign-in succeeded but no profile was returned. Ask the owner to re-link this user.'
+        : 'Login failed.';
+      restoreBtn(msg, true);
       return;
     }
 
