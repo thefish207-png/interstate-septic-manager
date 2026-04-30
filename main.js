@@ -681,7 +681,13 @@ function startConfirmServer() {
       }
 
       // Cloud-aware update: writes through the optimistic helper, syncs to Supabase
-      await upsertAsync('service_due_notices', { ...notice, status: 'confirmed', confirmed_at: new Date().toISOString() });
+      const updatedNotice = await upsertAsync('service_due_notices', { ...notice, status: 'confirmed', confirmed_at: new Date().toISOString() });
+
+      // If this notice was set to recur, spawn the next-cycle notice so the
+      // customer is automatically reminded again N years from this due date.
+      _spawnNextCycleNoticeIfRecurring(updatedNotice).catch(err =>
+        console.warn('[SDN] recurring spawn failed (confirm-link):', err.message)
+      );
 
       // Notify the renderer that a confirmation came in
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1219,6 +1225,164 @@ ipcMain.handle('delete-customer', async (e, id) => {
   }
   await removeAsync('customers', id);
   return { success: true };
+});
+
+// ===== WORK ORDER HISTORY (legacy import from prior software) =====
+// Lazy-loaded cache. The orders file can be 80+ MB so we don't want to
+// pull it into memory unless the user actually opens the History page or
+// a customer detail page that has matched legacy rows.
+let _woHistoryCache = null;
+let _woHistoryCustomersCache = null;
+const _woNorm = (s) =>
+  (s || '').toString().trim().toLowerCase()
+    .replace(/[.,;"'`]/g, '')
+    .replace(/\s+/g, ' ');
+
+function _loadWorkOrderHistory() {
+  if (_woHistoryCache) return _woHistoryCache;
+  const ordersPath = path.join(userDataPath, 'data', 'work_order_history.json');
+  if (!fs.existsSync(ordersPath)) {
+    _woHistoryCache = { orders: [], byMatchedId: new Map(), byNameNorm: new Map(), byLegacyId: new Map() };
+    return _woHistoryCache;
+  }
+  console.log('[WO_HISTORY] loading work_order_history.json...');
+  const t0 = Date.now();
+  const orders = JSON.parse(fs.readFileSync(ordersPath, 'utf8'));
+  const byMatchedId = new Map();
+  const byNameNorm = new Map();
+  const byLegacyId = new Map();
+  for (const o of orders) {
+    if (o.matched_customer_id) {
+      const arr = byMatchedId.get(o.matched_customer_id);
+      if (arr) arr.push(o); else byMatchedId.set(o.matched_customer_id, [o]);
+    }
+    if (o.customer_name_norm) {
+      const arr = byNameNorm.get(o.customer_name_norm);
+      if (arr) arr.push(o); else byNameNorm.set(o.customer_name_norm, [o]);
+    }
+    if (o.legacy_customer_id) {
+      const arr = byLegacyId.get(o.legacy_customer_id);
+      if (arr) arr.push(o); else byLegacyId.set(o.legacy_customer_id, [o]);
+    }
+  }
+  console.log('[WO_HISTORY] loaded ' + orders.length + ' rows in ' + (Date.now() - t0) + 'ms');
+  _woHistoryCache = { orders, byMatchedId, byNameNorm, byLegacyId };
+  return _woHistoryCache;
+}
+
+function _loadWorkOrderHistoryCustomers() {
+  if (_woHistoryCustomersCache) return _woHistoryCustomersCache;
+  const p = path.join(userDataPath, 'data', 'work_order_history_customers.json');
+  if (!fs.existsSync(p)) { _woHistoryCustomersCache = []; return []; }
+  _woHistoryCustomersCache = JSON.parse(fs.readFileSync(p, 'utf8'));
+  return _woHistoryCustomersCache;
+}
+
+// Strip characters that confuse PostgREST's .or() filter syntax. Keep
+// letters/numbers/space/hyphen/period — enough for typical name/address/phone search.
+function _woEscapeSearch(s) {
+  return String(s || '').replace(/[%,()*'"\\]/g, '').trim();
+}
+
+// Returns all legacy work orders for a given current customer (matched_customer_id
+// OR fallback by customer name). Sorted by scheduled_date desc. Hits Supabase
+// when cloud-ready, falls back to local JSON cache when offline.
+ipcMain.handle('get-work-order-history', async (e, params) => {
+  const { customerId, customerName, legacyCustomerId } = params || {};
+
+  if (_cloudReady()) {
+    try {
+      const sb = _getSbClient();
+      const filters = [];
+      if (customerId) filters.push(`matched_customer_id.eq.${customerId}`);
+      if (customerName) {
+        const n = _woEscapeSearch(_woNorm(customerName));
+        if (n) filters.push(`customer_name_norm.eq.${n}`);
+      }
+      if (legacyCustomerId) filters.push(`legacy_customer_id.eq.${_woEscapeSearch(legacyCustomerId)}`);
+      if (filters.length === 0) return { data: [] };
+      const { data, error } = await _withTimeout(
+        sb.from('work_order_history')
+          .select('*')
+          .or(filters.join(','))
+          .order('scheduled_date', { ascending: false })
+          .limit(1000),
+        15000,
+        'cloud get-work-order-history'
+      );
+      if (error) throw error;
+      return { data: data || [] };
+    } catch (err) {
+      console.warn('[WO_HISTORY] cloud query failed, falling back to local:', err.message);
+    }
+  }
+
+  // Local-cache fallback
+  const cache = _loadWorkOrderHistory();
+  const seen = new Set();
+  const out = [];
+  const push = (arr) => {
+    if (!arr) return;
+    for (const o of arr) {
+      if (seen.has(o.legacy_work_order_id)) continue;
+      seen.add(o.legacy_work_order_id);
+      out.push(o);
+    }
+  };
+  if (customerId) push(cache.byMatchedId.get(customerId));
+  if (customerName) push(cache.byNameNorm.get(_woNorm(customerName)));
+  if (legacyCustomerId) push(cache.byLegacyId.get(legacyCustomerId));
+  out.sort((a, b) => (b.scheduled_date || '').localeCompare(a.scheduled_date || ''));
+  return { data: out };
+});
+
+// Returns all unique legacy customers (denormalized, with work-order counts)
+// for the History search page. Optional substring search across name / phone /
+// address / email. Hits Supabase when cloud-ready, falls back to local cache.
+ipcMain.handle('get-legacy-customers', async (e, params) => {
+  const { search, limit, offset } = params || {};
+  const lim = Math.min(limit || 200, 500);
+  const off = offset || 0;
+
+  if (_cloudReady()) {
+    try {
+      const sb = _getSbClient();
+      let q = sb.from('work_order_history_customers').select('*', { count: 'exact' });
+      if (search) {
+        const s = _woEscapeSearch(search).toLowerCase();
+        if (s) {
+          q = q.or(`name.ilike.%${s}%,phone.ilike.%${s}%,email.ilike.%${s}%,address.ilike.%${s}%,legacy_customer_id.eq.${s}`);
+        }
+      }
+      const { data, error, count } = await _withTimeout(
+        q.order('name', { ascending: true }).range(off, off + lim - 1),
+        15000,
+        'cloud get-legacy-customers'
+      );
+      if (error) throw error;
+      return { data: data || [], total: count || 0 };
+    } catch (err) {
+      console.warn('[WO_HISTORY] cloud customers query failed, falling back to local:', err.message);
+    }
+  }
+
+  // Local-cache fallback
+  let custs = _loadWorkOrderHistoryCustomers();
+  if (search) {
+    const s = String(search).toLowerCase();
+    custs = custs.filter(c =>
+      (c.name || '').toLowerCase().includes(s) ||
+      (c.phone || '').toLowerCase().includes(s) ||
+      (c.email || '').toLowerCase().includes(s) ||
+      (c.address || '').toLowerCase().includes(s) ||
+      (c.legacy_customer_id || '').toString().includes(s)
+    );
+  }
+  const total = custs.length;
+  const start = off;
+  const sliceLen = Math.min(lim, custs.length - start);
+  const slice = custs.slice(start, start + sliceLen);
+  return { data: slice, total };
 });
 
 // ===== PROPERTIES =====
@@ -2540,9 +2704,41 @@ ipcMain.handle('get-service-due-notices', async (e, filters) => {
     const cust = customers.find(c => c.id === n.customer_id) || null;
     const prop = properties.find(p => p.id === n.property_id) || null;
     const job = n.job_id ? jobs.find(j => j.id === n.job_id) || null : null;
-    const is_overdue = n.status === 'pending' && n.due_date && n.due_date <= today;
+    const is_overdue = n.status !== 'confirmed' && n.status !== 'completed' && n.due_date && n.due_date < today;
     const daysUntilDue = n.due_date ? Math.ceil((new Date(n.due_date) - new Date(today)) / 86400000) : null;
-    return { ...n, customer: cust, property: prop, job, is_overdue, days_until_due: daysUntilDue };
+
+    // Contact-attempt summaries — used by the renderer to show a richer status.
+    // We intentionally count "any send" not just sent_at presence so older entries
+    // that lack timestamps still register as a contact attempt.
+    const sentEmails = (n.notification_schedule || []).filter(it => it.sent);
+    const emailCount = sentEmails.length;
+    const lastEmailAt = sentEmails
+      .map(it => it.sent_at || '')
+      .filter(Boolean)
+      .sort()
+      .pop() || null;
+    const mailCount = Array.isArray(n.mail_history) ? n.mail_history.length : 0;
+    const totalContactAttempts = emailCount + mailCount;
+    // "Reminded and overdue" — at least one contact attempt has gone out, the
+    // due date has passed, and the customer hasn't responded. This is the
+    // state where the operator should call them directly.
+    const reminded_overdue = totalContactAttempts > 0 && is_overdue;
+    // "Overdue, no contact" — past due AND we've never reached out. Means the
+    // notice was created but the email pipeline never fired, or the customer
+    // has no email and no postcard was printed yet.
+    const overdue_no_contact = totalContactAttempts === 0 && is_overdue;
+    return {
+      ...n,
+      customer: cust, property: prop, job,
+      is_overdue,
+      days_until_due: daysUntilDue,
+      email_count: emailCount,
+      mail_count: mailCount,
+      total_contact_attempts: totalContactAttempts,
+      last_email_at: lastEmailAt,
+      reminded_overdue,
+      overdue_no_contact,
+    };
   });
 
   // Sort: overdue first, then by due date ascending
@@ -2555,8 +2751,88 @@ ipcMain.handle('get-service-due-notices', async (e, filters) => {
   return { data: notices };
 });
 
+// When a notice transitions to status='confirmed' (or 'completed') AND it's
+// flagged recurring, spawn the next-cycle notice automatically. due_date rolls
+// forward by interval_value × interval_unit (years/months/days). The new
+// notice gets its own confirm_token + a fresh notification_schedule built
+// from the operator's current cadence in Settings → Service Due Reminders.
+async function _spawnNextCycleNoticeIfRecurring(notice) {
+  try {
+    if (!notice || notice.recurring === false) return null;
+    if (!notice.due_date) return null;
+    const intervalValue = parseInt(notice.interval_value, 10);
+    const intervalUnit = notice.interval_unit || 'years';
+    if (!intervalValue || intervalUnit === 'custom') return null;
+
+    const d = new Date(notice.due_date + 'T00:00:00');
+    if (intervalUnit === 'years')  d.setFullYear(d.getFullYear() + intervalValue);
+    else if (intervalUnit === 'months') d.setMonth(d.getMonth() + intervalValue);
+    else if (intervalUnit === 'days')   d.setDate(d.getDate() + intervalValue);
+    else return null;
+    const nextDueDate = d.toISOString().split('T')[0];
+
+    // Build notification_schedule from saved settings cadence
+    const settingsPath = path.join(userDataPath, 'settings.json');
+    const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+    const offsets = Array.isArray(settings.sdn_reminder_offsets)
+      ? settings.sdn_reminder_offsets.filter(o => o.enabled !== false)
+      : [];
+    const schedule = offsets.map(o => {
+      const sd = new Date(nextDueDate + 'T00:00:00');
+      sd.setDate(sd.getDate() + (parseInt(o.days_offset, 10) || 0));
+      return {
+        days_offset: o.days_offset,
+        label: o.label,
+        send_date: sd.toISOString().split('T')[0],
+        sent: false,
+      };
+    });
+
+    const next = {
+      customer_id: notice.customer_id,
+      property_id: notice.property_id,
+      job_id: null,
+      tank_id: notice.tank_id || null,
+      service_type: notice.service_type,
+      due_date: nextDueDate,
+      method: notice.method || 'email',
+      status: 'pending',
+      email_enabled: notice.email_enabled !== false,
+      interval_value: intervalValue,
+      interval_unit: intervalUnit,
+      recurring: true,
+      notification_schedule: schedule,
+      confirm_token: crypto.randomUUID(),
+      parent_notice_id: notice.id || null,
+      notes: notice.notes || '',
+    };
+    const created = await upsertAsync('service_due_notices', next);
+    console.log(`[SDN] Spawned next-cycle notice for ${notice.service_type || ''} (${nextDueDate})`);
+    return created;
+  } catch (err) {
+    console.warn('[SDN] _spawnNextCycleNoticeIfRecurring failed:', err.message);
+    return null;
+  }
+}
+
 ipcMain.handle('save-service-due-notice', async (e, data) => {
+  // Detect a status transition to "confirmed" or "completed" so we can fire
+  // the recurring-cycle spawn exactly once at the right moment.
+  let priorStatus = null;
+  if (data.id) {
+    const prior = await findByIdAsync('service_due_notices', data.id);
+    priorStatus = prior?.status || null;
+  }
   const saved = await upsertAsync('service_due_notices', data);
+  const newStatus = saved?.status || data.status;
+  const justConfirmed = (newStatus === 'confirmed' || newStatus === 'completed') &&
+                        priorStatus !== 'confirmed' && priorStatus !== 'completed';
+  if (justConfirmed) {
+    // Run the spawn but don't block the original save's success on it
+    _spawnNextCycleNoticeIfRecurring(saved).catch(err =>
+      console.warn('[SDN] recurring spawn failed:', err.message)
+    );
+  }
   return { success: true, data: saved };
 });
 
@@ -2599,23 +2875,43 @@ ipcMain.handle('send-service-due-notification', async (e, id, daysBeforeDue) => 
     const serviceType = notice.service_type || 'Septic Service';
     const propAddr = prop ? `${prop.address || ''}, ${prop.city || ''} ${prop.state || ''} ${prop.zip || ''}`.trim() : 'your property';
 
-    const daysText = daysBeforeDue === 0 ? 'today' : `in ${daysBeforeDue} day${daysBeforeDue > 1 ? 's' : ''}`;
+    // Reminder copy — always a "please call to schedule" nudge, never an
+    // announcement that a service is being performed.
+    const dayOf = daysBeforeDue === 0;
+    const overdue = daysBeforeDue < 0;
+    let leadLine, timingDetail;
+    if (overdue) {
+      leadLine = `Our records show your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong> is now <strong>overdue</strong>.`;
+      timingDetail = `It was scheduled to be due ${Math.abs(daysBeforeDue)} day${Math.abs(daysBeforeDue) === 1 ? '' : 's'} ago. Please give us a call so we can get you back on the calendar.`;
+    } else if (dayOf) {
+      leadLine = `It's time to schedule your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong>.`;
+      timingDetail = `This service is due now — please call us to pick a date that works for you.`;
+    } else {
+      leadLine = `It's almost time to schedule your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong>.`;
+      timingDetail = `Your service is due in about ${daysBeforeDue} day${daysBeforeDue === 1 ? '' : 's'}. Please call us at your convenience to get on the schedule.`;
+    }
     const html = `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
         <h2 style="color:#1b5e20;">${companyName}</h2>
         <p>Dear ${cust.name || 'Valued Customer'},</p>
-        <p>This is a reminder that your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong> is due <strong>${daysText}</strong>.</p>
-        <p>Please contact us to schedule your appointment at your earliest convenience.</p>
-        ${companyPhone ? `<p>Phone: <strong>${companyPhone}</strong></p>` : ''}
-        <p>Thank you for your business!</p>
+        <p>${leadLine}</p>
+        <p>${timingDetail}</p>
+        ${companyPhone ? `<p style="font-size:16px;">Call us at <strong>${companyPhone}</strong> to book your appointment.</p>` : '<p>Please reply to this email or call our office to book your appointment.</p>'}
+        <p>Thank you — we appreciate your business!</p>
         <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
-        <p style="font-size:12px;color:#999;">This is a reminder from ${companyName}.</p>
+        <p style="font-size:12px;color:#999;">This is an automated reminder from ${companyName}. If you've already scheduled your appointment, you may disregard this message.</p>
       </div>`;
+
+    const subject = overdue
+      ? `Overdue — please schedule your ${serviceType} service - ${companyName}`
+      : dayOf
+        ? `Time to schedule your ${serviceType} service - ${companyName}`
+        : `Reminder: schedule your upcoming ${serviceType} service - ${companyName}`;
 
     await transporter.sendMail({
       from: settings.smtp_user,
       to: cust.email,
-      subject: `${serviceType} Reminder (${daysText}) - ${companyName}`,
+      subject,
       html,
     });
 
@@ -4462,13 +4758,26 @@ function buildReminderEmail(cust, prop, serviceType, label, dueDate, companyName
     ? `${prop.address || ''}, ${prop.city || ''} ${prop.state || ''} ${prop.zip || ''}`.trim()
     : 'your property';
 
-  let timingText;
-  if (label === 'Day Of') {
-    timingText = `<strong>today</strong>`;
-  } else if (label && label.includes('After')) {
-    timingText = `<strong>overdue</strong> — it was due on ${dueDate}`;
+  // Reminders are a *call-to-action to schedule* — never an announcement that
+  // a service is happening today. Phrasing should always nudge the customer
+  // to call in to set up the appointment.
+  const isAfter = !!(label && /after/i.test(label));
+  const isDayOf = label === 'Day Of';
+  let leadLine;        // top sentence
+  let timingDetail;    // optional second line that softens the urgency
+  if (isAfter) {
+    leadLine = `Our records show your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong> is now <strong>overdue</strong>.`;
+    timingDetail = `It was last scheduled to be due on <strong>${dueDate}</strong>. Please give us a call so we can get you back on the calendar.`;
+  } else if (isDayOf) {
+    leadLine = `It's time to schedule your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong>.`;
+    timingDetail = `This service is due now — please call us to pick a date that works for you.`;
   } else {
-    timingText = `due on <strong>${dueDate}</strong> (${label ? label.toLowerCase() : 'soon'})`;
+    // "1 Month Before" / "1 Week Before" / "3 Days Before" / etc.
+    // Strip the trailing "Before" and turn it into "in <amount>" for natural reading.
+    const amount = (label || '').replace(/\s*Before\s*$/i, '').trim();
+    const inPhrase = amount ? `in about ${amount.toLowerCase()}` : 'soon';
+    leadLine = `It's almost time to schedule your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong>.`;
+    timingDetail = `Your service is due ${inPhrase} (target date <strong>${dueDate}</strong>). Please call us at your convenience to get on the schedule.`;
   }
 
   const { publicUrl, port } = getServerSettings();
@@ -4478,27 +4787,29 @@ function buildReminderEmail(cust, prop, serviceType, label, dueDate, companyName
   const confirmBlock = confirmUrl ? `
     <div style="margin:24px 0;text-align:center;">
       <a href="${confirmUrl}" style="display:inline-block;background:#2e7d32;color:white;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:bold;">
-        ✓ Confirm / I'll Schedule My Appointment
+        ✓ I'll Call to Schedule
       </a>
-      <p style="margin-top:10px;font-size:12px;color:#999;">Clicking this button will stop further reminders for this notice.</p>
+      <p style="margin-top:10px;font-size:12px;color:#999;">Clicking this button lets us know you've seen the reminder and stops further emails for this service.</p>
     </div>` : '';
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
       <h2 style="color:#1b5e20;">${companyName}</h2>
       <p>Dear ${cust.name || 'Valued Customer'},</p>
-      <p>This is a friendly reminder that your <strong>${serviceType}</strong> service at <strong>${propAddr}</strong> is ${timingText}.</p>
-      <p>Please contact us at your earliest convenience to schedule your appointment.</p>
-      ${companyPhone ? `<p>Phone: <strong>${companyPhone}</strong></p>` : ''}
+      <p>${leadLine}</p>
+      <p>${timingDetail}</p>
+      ${companyPhone ? `<p style="font-size:16px;">Call us at <strong>${companyPhone}</strong> to book your appointment.</p>` : '<p>Please reply to this email or call our office to book your appointment.</p>'}
       ${confirmBlock}
-      <p>Thank you for your business!</p>
+      <p>Thank you — we appreciate your business!</p>
       <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
-      <p style="font-size:12px;color:#999;">This is an automated reminder from ${companyName}. If you have already scheduled your appointment, you may disregard this message.</p>
+      <p style="font-size:12px;color:#999;">This is an automated reminder from ${companyName}. If you've already scheduled your appointment, you may disregard this message.</p>
     </div>`;
 
-  const subject = label === 'Day Of'
-    ? `${serviceType} Service Due Today - ${companyName}`
-    : `${serviceType} Reminder: ${label} - ${companyName}`;
+  const subject = isAfter
+    ? `Overdue — please schedule your ${serviceType} service - ${companyName}`
+    : isDayOf
+      ? `Time to schedule your ${serviceType} service - ${companyName}`
+      : `Reminder: schedule your upcoming ${serviceType} service - ${companyName}`;
 
   return { html, subject };
 }
@@ -4584,6 +4895,62 @@ async function checkDueNotices() {
     }
 
     if (dirty) writeCollection('service_due_notices', notices);
+
+    // --- AUTO-ROLL pass ---
+    // After reminders have been sent (email or postcard) and the due date has
+    // passed, the cycle is considered "done" and we automatically roll the
+    // notice forward to the next service cycle. This is the "fire and forget"
+    // model the operator requested: ISM does the reminding, the customer either
+    // responds or doesn't, and either way the next cycle gets queued so
+    // nothing falls through the cracks.
+    //
+    // We re-read the file here because the email loop above may have just
+    // updated `notices` and `_store`; using the freshest data avoids
+    // double-rolling on the next tick.
+    try {
+      const grace = parseInt(settings.sdn_auto_roll_grace_days || 0, 10) || 0;
+      const cutoff = new Date(today + 'T00:00:00');
+      cutoff.setDate(cutoff.getDate() - grace);
+      const cutoffStr = cutoff.toISOString().split('T')[0];
+
+      const fresh = (await readCollectionAsync('service_due_notices')).filter(n => !n.deleted_at);
+      for (const n of fresh) {
+        // Eligibility:
+        //  - not already confirmed/completed/dismissed
+        //  - past due date (with optional grace days from settings)
+        //  - recurring not explicitly disabled
+        //  - has fired at least one contact attempt (email reminder OR postcard)
+        //  - has a non-custom interval we can advance
+        if (n.status === 'confirmed' || n.status === 'completed' || n.status === 'dismissed') continue;
+        if (!n.due_date || n.due_date > cutoffStr) continue;
+        if (n.recurring === false) continue;
+        const sentEmail = (n.notification_schedule || []).some(it => it.sent);
+        const wasMailed = Array.isArray(n.mail_history) && n.mail_history.length > 0;
+        if (!sentEmail && !wasMailed) continue;
+        const intervalUnit = n.interval_unit || 'years';
+        if (intervalUnit === 'custom' || !parseInt(n.interval_value, 10)) continue;
+
+        // Spawn the next-cycle notice using the existing helper. It rebuilds
+        // notification_schedule from the current Settings cadence and stamps
+        // a fresh confirm_token, so the new cycle is fully self-contained.
+        const child = await _spawnNextCycleNoticeIfRecurring(n);
+        if (!child) continue; // helper logs the failure reason
+
+        // Mark the original as completed so it leaves the active queue. We
+        // record auto_rolled_at so the operator can see (in the modal) that
+        // this transition happened automatically, not via customer confirm.
+        await upsertAsync('service_due_notices', {
+          ...n,
+          status: 'completed',
+          auto_rolled_at: new Date().toISOString(),
+          auto_rolled_to_id: child.id || null,
+          updated_at: new Date().toISOString(),
+        });
+        console.log(`[SDN] Auto-rolled notice ${n.id} (${n.service_type || ''}) → next cycle ${child.id}`);
+      }
+    } catch (err) {
+      console.warn('[SDN] auto-roll pass failed:', err.message);
+    }
   } catch (err) {
     console.error('checkDueNotices error:', err.message);
   }
@@ -4592,6 +4959,82 @@ async function checkDueNotices() {
 ipcMain.handle('check-due-notices', async () => {
   await checkDueNotices();
   return { success: true };
+});
+
+// Save a text/CSV sidecar file next to a previously-generated PDF.
+// Used by the postcard-batch flow to drop a recipient CSV alongside the PDF
+// so the operator (or print shop) has the address list in machine-readable form.
+ipcMain.handle('save-sidecar-file', async (e, sourcePath, suffix, content) => {
+  try {
+    if (!sourcePath || typeof sourcePath !== 'string') {
+      return { success: false, error: 'Source path required' };
+    }
+    const ext = path.extname(sourcePath);          // ".pdf"
+    const base = sourcePath.slice(0, sourcePath.length - ext.length);
+    const sidecar = base + suffix;                 // e.g. "...service-due-postcards-….recipients.csv"
+    fs.writeFileSync(sidecar, content, 'utf8');
+    return { success: true, path: sidecar };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Rebuild notification_schedule on every pending (non-confirmed) notice using
+// the cadence in settings.sdn_reminder_offsets. Sent items are preserved so
+// reminders that already went out don't re-send. Returns count of touched notices.
+ipcMain.handle('regenerate-sdn-schedules', async () => {
+  try {
+    const settingsPath = path.join(userDataPath, 'settings.json');
+    const settings = fs.existsSync(settingsPath)
+      ? JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+      : {};
+    const offsets = Array.isArray(settings.sdn_reminder_offsets)
+      ? settings.sdn_reminder_offsets.filter(o => o.enabled !== false)
+      : [];
+    if (offsets.length === 0) {
+      return { success: false, error: 'No reminder offsets enabled in Settings.' };
+    }
+    const addDays = (dateStr, days) => {
+      const d = new Date(dateStr + 'T00:00:00');
+      d.setDate(d.getDate() + days);
+      return d.toISOString().split('T')[0];
+    };
+    const notices = await readCollectionAsync('service_due_notices');
+    let touched = 0;
+    for (const n of notices) {
+      if (n.deleted_at) continue;
+      if (n.status === 'confirmed') continue;
+      if (!n.due_date) continue;
+      // Preserve already-sent items by offset, so a reminder that fired stays fired
+      const sentByOffset = {};
+      (n.notification_schedule || []).forEach(item => {
+        if (item.sent) sentByOffset[item.days_offset] = item;
+      });
+      const newSchedule = offsets.map(o => {
+        const prior = sentByOffset[o.days_offset];
+        return prior ? prior : {
+          days_offset: o.days_offset,
+          label: o.label,
+          send_date: addDays(n.due_date, o.days_offset),
+          sent: false,
+        };
+      });
+      // Also keep any previously-sent items that no longer match the new offset list
+      Object.values(sentByOffset).forEach(prior => {
+        if (!newSchedule.find(x => x.days_offset === prior.days_offset)) newSchedule.push(prior);
+      });
+      newSchedule.sort((a, b) => a.days_offset - b.days_offset);
+      await upsertAsync('service_due_notices', {
+        ...n,
+        notification_schedule: newSchedule,
+        updated_at: new Date().toISOString(),
+      });
+      touched++;
+    }
+    return { success: true, touched };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('restart-confirm-server', async () => {

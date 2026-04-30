@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld('api', {
   deleteServiceDueNotice: (id) => ipcRenderer.invoke('delete-service-due-notice', id),
   sendServiceDueNotification: (id, daysBeforeDue) => ipcRenderer.invoke('send-service-due-notification', id, daysBeforeDue),
   scheduleServiceDueNotifications: (id, schedule) => ipcRenderer.invoke('schedule-service-due-notifications', id, schedule),
+  checkDueNoticesNow: () => ipcRenderer.invoke('check-due-notices'),
+  regenerateSdnSchedules: () => ipcRenderer.invoke('regenerate-sdn-schedules'),
+  saveSidecarFile: (sourcePath, suffix, content) => ipcRenderer.invoke('save-sidecar-file', sourcePath, suffix, content),
 
   // Disposal
   getDisposalLoads: (filters) => ipcRenderer.invoke('get-disposal-loads', filters),
@@ -217,6 +220,10 @@ contextBridge.exposeInMainWorld('api', {
   geocodeAddress: (parts) => ipcRenderer.invoke('geocode-address', parts),
   testMapboxToken: (token) => ipcRenderer.invoke('test-mapbox-token', token),
   clearGeocodeCache: () => ipcRenderer.invoke('clear-geocode-cache'),
+
+  // Work Order History (legacy from prior software)
+  getWorkOrderHistory: (params) => ipcRenderer.invoke('get-work-order-history', params),
+  getLegacyCustomers: (params) => ipcRenderer.invoke('get-legacy-customers', params),
 
   // TankTrack Import
   importSelectFile: () => ipcRenderer.invoke('import-select-file'),

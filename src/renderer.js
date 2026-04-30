@@ -777,6 +777,7 @@ document.addEventListener('keydown', (e) => {
 // ===== NAVIGATION =====
 const PAGE_LABELS = {
   dashboard:'Dashboard', schedule:'Schedule', jobs:'Jobs', customers:'Customers',
+  history:'Summit History',
   invoices:'Invoices', disposal:'Disposals', sdn:'Service Due', afc:'Filter Cleanings',
   reports:'Reports', motive:'Motive', messenger:'Messenger',
   dep:'DEP Reports', vehicles:'Vehicles',
@@ -988,6 +989,7 @@ function navigateTo(page) {
   const titles = {
     dashboard: 'Dashboard',
     customers: 'Customers',
+    history: 'Summit History',
     schedule: 'Schedule',
     jobs: 'Jobs',
     motive: 'Motive',
@@ -1094,6 +1096,7 @@ function navigateTo(page) {
   const loaders = {
     dashboard: loadDashboard,
     customers: loadCustomers,
+    history: loadHistory,
     schedule: loadSchedule,
     jobs: loadJobsList,
     invoices: loadInvoices,
@@ -1523,6 +1526,157 @@ async function exportCustomersCsv() {
     showToast(`Exported ${customers.length} customers.`, 'success');
   } catch (e) {
     showToast('Export failed: ' + e.message, 'error');
+  }
+}
+
+// ===== LEGACY HISTORY PAGE (work orders from prior software) =====
+let _historySearchTimeout;
+let _historyState = { search: '', loading: false };
+
+async function loadHistory(search) {
+  navHistory = [];
+  _historyState.search = search != null ? search : (_historyState.search || '');
+  const page = document.getElementById('page-history');
+  page.innerHTML = `
+    <div class="search-bar" style="display:flex;gap:8px;align-items:center;">
+      <input type="text" id="historySearchInput" placeholder="Search legacy customers by name, phone, address, email, or legacy ID..." value="${esc(_historyState.search)}" oninput="debounceHistorySearch()" style="flex:1;">
+      <span id="historyResultCount" style="font-size:12px;color:var(--text-light);"></span>
+    </div>
+    <div id="historyResults" class="card" style="padding:0;overflow:hidden;margin-top:8px;">
+      <div style="padding:24px;text-align:center;color:var(--text-light);">Loading legacy customers&hellip;</div>
+    </div>
+  `;
+  if (_historyState.search) {
+    const el = document.getElementById('historySearchInput');
+    if (el) { el.focus(); el.setSelectionRange(_historyState.search.length, _historyState.search.length); }
+  }
+  await _renderHistoryResults();
+}
+
+function debounceHistorySearch() {
+  clearTimeout(_historySearchTimeout);
+  _historySearchTimeout = setTimeout(() => {
+    _historyState.search = document.getElementById('historySearchInput').value || '';
+    _renderHistoryResults();
+  }, 250);
+}
+
+async function _renderHistoryResults() {
+  const container = document.getElementById('historyResults');
+  const countEl = document.getElementById('historyResultCount');
+  if (!container) return;
+  if (_historyState.loading) return;
+  _historyState.loading = true;
+  try {
+    const { data: custs, total } = await window.api.getLegacyCustomers({
+      search: _historyState.search,
+      limit: 200,
+      offset: 0,
+    });
+    if (countEl) {
+      const shown = Math.min(custs.length, total);
+      countEl.textContent = total > shown
+        ? `Showing ${shown} of ${total.toLocaleString()}`
+        : `${total.toLocaleString()} customer${total !== 1 ? 's' : ''}`;
+    }
+    if (!custs.length) {
+      container.innerHTML = `
+        <div style="padding:32px;text-align:center;color:var(--text-light);">
+          <div style="font-size:32px;margin-bottom:8px;">&#128270;</div>
+          <p>No legacy customers ${_historyState.search ? 'match this search' : 'imported yet'}.</p>
+          ${!_historyState.search ? '<p style="font-size:12px;">Run <code>node scripts/import-work-order-history.js</code> to import the CSV.</p>' : ''}
+        </div>
+      `;
+      return;
+    }
+    container.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Address</th>
+            <th>Phone</th>
+            <th>Email</th>
+            <th style="text-align:right;">Work Orders</th>
+            <th>First / Last</th>
+            <th>Linked?</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${custs.map(c => {
+            const linked = c.matched_customer_id
+              ? `<a href="#" onclick="event.preventDefault();openCustomerDetail('${c.matched_customer_id}')" style="color:#1565c0;">View current &rarr;</a>`
+              : '<span style="color:#9e9e9e;font-size:11px;">Not linked</span>';
+            const onclick = `openLegacyCustomerDetail('${esc(c.legacy_customer_id || '')}', '${esc((c.name_norm || '').replace(/'/g, "\\'"))}')`;
+            return `
+              <tr>
+                <td onclick="${onclick}" style="cursor:pointer;"><strong>${esc(c.name || '')}</strong></td>
+                <td onclick="${onclick}" style="cursor:pointer;font-size:12px;">${esc(c.address || '')}</td>
+                <td onclick="${onclick}" style="cursor:pointer;">${esc(c.phone || '')}</td>
+                <td onclick="${onclick}" style="cursor:pointer;">${esc(c.email || '')}</td>
+                <td onclick="${onclick}" style="cursor:pointer;text-align:right;">${c.count}</td>
+                <td onclick="${onclick}" style="cursor:pointer;font-size:11px;color:var(--text-light);">${esc(c.first_date || '')} &mdash; ${esc(c.last_date || '')}</td>
+                <td>${linked}</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (err) {
+    console.error('[history] load failed:', err);
+    container.innerHTML = `
+      <div style="padding:24px;text-align:center;color:#c62828;">
+        Failed to load legacy customers: ${esc(err.message || String(err))}
+      </div>
+    `;
+  } finally {
+    _historyState.loading = false;
+  }
+}
+
+async function openLegacyCustomerDetail(legacyCustomerId, nameNorm) {
+  currentPage = 'history';
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-history').classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === 'history'));
+  const page = document.getElementById('page-history');
+  page.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+      <button class="btn btn-secondary" onclick="loadHistory()">&#8592; Back to History</button>
+      <span style="font-size:12px;color:var(--text-light);">Loading work orders&hellip;</span>
+    </div>
+    <div id="legacyCustomerDetail"></div>
+  `;
+  try {
+    const { data: orders } = await window.api.getWorkOrderHistory({
+      legacyCustomerId: legacyCustomerId || undefined,
+      customerName: nameNorm || undefined,
+    });
+    const detail = document.getElementById('legacyCustomerDetail');
+    if (!orders || !orders.length) {
+      detail.innerHTML = '<div class="card" style="padding:16px;">No work orders found.</div>';
+      return;
+    }
+    const head = orders[0];
+    document.getElementById('pageTitle').textContent = head.customer_name || 'Legacy Customer';
+    detail.innerHTML = `
+      <div class="card" style="padding:16px;margin-bottom:12px;">
+        <h2 style="margin:0 0 8px 0;font-size:18px;">${esc(head.customer_name || '')}</h2>
+        <div style="font-size:13px;line-height:1.6;">
+          ${head.customer_phone ? `<div><strong>${esc(head.customer_phone)}</strong></div>` : ''}
+          ${head.customer_email ? `<div>${esc(head.customer_email)}</div>` : ''}
+          ${head.job_address ? `<div style="color:var(--text-light);">${esc(head.job_address)}</div>` : ''}
+          <div style="color:var(--text-light);font-size:11px;margin-top:6px;">Legacy Customer #${esc(head.legacy_customer_id || '')} &middot; ${orders.length} work order${orders.length !== 1 ? 's' : ''}</div>
+          ${head.matched_customer_id ? `<div style="margin-top:8px;"><a href="#" onclick="event.preventDefault();openCustomerDetail('${head.matched_customer_id}')" style="color:#1565c0;">&rarr; Open in current customers</a></div>` : ''}
+        </div>
+      </div>
+      ${renderLegacyHistoryCard('legDetail', orders)}
+    `;
+  } catch (err) {
+    console.error('[legacy-customer-detail] failed:', err);
+    document.getElementById('legacyCustomerDetail').innerHTML =
+      `<div class="card" style="padding:16px;color:#c62828;">Failed to load: ${esc(err.message || String(err))}</div>`;
   }
 }
 
@@ -2367,6 +2521,27 @@ async function openCustomerDetail(id, selectedPropertyId = null) {
           </div>
         </div>
 
+        ${prop ? `
+        <!-- Additional Contacts (per-property — promoted to left column for visibility) -->
+        <div class="card" style="padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-weight:700;font-size:12px;color:var(--text-light);">&#128101; ADDITIONAL CONTACTS</span>
+            <button class="btn btn-sm btn-primary" style="font-size:10px;padding:3px 8px;" onclick="openAdditionalContactModal('${prop.id}','${id}')">+ Add</button>
+          </div>
+          <div id="additionalContactsList_${prop.id}">
+            ${renderAdditionalContacts(prop.additional_contacts || [], prop.id, id)}
+          </div>
+        </div>
+
+        <!-- Directions (per-property — promoted to left column) -->
+        <div class="card" style="padding:12px;">
+          <div style="font-weight:700;font-size:12px;color:var(--text-light);margin-bottom:6px;">DIRECTIONS</div>
+          <textarea style="width:100%;min-height:60px;font-size:12px;border:1px solid var(--border);border-radius:4px;padding:8px;resize:vertical;background:var(--surface);color:var(--text);"
+            placeholder="Driving directions, gate codes, parking notes…"
+            onblur="window.api.saveProperty({id:'${prop.id}',directions:this.value})">${esc(prop.directions || '')}</textarea>
+        </div>
+        ` : ''}
+
         <!-- Other Linked Properties -->
         <div class="card" style="padding:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -2478,23 +2653,6 @@ async function openCustomerDetail(id, selectedPropertyId = null) {
           ${prop.tank_diagram ? `<button class="btn btn-sm" style="margin-top:6px;font-size:10px;color:#c62828;" onclick="window.api.saveProperty({id:'${prop.id}',tank_diagram:''});openCustomerDetail('${id}','${prop.id}')">Remove Image</button>` : ''}
         </div>
 
-        <!-- Directions -->
-        <div class="card" style="padding:16px;">
-          <div style="font-weight:700;font-size:13px;margin-bottom:6px;">Directions</div>
-          <textarea style="width:100%;min-height:60px;font-size:12px;border:1px solid #ddd;border-radius:4px;padding:8px;resize:vertical;"
-            onblur="window.api.saveProperty({id:'${prop.id}',directions:this.value})">${esc(prop.directions || '')}</textarea>
-        </div>
-
-        <!-- Additional Contacts -->
-        <div class="card" style="padding:16px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <span style="font-weight:700;font-size:13px;">&#128101; Additional Contacts</span>
-            <button class="btn btn-sm btn-primary" style="font-size:10px;padding:2px 8px;" onclick="openAdditionalContactModal('${prop.id}','${id}')">+ Add</button>
-          </div>
-          <div id="additionalContactsList_${prop.id}">
-            ${renderAdditionalContacts(prop.additional_contacts || [], prop.id, id)}
-          </div>
-        </div>
         ` : `
         <div class="card" style="padding:24px;text-align:center;">
           <div style="font-size:32px;margin-bottom:8px;">&#127968;</div>
@@ -2596,7 +2754,93 @@ async function openCustomerDetail(id, selectedPropertyId = null) {
             `).join('')}
           </div>` : ''}
         </div>
+
+        <!-- Legacy History (TankTrack / prior software) -->
+        <div id="legacyHistoryContainer_${id}"></div>
       </div>
+    </div>
+  `;
+
+  loadLegacyHistory(id, customer.name);
+}
+
+// Async-load legacy work-order history (matched by current customer id +
+// customer name). Renders into #legacyHistoryContainer_<id>. Hides itself
+// entirely when there are no matching legacy records, so unmatched contacts
+// don't see a stub card.
+async function loadLegacyHistory(customerId, customerName) {
+  const container = document.getElementById('legacyHistoryContainer_' + customerId);
+  if (!container) return;
+  container.innerHTML = `
+    <div class="card" style="padding:12px;">
+      <div style="font-weight:700;font-size:13px;color:var(--text-light);">&#128202; Loading legacy history&hellip;</div>
+    </div>
+  `;
+  try {
+    const { data: orders } = await window.api.getWorkOrderHistory({
+      customerId,
+      customerName,
+    });
+    if (!orders || orders.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+    container.innerHTML = renderLegacyHistoryCard(customerId, orders);
+  } catch (err) {
+    console.error('[legacy-history] load failed:', err);
+    container.innerHTML = `
+      <div class="card" style="padding:12px;">
+        <div style="font-weight:700;font-size:13px;color:#c62828;">Could not load legacy history.</div>
+        <div style="font-size:11px;color:var(--text-light);">${esc(err.message || String(err))}</div>
+      </div>
+    `;
+  }
+}
+
+function renderLegacyHistoryCard(customerId, orders) {
+  const total = orders.length;
+  const initialCount = Math.min(5, total);
+  const renderRow = (o, idx) => {
+    const date = o.scheduled_date || '';
+    const desc = o.job_description || '(no description)';
+    const status = o.job_status || '';
+    const gallons = o.disposal_amount || o.planned_gallons || 0;
+    const rowId = 'legHist_' + customerId + '_' + idx;
+    return `
+      <div style="border:1px solid #e0e0e0;border-radius:4px;margin-bottom:4px;overflow:hidden;font-size:12px;">
+        <div style="padding:6px 8px;background:#fafafa;cursor:pointer;display:flex;justify-content:space-between;align-items:center;"
+          onclick="(function(){var d=document.getElementById('${rowId}');d.style.display=d.style.display==='none'?'block':'none';})()">
+          <div style="flex:1;">
+            <span style="font-weight:600;">${esc(date)}</span>
+            <span style="color:#1565c0;margin-left:8px;">${esc(desc)}</span>
+            ${gallons ? `<span style="color:var(--text-light);margin-left:8px;">${gallons.toLocaleString()} gal</span>` : ''}
+          </div>
+          <span style="font-size:10px;color:var(--text-light);">${esc(status)}</span>
+        </div>
+        <div id="${rowId}" style="display:none;padding:8px 10px;background:white;border-top:1px solid #eee;line-height:1.5;">
+          ${o.job_address ? `<div><strong>Address:</strong> ${esc(o.job_address)}</div>` : ''}
+          ${o.task_type ? `<div><strong>Task Type:</strong> ${esc(o.task_type)}</div>` : ''}
+          ${o.disposal_site ? `<div><strong>Disposal Site:</strong> ${esc(o.disposal_site)}</div>` : ''}
+          ${o.material_description ? `<div><strong>Material:</strong> ${esc(o.material_description)}</div>` : ''}
+          ${o.job_comments ? `<div style="margin-top:6px;"><strong>Comments:</strong><div style="white-space:pre-wrap;background:#fffbe6;color:#3d2c00;padding:6px;border-radius:3px;margin-top:2px;">${esc(o.job_comments)}</div></div>` : ''}
+          ${o.tank_location ? `<div style="margin-top:6px;"><strong>Tank Location / Notes:</strong><div style="white-space:pre-wrap;background:#e8f1fb;color:#0d2c4a;padding:6px;border-radius:3px;margin-top:2px;">${esc(o.tank_location)}</div></div>` : ''}
+          <div style="margin-top:6px;font-size:10px;color:var(--text-light);">Legacy WO #${esc(o.legacy_work_order_id || '')} &middot; Cust #${esc(o.legacy_customer_id || '')}</div>
+        </div>
+      </div>
+    `;
+  };
+  return `
+    <div class="card" style="padding:12px;border-left:3px solid #8e24aa;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-weight:700;font-size:13px;">&#128202; ${total} Legacy Work Order${total !== 1 ? 's' : ''} <span style="font-size:10px;color:var(--text-light);font-weight:400;">(prior software)</span></span>
+        ${total > initialCount ? `<a href="#" onclick="event.preventDefault();document.getElementById('legacyHistoryFull_${customerId}').style.display='block';this.style.display='none'" style="font-size:11px;">See All ${total}</a>` : ''}
+      </div>
+      ${orders.slice(0, initialCount).map((o, i) => renderRow(o, i)).join('')}
+      ${total > initialCount ? `
+        <div id="legacyHistoryFull_${customerId}" style="display:none;">
+          ${orders.slice(initialCount).map((o, i) => renderRow(o, i + initialCount)).join('')}
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -3724,11 +3968,46 @@ async function openServiceDueNoticeModal(notice = null, customerId = null, prope
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>Service Due In *</label>
-        <select id="sdnModalInterval">
-          ${[1,2,3,4,5,6,7].map(y => `<option value="${y}" ${(n.interval_value || 3) === y ? 'selected' : ''}>${y} Year${y > 1 ? 's' : ''}</option>`).join('')}
-        </select>
+        <label>Due Date *</label>
+        <input type="date" id="sdnModalDueDate" value="${esc(n.due_date || (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 3); return d.toISOString().split('T')[0]; })())}" required>
+        <div style="font-size:10px;color:var(--text-light);margin-top:2px;">When the next service is due.</div>
       </div>
+      <div class="form-group">
+        <label>Frequency *</label>
+        ${(() => {
+          // Fully flexible: a number input + unit selector. Operator can pick any
+          // combination — every 3 months, every 6 months, every 1 year, every 18 months,
+          // every 5 years, etc. Stored as { interval_value, interval_unit:'months'|'years' }.
+          const currentVal = parseInt(n.interval_value, 10) || 3;
+          const currentUnit = (n.interval_unit === 'months' || n.interval_unit === 'years') ? n.interval_unit : 'years';
+          // Common presets that re-fill both inputs in one click
+          const presets = [
+            { v: 3,  u: 'months', label: 'Every 3 mo' },
+            { v: 6,  u: 'months', label: 'Every 6 mo' },
+            { v: 1,  u: 'years',  label: 'Every 1 yr' },
+            { v: 2,  u: 'years',  label: 'Every 2 yrs' },
+            { v: 3,  u: 'years',  label: 'Every 3 yrs' },
+            { v: 5,  u: 'years',  label: 'Every 5 yrs' },
+          ];
+          return `
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:12px;color:var(--text-light);">Every</span>
+              <input type="number" id="sdnModalInterval" value="${currentVal}" min="1" max="99" step="1" style="width:70px;padding:6px;text-align:center;">
+              <select id="sdnModalIntervalUnit" style="flex:1;">
+                <option value="months" ${currentUnit === 'months' ? 'selected' : ''}>Months</option>
+                <option value="years" ${currentUnit === 'years' ? 'selected' : ''}>Years</option>
+              </select>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">
+              ${presets.map(p => `<button type="button" class="btn btn-sm btn-secondary" style="font-size:10px;padding:2px 8px;"
+                onclick="document.getElementById('sdnModalInterval').value=${p.v};document.getElementById('sdnModalIntervalUnit').value='${p.u}';">${p.label}</button>`).join('')}
+            </div>
+          `;
+        })()}
+        <div style="font-size:10px;color:var(--text-light);margin-top:4px;">How often this recurs after the due date. Click a preset or type any value.</div>
+      </div>
+    </div>
+    <div class="form-row">
       <div class="form-group">
         <label>Email Notification</label>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:4px;">
@@ -3736,21 +4015,44 @@ async function openServiceDueNoticeModal(notice = null, customerId = null, prope
           <span style="font-weight:600;color:${emailChecked ? '#388e3c' : '#999'};">${emailChecked ? 'ON' : 'OFF'}</span>
         </label>
       </div>
+      <div class="form-group">
+        <label>Recurring</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:4px;" title="When this notice gets confirmed or completed, ISM auto-creates the next-cycle notice using the same interval. Turn off for one-time reminders.">
+          <input type="checkbox" id="sdnModalRecurring" ${(n.recurring !== false) ? 'checked' : ''} style="width:18px;height:18px;">
+          <span style="font-weight:600;color:${(n.recurring !== false) ? '#388e3c' : '#999'};">${(n.recurring !== false) ? 'AUTO-RENEWS' : 'ONE-TIME'}</span>
+        </label>
+      </div>
     </div>
     <div class="form-group">
       <label>Notes</label>
       <textarea id="sdnModalNotes" placeholder="Notice notes...">${esc(n.notes || '')}</textarea>
     </div>
+    ${isEdit && n.auto_rolled_at ? `
+    <div style="margin-top:12px;padding:10px 12px;background:#e8f5e9;border-left:4px solid #558b2f;border-radius:4px;">
+      <div style="font-size:12px;font-weight:700;color:#558b2f;margin-bottom:2px;">↻ AUTO-ROLLED TO NEXT CYCLE</div>
+      <div style="font-size:11px;color:var(--text);">This notice was automatically rolled forward on <strong>${esc((n.auto_rolled_at || '').split('T')[0])}</strong> because the due date passed and reminders had been sent. The next-cycle notice was created automatically; find it in the active list (look for the "cycle" badge).</div>
+    </div>` : ''}
     ${isEdit && Array.isArray(n.notification_schedule) && n.notification_schedule.length > 0 ? `
     <div style="margin-top:12px;padding:10px 12px;background:${n.status === 'confirmed' ? '#e8f5e9' : '#f0f7ff'};border-left:4px solid ${n.status === 'confirmed' ? '#43a047' : '#2196F3'};border-radius:4px;">
       <div style="font-size:12px;font-weight:700;color:${n.status === 'confirmed' ? '#2e7d32' : '#1565c0'};margin-bottom:6px;">
-        ${n.status === 'confirmed' ? '✅ CONFIRMED — No further reminders will be sent' : '📅 AUTO REMINDERS'}
+        ${n.status === 'confirmed' ? '✅ CONFIRMED — No further reminders will be sent' : '📅 EMAIL REMINDERS'}
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
         ${n.notification_schedule.map(item => `
           <div style="font-size:11px;padding:3px 6px;border-radius:3px;background:${item.sent ? '#e8f5e9' : n.status === 'confirmed' ? '#f5f5f5' : '#fff'};border:1px solid ${item.sent ? '#a5d6a7' : '#ddd'};display:flex;justify-content:space-between;align-items:center;${n.status === 'confirmed' && !item.sent ? 'opacity:0.45;' : ''}">
             <span style="color:var(--text);">${esc(item.label)}</span>
-            <span style="color:${item.sent ? '#388e3c' : '#999'};font-weight:600;">${item.sent ? '✓ Sent' : n.status === 'confirmed' ? 'Cancelled' : item.send_date}</span>
+            <span style="color:${item.sent ? '#388e3c' : '#999'};font-weight:600;">${item.sent ? `✓ Sent ${(item.sent_at || '').split('T')[0]}` : n.status === 'confirmed' ? 'Cancelled' : item.send_date}</span>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+    ${isEdit && Array.isArray(n.mail_history) && n.mail_history.length > 0 ? `
+    <div style="margin-top:12px;padding:10px 12px;background:#f3e5f5;border-left:4px solid #7b1fa2;border-radius:4px;">
+      <div style="font-size:12px;font-weight:700;color:#7b1fa2;margin-bottom:6px;">📬 POSTCARD / MAIL HISTORY</div>
+      <div style="display:flex;flex-direction:column;gap:3px;">
+        ${n.mail_history.map(h => `
+          <div style="font-size:11px;padding:3px 6px;border-radius:3px;background:#fff;border:1px solid #e1bee7;display:flex;justify-content:space-between;align-items:center;">
+            <span><strong>${esc(h.date || '')}</strong> &middot; ${esc((h.type || 'mail').replace(/-/g, ' '))}${h.sent_by ? ' · by ' + esc(h.sent_by) : ''}</span>
+            ${h.filename ? `<span style="color:#999;font-size:10px;">${esc(h.filename)}</span>` : ''}
           </div>`).join('')}
       </div>
     </div>` : ''}
@@ -3765,8 +4067,35 @@ async function openServiceDueNoticeModal(notice = null, customerId = null, prope
 }
 
 async function saveServiceDueNoticeModal(customerId, propertyId) {
-  const intervalYears = parseInt(document.getElementById('sdnModalInterval').value) || 3;
-  const dueDate = calcNextServiceDate(new Date().toISOString().split('T')[0], intervalYears, 'years');
+  const intervalValue = parseInt(document.getElementById('sdnModalInterval').value, 10) || 3;
+  const intervalUnit = document.getElementById('sdnModalIntervalUnit')?.value || 'years';
+  // Due date is now the canonical input — the operator picks it explicitly.
+  // Frequency feeds the recurrence/auto-roll cycle, not the initial date.
+  const dueDate = (document.getElementById('sdnModalDueDate')?.value || '').trim();
+  if (!dueDate) {
+    showToast('Pick a due date.', 'error');
+    return;
+  }
+  if (intervalValue < 1 || intervalValue > 99) {
+    showToast('Frequency must be between 1 and 99.', 'error');
+    return;
+  }
+
+  // Build the per-notice schedule from settings cadence (same logic as quickCreateSdn).
+  const { data: settingsForCadence } = await window.api.getSettings();
+  const cfgOffsets = Array.isArray(settingsForCadence?.sdn_reminder_offsets)
+    ? settingsForCadence.sdn_reminder_offsets.filter(o => o.enabled !== false)
+    : [];
+  const scheduleTemplate = cfgOffsets.length > 0
+    ? cfgOffsets.map(o => ({ days_offset: o.days_offset, label: o.label }))
+    : (SDN_AUTO_SCHEDULES[document.getElementById('sdnModalServiceType').value] || SDN_DEFAULT_SCHEDULE);
+  const notification_schedule = scheduleTemplate.map(item => ({
+    days_offset: item.days_offset,
+    label: item.label,
+    send_date: addDaysToDate(dueDate, item.days_offset),
+    sent: false,
+  }));
+
   const data = {
     customer_id: customerId,
     property_id: propertyId,
@@ -3775,14 +4104,29 @@ async function saveServiceDueNoticeModal(customerId, propertyId) {
     method: 'email',
     status: document.getElementById('sdnModalStatus')?.value || 'pending',
     email_enabled: document.getElementById('sdnModalEmail')?.checked !== false,
-    interval_value: intervalYears,
-    interval_unit: 'years',
+    recurring: document.getElementById('sdnModalRecurring')?.checked !== false,
+    interval_value: intervalValue,
+    interval_unit: intervalUnit,
     tank_id: document.getElementById('sdnModalTank')?.value || null,
     notes: document.getElementById('sdnModalNotes').value.trim(),
+    notification_schedule,
   };
   const id = document.getElementById('sdnModalId').value;
   const jobId = document.getElementById('sdnModalJobId').value;
-  if (id) data.id = id;
+  if (id) {
+    data.id = id;
+    // On edit, preserve any reminders that already fired so the new schedule
+    // doesn't re-send them.
+    const { data: existingNotices } = await window.api.getServiceDueNotices();
+    const existing = existingNotices.find(x => x.id === id);
+    if (existing && Array.isArray(existing.notification_schedule)) {
+      const sentByOffset = {};
+      existing.notification_schedule.forEach(it => { if (it.sent) sentByOffset[it.days_offset] = it; });
+      data.notification_schedule = data.notification_schedule.map(it =>
+        sentByOffset[it.days_offset] ? sentByOffset[it.days_offset] : it
+      );
+    }
+  }
   if (jobId) data.job_id = jobId;
   if (!data.service_type) { showToast('Service type is required.', 'error'); return; }
   const result = await window.api.saveServiceDueNotice(data);
@@ -3920,6 +4264,39 @@ function addDaysToDate(dateStr, days) {
   return d.toISOString().split('T')[0];
 }
 
+// Settings page — re-derive every pending notice's notification_schedule from
+// the new sdn_reminder_offsets. Already-sent items stay sent. Useful after
+// changing the cadence boxes.
+async function regenerateSdnSchedules() {
+  const status = document.getElementById('sdnSettingsStatus');
+  if (status) { status.textContent = 'Regenerating…'; status.style.color = 'var(--text-light)'; }
+  // Save current settings first so the handler reads the latest cadence
+  await saveSettings();
+  const result = await window.api.regenerateSdnSchedules();
+  if (result.success) {
+    if (status) { status.textContent = `Updated ${result.touched} pending notice${result.touched === 1 ? '' : 's'}.`; status.style.color = '#388e3c'; }
+    showToast(`Regenerated ${result.touched} pending notice${result.touched === 1 ? '' : 's'} with the new cadence.`, 'success');
+  } else {
+    if (status) { status.textContent = result.error || 'Failed.'; status.style.color = '#d32f2f'; }
+    showToast(result.error || 'Regeneration failed.', 'error');
+  }
+}
+
+// Settings page — manually trigger the same hourly check that fires emails
+// for every notice whose send-date has arrived.
+async function runDueNoticeCheckNow() {
+  const status = document.getElementById('sdnSettingsStatus');
+  if (status) { status.textContent = 'Running check…'; status.style.color = 'var(--text-light)'; }
+  const result = await window.api.checkDueNoticesNow();
+  if (result.success) {
+    if (status) { status.textContent = 'Check complete — see logs for any emails sent.'; status.style.color = '#388e3c'; }
+    showToast('Reminder check complete.', 'success');
+  } else {
+    if (status) { status.textContent = result.error || 'Failed.'; status.style.color = '#d32f2f'; }
+    showToast(result.error || 'Reminder check failed.', 'error');
+  }
+}
+
 async function quickCreateSdn(customerId, propertyId, serviceType, interval, unit, fromJobId) {
   // Use the specific job's service date if coming from a job; fall back to most recent job
   let baseDate;
@@ -3933,8 +4310,20 @@ async function quickCreateSdn(customerId, propertyId, serviceType, interval, uni
   }
   const dueDate = calcNextServiceDate(baseDate, interval, unit);
 
-  // Build auto-notification schedule
-  const scheduleTemplate = SDN_AUTO_SCHEDULES[serviceType] || SDN_DEFAULT_SCHEDULE;
+  // Build the per-notice send schedule. Order of preference:
+  //   1. settings.sdn_reminder_offsets (only the enabled rows) — operator-configured cadence
+  //   2. SDN_AUTO_SCHEDULES[serviceType]                       — service-specific hardcoded preset
+  //   3. SDN_DEFAULT_SCHEDULE                                  — global hardcoded fallback
+  const { data: settingsForCadence } = await window.api.getSettings();
+  let scheduleTemplate;
+  const cfgOffsets = Array.isArray(settingsForCadence?.sdn_reminder_offsets)
+    ? settingsForCadence.sdn_reminder_offsets.filter(o => o.enabled !== false)
+    : [];
+  if (cfgOffsets.length > 0) {
+    scheduleTemplate = cfgOffsets.map(o => ({ days_offset: o.days_offset, label: o.label }));
+  } else {
+    scheduleTemplate = SDN_AUTO_SCHEDULES[serviceType] || SDN_DEFAULT_SCHEDULE;
+  }
   const notification_schedule = scheduleTemplate.map(item => ({
     days_offset: item.days_offset,
     label: item.label,
@@ -3951,6 +4340,7 @@ async function quickCreateSdn(customerId, propertyId, serviceType, interval, uni
     method: 'email',
     status: 'pending',
     email_enabled: true,
+    recurring: true, // Default: every notice auto-renews until the operator turns it off
     interval_value: interval,
     interval_unit: unit,
     notification_schedule,
@@ -7017,7 +7407,88 @@ function _pDragCleanup() {
   if (_pDragAutoScroll) { clearInterval(_pDragAutoScroll); _pDragAutoScroll = null; }
   document.body.style.userSelect = '';
   document.body.style.cursor = '';
+  document.body.style.pointerEvents = '';
   _pDrag = null;
+}
+
+// ============================================================================
+// "Inputs feel dead" recovery — global UI scrub
+// ----------------------------------------------------------------------------
+// Drag operations temporarily set body.userSelect='none', body.cursor='grabbing',
+// and stash drag state in _pDrag. If a drag gets interrupted (window loses focus,
+// user alt-tabs mid-drop, an error fires inside a drop handler), those styles
+// never reset and inputs feel unclickable.
+//
+// This module wires in three layers of defense so the issue never reproduces:
+//   1. window-level blur / visibilitychange / mouseleave → scrub immediately
+//   2. document-level Escape key → scrub
+//   3. capture-phase mousedown on any input → if we look stuck, scrub before
+//      the click is processed so the very click that "didn't work" recovers
+//      and the input gets focus on the next click (or even the same one)
+// ============================================================================
+function _scrubStuckUiState() {
+  // Drop body-level style mutations that drag operations may have left behind
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+  document.body.style.pointerEvents = '';
+  // If we still have a tracked drag state, end it cleanly
+  if (typeof _pDrag !== 'undefined' && _pDrag) {
+    try { _pDragCleanup(); } catch {}
+  }
+  // Strip any leftover drop-indicator classes from the schedule
+  document.querySelectorAll('.drop-above, .drop-below, .drag-over, .dump-drop-highlight')
+    .forEach(c => c.classList.remove('drop-above', 'drop-below', 'drag-over', 'dump-drop-highlight'));
+  // If the modal singleton is hidden but still has the .active class (shouldn't
+  // happen, but belt-and-suspenders), strip it. We only do this if no .modal
+  // is actually rendered with content.
+  const overlay = document.getElementById('modalOverlay');
+  if (overlay && overlay.classList.contains('active')) {
+    const body = document.getElementById('modalBody');
+    if (!body || !body.innerHTML.trim()) overlay.classList.remove('active');
+  }
+}
+
+// Wire the recovery once on script load
+if (!window._uiScrubWired) {
+  window._uiScrubWired = true;
+
+  // (1) Window loses focus while dragging — alt-tab, click another window
+  window.addEventListener('blur', _scrubStuckUiState);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) _scrubStuckUiState();
+  });
+  // mouseleave fires when the cursor exits the window. If a drag was in progress
+  // and the user releases the mouse outside, we'd never get a mouseup on us.
+  document.addEventListener('mouseleave', (e) => {
+    // Only react if the cursor truly left the window (relatedTarget === null)
+    if (!e.relatedTarget && !e.toElement) _scrubStuckUiState();
+  });
+
+  // (2) Escape — universal panic button
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') _scrubStuckUiState();
+  });
+
+  // (3) Self-healing input click — if the user clicks an input and we look stuck,
+  // scrub BEFORE the click is processed (capture phase) so the focus actually
+  // takes. This handles the "I clicked the search bar and nothing happened" case
+  // without the user needing to know about the drag-state mess.
+  document.addEventListener('mousedown', (e) => {
+    const target = e.target;
+    if (!target || !target.matches) return;
+    const isInput = target.matches('input, textarea, select, [contenteditable], button, a');
+    if (!isInput) return;
+    const looksStuck = (
+      (typeof _pDrag !== 'undefined' && _pDrag && !_pDrag.started === false) ||
+      document.body.style.cursor === 'grabbing' ||
+      document.body.style.userSelect === 'none'
+    );
+    if (looksStuck) {
+      _scrubStuckUiState();
+      // Re-focus the input after scrub so the click "lands" naturally
+      setTimeout(() => { try { target.focus({ preventScroll: true }); } catch {} }, 0);
+    }
+  }, true);
 }
 
 // Find drop target: which card is the cursor near and above/below midpoint
@@ -7181,6 +7652,10 @@ document.addEventListener('mousemove', (e) => {
 document.addEventListener('mouseup', async (e) => {
   if (!_pDrag) return;
   const drag = _pDrag;
+  // Wrap the entire drop pipeline so a thrown exception in any handler still
+  // releases the page from drag-mode (prevents the "search bar feels dead" bug).
+  try {
+  // (original body continues below — closing brace + catch added at end)
 
   // If we never started dragging (< 5px movement), treat as a click
   if (!drag.started) {
@@ -7356,6 +7831,15 @@ document.addEventListener('mouseup', async (e) => {
     });
     await Promise.all(savePromises);
     _scheduleRestoreScroll(); loadSchedule();
+  }
+  } catch (dropErr) {
+    // Drop pipeline blew up — make sure the page is unstuck regardless
+    console.error('[DRAG] drop handler threw:', dropErr);
+    showToast('Action failed — page state restored. ' + (dropErr?.message || ''), 'error', 5000);
+  } finally {
+    // Belt-and-suspenders: always scrub stuck UI state at the end of mouseup,
+    // even if everything worked. Cheap and prevents the "dead input" bug.
+    _scrubStuckUiState();
   }
 });
 
@@ -12373,7 +12857,7 @@ async function generateDepReport() {
 
 // ===== REMINDERS =====
 // ===== SERVICE DUE NOTICES PAGE =====
-let sdnFilters = { page: 1, perPage: 35, status: '', serviceType: '', dueDateFrom: '', dueDateTo: '', search: '', _preset: 'All Time', sortBy: 'due_date', sortDir: 'asc' };
+let sdnFilters = { page: 1, perPage: 35, status: '', activity: '', serviceType: '', dueDateFrom: '', dueDateTo: '', search: '', _preset: 'All Time', sortBy: 'due_date', sortDir: 'asc' };
 let selectedSdnIds = new Set();
 
 async function loadServiceDueNotices() {
@@ -12385,9 +12869,30 @@ async function loadServiceDueNotices() {
   if (sdnFilters.dueDateTo) filters.dueDateTo = sdnFilters.dueDateTo;
   if (sdnFilters.search) filters.search = sdnFilters.search;
 
-  const { data: allNotices } = await window.api.getServiceDueNotices(filters);
+  let { data: allNotices } = await window.api.getServiceDueNotices(filters);
   const today = new Date().toISOString().split('T')[0];
   const thisMonthEnd = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0];
+
+  // Activity filter — applied client-side after the backend query
+  if (sdnFilters.activity) {
+    const a = sdnFilters.activity;
+    allNotices = allNotices.filter(n => {
+      const sentEmail = (n.notification_schedule || []).some(it => it.sent);
+      const wasMailed = !!n.last_mailed_at;
+      const responded = n.status === 'confirmed';
+      switch (a) {
+        case 'no-email-yet':       return !sentEmail && !responded;
+        case 'email-sent':         return sentEmail;
+        case 'not-mailed':         return !wasMailed && !responded;
+        case 'mailed':             return wasMailed;
+        case 'responded':          return responded;
+        case 'reminded-overdue':   return !!n.reminded_overdue;
+        case 'overdue-no-contact': return !!n.overdue_no_contact;
+        case 'auto-rolled':        return !!n.auto_rolled_at;
+        default: return true;
+      }
+    });
+  }
 
   // Stats (always computed on full result set before pagination)
   const totalCount = allNotices.length;
@@ -12451,6 +12956,19 @@ async function loadServiceDueNotices() {
           ${serviceTypes.map(t => `<option value="${esc(t)}" ${sdnFilters.serviceType === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
         </select>
 
+        <label class="inv-filter-label">Activity</label>
+        <select class="inv-filter-select" onchange="sdnFilters.activity=this.value;sdnFilters.page=1;loadServiceDueNotices()">
+          <option value="">All</option>
+          <option value="no-email-yet" ${sdnFilters.activity==='no-email-yet'?'selected':''}>No reminder yet</option>
+          <option value="email-sent" ${sdnFilters.activity==='email-sent'?'selected':''}>Email reminder sent</option>
+          <option value="not-mailed" ${sdnFilters.activity==='not-mailed'?'selected':''}>Not mailed yet</option>
+          <option value="mailed" ${sdnFilters.activity==='mailed'?'selected':''}>Already mailed</option>
+          <option value="reminded-overdue" ${sdnFilters.activity==='reminded-overdue'?'selected':''}>Reminded &amp; past due</option>
+          <option value="overdue-no-contact" ${sdnFilters.activity==='overdue-no-contact'?'selected':''}>Overdue, no reminder yet</option>
+          <option value="responded" ${sdnFilters.activity==='responded'?'selected':''}>Customer confirmed</option>
+          <option value="auto-rolled" ${sdnFilters.activity==='auto-rolled'?'selected':''}>Auto-rolled to next cycle</option>
+        </select>
+
         <label class="inv-filter-label">Sort By</label>
         <div style="display:flex;gap:4px;">
           <select class="inv-filter-select" style="flex:1;" onchange="sdnFilters.sortBy=this.value;sdnFilters.page=1;loadServiceDueNotices()">
@@ -12496,8 +13014,9 @@ async function loadServiceDueNotices() {
 
         <!-- BATCH ACTIONS -->
         ${selectedSdnIds.size > 0 ? `
-        <div style="display:flex;align-items:center;gap:8px;padding:6px 16px;background:#fff3e0;border-bottom:1px solid #e0e0e0;">
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 16px;background:#fff3e0;border-bottom:1px solid #e0e0e0;flex-wrap:wrap;">
           <strong style="font-size:12px;">${selectedSdnIds.size} selected</strong>
+          <button class="btn btn-sm" style="background:#1565c0;color:white;border:none;font-size:11px;padding:3px 10px;" onclick="sdnBatchPrintMailers()" title="Generate a PDF of mailable postcards (4 per letter sheet). Print on cardstock, cut along the dashed lines, stamp, and mail.">&#128238; Print Postcards</button>
           <button class="btn btn-sm" style="background:#f44336;color:white;border:none;font-size:11px;padding:3px 10px;" onclick="sdnBatchDelete()">🗑 Delete Selected</button>
           <button class="btn btn-sm btn-secondary" style="font-size:11px;padding:3px 10px;" onclick="selectedSdnIds.clear();loadServiceDueNotices()">Clear Selection</button>
         </div>` : ''}
@@ -12522,12 +13041,65 @@ async function loadServiceDueNotices() {
               ${notices.length === 0 ? '<tr><td colspan="8" style="text-align:center;color:var(--text-light);padding:40px;">No service due notices found.</td></tr>' : ''}
               ${notices.map((n, idx) => {
                 const rowNum = startIdx + idx + 1;
-                const rowClass = n.is_overdue ? 'sdn-overdue-row' : (n.days_until_due !== null && n.days_until_due <= 30 && n.days_until_due >= 0 && n.status === 'pending') ? 'sdn-due-soon-row' : '';
+                const rowClass = n.reminded_overdue ? 'sdn-overdue-row' : n.is_overdue ? 'sdn-overdue-row' : (n.days_until_due !== null && n.days_until_due <= 30 && n.days_until_due >= 0 && n.status === 'pending') ? 'sdn-due-soon-row' : '';
                 const statusColors = { pending: '#ff9800', sent: '#2196f3', overdue: '#f44336', completed: '#4caf50', dismissed: '#9e9e9e', confirmed: '#43a047' };
-                const statusColor = n.status === 'confirmed' ? '#43a047' : n.is_overdue ? '#f44336' : n.status === 'pending' ? (n.email_enabled !== false ? '#388e3c' : '#9e9e9e') : (statusColors[n.status] || '#999');
-                const statusText = n.is_overdue ? 'OVERDUE' : n.status === 'pending' ? (n.email_enabled !== false ? 'Email ON' : 'Email OFF') : (n.status || '').toUpperCase();
+                // Pick the strongest applicable status text. "Reminded & overdue" beats plain "overdue".
+                let statusColor, statusText;
+                if (n.status === 'confirmed') {
+                  statusColor = '#43a047'; statusText = 'CONFIRMED';
+                } else if (n.auto_rolled_at) {
+                  statusColor = '#558b2f'; statusText = 'AUTO-ROLLED';
+                } else if (n.status === 'completed') {
+                  statusColor = '#4caf50'; statusText = 'COMPLETED';
+                } else if (n.reminded_overdue) {
+                  const daysOver = Math.abs(n.days_until_due || 0);
+                  statusColor = '#c62828';
+                  statusText = `REMINDED · ${daysOver}d OVERDUE`;
+                } else if (n.overdue_no_contact) {
+                  const daysOver = Math.abs(n.days_until_due || 0);
+                  statusColor = '#f44336';
+                  statusText = `OVERDUE ${daysOver}d (no reminder)`;
+                } else if (n.status === 'pending') {
+                  statusColor = n.email_enabled !== false ? '#388e3c' : '#9e9e9e';
+                  statusText = n.email_enabled !== false ? 'Email ON' : 'Email OFF';
+                } else {
+                  statusColor = statusColors[n.status] || '#999';
+                  statusText = (n.status || '').toUpperCase();
+                }
                 const daysText = n.days_until_due !== null ? (n.days_until_due < 0 ? `${Math.abs(n.days_until_due)}d ago` : n.days_until_due === 0 ? 'Today' : `${n.days_until_due}d`) : '-';
                 const isSelected = selectedSdnIds.has(n.id);
+                // Activity badges — at-a-glance visual cue for each notice's history
+                const sentItems = (n.notification_schedule || []).filter(it => it.sent);
+                const lastEmailSent = sentItems.length ? sentItems.map(it => it.sent_at || '').sort().pop() : null;
+                const lastEmailDate = lastEmailSent ? lastEmailSent.split('T')[0] : null;
+                const activityBadges = [];
+                if (n.status === 'confirmed') {
+                  activityBadges.push(`<span title="Customer confirmed via email link" style="font-size:9px;padding:2px 5px;border-radius:3px;background:#43a047;color:white;font-weight:700;">&#10003; CONFIRMED</span>`);
+                }
+                if (sentItems.length > 0) {
+                  activityBadges.push(`<span title="Email reminder${sentItems.length > 1 ? 's' : ''} sent — last on ${lastEmailDate}" style="font-size:9px;padding:2px 5px;border-radius:3px;background:#1976d2;color:white;">&#9993; ${sentItems.length}</span>`);
+                }
+                if (n.last_mailed_at) {
+                  activityBadges.push(`<span title="Postcard generated on ${n.last_mailed_at}" style="font-size:9px;padding:2px 5px;border-radius:3px;background:#7b1fa2;color:white;">&#128238; ${n.last_mailed_at.split('-').slice(1).join('/')}</span>`);
+                }
+                if (n.recurring !== false && (n.interval_value || n.interval_unit)) {
+                  const v = parseInt(n.interval_value, 10);
+                  const u = n.interval_unit || 'years';
+                  let cyc;
+                  if (!v || u === 'custom') cyc = '↻';
+                  else if (u === 'months') cyc = `${v}mo`;
+                  else if (u === 'years')  cyc = `${v}y`;
+                  else if (u === 'days')   cyc = `${v}d`;
+                  else cyc = `${v}${u.charAt(0)}`;
+                  activityBadges.push(`<span title="Auto-renews every ${v || ''} ${u} when confirmed" style="font-size:9px;padding:2px 5px;border-radius:3px;background:#00897b;color:white;">↻ ${cyc}</span>`);
+                }
+                if (n.parent_notice_id) {
+                  activityBadges.push(`<span title="Auto-created from a previous cycle" style="font-size:9px;padding:2px 5px;border-radius:3px;background:#5d4037;color:white;">cycle</span>`);
+                }
+                if (n.auto_rolled_at) {
+                  const rolledDate = (n.auto_rolled_at || '').split('T')[0];
+                  activityBadges.push(`<span title="Auto-rolled to next cycle on ${rolledDate} after reminders went out and due date passed" style="font-size:9px;padding:2px 5px;border-radius:3px;background:#558b2f;color:white;">↻ rolled ${rolledDate.split('-').slice(1).join('/')}</span>`);
+                }
                 return `<tr class="${rowClass} ${isSelected ? 'inv-row-selected' : ''}" style="cursor:pointer;" onclick="openServiceDueNoticeModal(${JSON.stringify(n).replace(/"/g, '&quot;')},'${n.customer_id || ''}','${n.property_id || ''}')">
                   <td onclick="event.stopPropagation()"><input type="checkbox" ${isSelected ? 'checked' : ''} onchange="sdnToggleOne('${n.id}', this.checked)"></td>
                   <td style="font-size:11px;color:var(--text-light);">${rowNum}</td>
@@ -12536,7 +13108,12 @@ async function loadServiceDueNotices() {
                   <td>${esc(n.service_type || '-')}</td>
                   <td style="font-weight:600;">${n.due_date || '-'}</td>
                   <td style="font-weight:600;color:${n.is_overdue ? '#f44336' : n.days_until_due <= 30 ? '#ff9800' : 'inherit'};">${daysText}</td>
-                  <td><span class="badge" style="font-size:9px;padding:2px 6px;border-radius:3px;background:${statusColor};color:white;">${statusText}</span></td>
+                  <td>
+                    <div style="display:flex;flex-direction:column;gap:2px;">
+                      <span class="badge" style="font-size:9px;padding:2px 6px;border-radius:3px;background:${statusColor};color:white;display:inline-block;width:fit-content;">${statusText}</span>
+                      ${activityBadges.length ? `<div style="display:flex;gap:3px;flex-wrap:wrap;">${activityBadges.join('')}</div>` : ''}
+                    </div>
+                  </td>
                 </tr>`;
               }).join('')}
             </tbody>
@@ -12594,6 +13171,531 @@ async function sdnBatchDelete() {
     await window.api.deleteServiceDueNotice(id);
   }
   showToast(`Deleted ${selectedSdnIds.size} notice(s).`, 'success');
+  selectedSdnIds.clear();
+  loadServiceDueNotices();
+}
+
+// Generate a printable PDF for the selected notices. Two output modes:
+//   "self"  → 4 postcards per letter sheet, dashed cut lines, designed for
+//             at-home printing on cardstock and cutting with scissors/cutter
+//   "shop"  → one postcard per page at 4.5x6.25 inch (4.25x6 trim with 0.125
+//             inch bleed on each side), crop marks. Print-shop-ready: upload
+//             this PDF to Staples / UPS / Vistaprint / FedEx Office and the
+//             trim/bleed lines tell their press operator exactly how to cut.
+async function sdnBatchPrintMailers() {
+  if (selectedSdnIds.size === 0) return;
+
+  // Ask which format they want before doing the work.
+  const mode = await new Promise((resolve) => {
+    openModal('Print postcards — choose format', `
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">
+        How are you printing these?
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:2px solid var(--border);border-radius:6px;cursor:pointer;" onmouseenter="this.style.borderColor='#1565c0'" onmouseleave="this.style.borderColor='var(--border)'">
+          <input type="radio" name="mailerMode" value="self" checked style="margin-top:3px;">
+          <div>
+            <div style="font-weight:700;font-size:14px;">At-home / office printer</div>
+            <div style="font-size:12px;color:var(--text-light);margin-top:2px;">4 postcards per letter sheet on cardstock, dashed cut lines. Print &rarr; cut with scissors or paper cutter &rarr; stamp &rarr; mail.</div>
+          </div>
+        </label>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:2px solid var(--border);border-radius:6px;cursor:pointer;" onmouseenter="this.style.borderColor='#1565c0'" onmouseleave="this.style.borderColor='var(--border)'">
+          <input type="radio" name="mailerMode" value="shop" style="margin-top:3px;">
+          <div>
+            <div style="font-weight:700;font-size:14px;">Print shop (Staples, UPS, Vistaprint, FedEx Office)</div>
+            <div style="font-size:12px;color:var(--text-light);margin-top:2px;">One postcard per page at 4.25 &times; 6 inch trim with 0.125 inch bleed and crop marks. Upload directly to their postcard-print product. Each card carries the recipient&rsquo;s address — they print, cut, and you mail.</div>
+          </div>
+        </label>
+      </div>
+    `, `
+      <button class="btn btn-secondary" onclick="closeModal();window._sdnPrintMode='__cancel__'">Cancel</button>
+      <button class="btn btn-primary" onclick="window._sdnPrintMode=document.querySelector('input[name=mailerMode]:checked').value;closeModal()">Generate PDF</button>
+    `);
+    // Poll for the modal result — closeModal() is fire-and-forget so we wait on the global flag
+    const start = Date.now();
+    const tick = setInterval(() => {
+      if (window._sdnPrintMode || Date.now() - start > 60000) {
+        clearInterval(tick);
+        const m = window._sdnPrintMode;
+        delete window._sdnPrintMode;
+        resolve(m === '__cancel__' ? null : (m || null));
+      }
+    }, 100);
+  });
+  if (!mode) return;
+
+  const ids = Array.from(selectedSdnIds);
+
+  // Pull everything we need in parallel — full notice list, customers, properties, settings
+  const [{ data: allNotices }, { data: customers }, { data: properties }, { data: settings }] =
+    await Promise.all([
+      window.api.getServiceDueNotices(),
+      window.api.getCustomers(),
+      window.api.getProperties(),
+      window.api.getSettings(),
+    ]);
+  const noticesById = {}; (allNotices || []).forEach(n => { noticesById[n.id] = n; });
+  const custById = {}; (customers || []).forEach(c => { custById[c.id] = c; });
+  const propById = {}; (properties || []).forEach(p => { propById[p.id] = p; });
+
+  // Validate selection — skip notices missing addresses (window envelope needs them)
+  const printable = [];
+  const skipped = [];
+  for (const id of ids) {
+    const n = noticesById[id];
+    if (!n) { skipped.push({ id, reason: 'not found' }); continue; }
+    const cust = custById[n.customer_id];
+    if (!cust) { skipped.push({ id, reason: 'customer not found' }); continue; }
+    const prop = propById[n.property_id];
+    // Mailing address: prefer customer's billing address fields, fall back to property
+    const hasMailAddr = (cust.billing_address || cust.address) || (prop && prop.address);
+    if (!hasMailAddr) { skipped.push({ id, reason: `no address on file for ${cust.name}` }); continue; }
+    printable.push({ notice: n, customer: cust, property: prop });
+  }
+
+  if (printable.length === 0) {
+    showToast(`Nothing to print — ${skipped.length} notice(s) had no usable address.`, 'error', 6000);
+    return;
+  }
+
+  // Build a confirm message that surfaces skipped count
+  const today = new Date();
+  const todayLabel = today.toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const companyName = settings?.company_name || 'Interstate Septic';
+  const companyAddr = settings?.company_address || '';
+  // Phone always shows on the postcard. Falls back to the office line if Settings hasn't
+  // been filled out yet, so a freshly-installed ISM still produces a valid mailable card.
+  const companyPhone = settings?.company_phone || '(207) 596-5646';
+
+  // POSTCARD LAYOUT — 4 cards per letter sheet.
+  //   Each card is 4.25" wide × 5.5" tall (portrait), so 2-across × 2-down fits a
+  //   letter sheet exactly. After printing on cardstock, cut along the dashed lines
+  //   to get four mailable postcards. 4.25 × 5.5 is within USPS first-class
+  //   postcard size limits (max 4.25 × 6).
+  //
+  //   Single-sided layout per card:
+  //     - Return address: top-left
+  //     - Stamp area:     top-right (a labeled box; you place a real stamp here)
+  //     - Recipient:      middle-left (the block the post office reads)
+  //     - Message:        bottom — call-to-schedule copy + your phone number
+  const postcardFor = ({ notice: n, customer: c, property: p }) => {
+    const recipient = (c.billing_company || c.name || 'Valued Customer');
+    const mailLine1 = c.billing_address || c.address || (p ? p.address : '') || '';
+    const cityState = [
+      c.billing_city || c.city || (p ? p.city : '') || '',
+      [(c.billing_state || c.state || (p ? p.state : '') || ''), (c.billing_zip || c.zip || (p ? p.zip : '') || '')].filter(Boolean).join(' ')
+    ].filter(Boolean).join(', ');
+    const propAddr = p
+      ? `${p.address || ''}${p.city ? ', ' + p.city : ''}${p.state ? ' ' + p.state : ''}${p.zip ? ' ' + p.zip : ''}`.trim()
+      : 'your property';
+    const isAfter = n.due_date && n.due_date < today.toISOString().split('T')[0];
+    const isDayOf = n.due_date && n.due_date === today.toISOString().split('T')[0];
+    const dueDateLabel = n.due_date ? new Date(n.due_date + 'T12:00:00').toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) : '';
+    const serviceType = n.service_type || 'Septic Service';
+
+    let headline, body;
+    if (isAfter) {
+      headline = 'SERVICE OVERDUE';
+      body = `Our records show your <strong>${esc(serviceType)}</strong> service at <strong>${esc(propAddr)}</strong> is now overdue (was due ${dueDateLabel}). Please call us to get back on the schedule.`;
+    } else if (isDayOf) {
+      headline = "TIME TO SCHEDULE";
+      body = `It's time to schedule your next <strong>${esc(serviceType)}</strong> service at <strong>${esc(propAddr)}</strong>. Please give us a call to pick a date that works for you.`;
+    } else {
+      headline = 'SERVICE REMINDER';
+      body = `Your next <strong>${esc(serviceType)}</strong> service at <strong>${esc(propAddr)}</strong> is coming up on <strong>${dueDateLabel}</strong>. Please call us at your convenience to get on the schedule.`;
+    }
+
+    return `
+      <div class="postcard">
+        <div class="card-headline">${headline}</div>
+
+        <div class="return-block">
+          <div class="return-name">${esc(companyName)}</div>
+          ${companyAddr ? `<div>${esc(companyAddr)}</div>` : ''}
+          ${companyPhone ? `<div>${esc(companyPhone)}</div>` : ''}
+        </div>
+
+        <div class="stamp-box">PLACE<br>STAMP<br>HERE</div>
+
+        <div class="recipient-block">
+          <div class="recipient-name">${esc(recipient)}</div>
+          ${mailLine1 ? `<div>${esc(mailLine1)}</div>` : ''}
+          ${cityState ? `<div>${esc(cityState)}</div>` : ''}
+        </div>
+
+        <div class="message-block">
+          <p>${body}</p>
+          ${companyPhone ? `<p class="cta">Call <strong>${esc(companyPhone)}</strong> today!</p>` : '<p class="cta">Please call our office today!</p>'}
+          <div class="ref-line">${esc(serviceType)} &middot; due ${dueDateLabel || '(no date)'}</div>
+        </div>
+      </div>`;
+  };
+
+  // ── Build the HTML body either as 4-up letter sheets (self-print) or as
+  //    one card per page at print-shop trim (1-up with bleed + crop marks).
+  let html;
+  if (mode === 'shop') {
+    // PRINT-SHOP MODE — LANDSCAPE postcard layout
+    // Final trim: 6 x 4.25 inch (USPS first-class postcard standard, landscape).
+    // Bleed: 0.125 inch on each edge → page size 6.25 x 4.5 inch.
+    // Layout: left half = message, right half = addressing block (return + stamp + recipient).
+    // No wasted vertical real estate — every inch carries content or whitespace by design.
+    //
+    // Page 1 is an instruction cover sheet so a counter clerk who's never seen
+    // this file before can fulfill the order without asking questions.
+    const totalCards = printable.length;
+    const todayHuman = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const coverSheet = `
+      <div class="page cover-page">
+        <div class="cover-inner">
+          <div class="cover-banner">PRINT-READY POSTCARDS &mdash; PRINT INSTRUCTIONS</div>
+          <h1>${esc(companyName)}</h1>
+          <p class="cover-sub">Reminder mailing prepared ${esc(todayHuman)}</p>
+          <table class="cover-table">
+            <tr><th>Total cards in this file</th><td><strong>${totalCards}</strong> &mdash; pages 2 through ${totalCards + 1}</td></tr>
+            <tr><th>Each page is</th><td>One <em>unique</em> personalized postcard. <strong>Do not collate &mdash; print each page once.</strong></td></tr>
+            <tr><th>Page size</th><td>6.25 &times; 4.5 inch landscape (includes 0.125 inch bleed on every edge)</td></tr>
+            <tr><th>Final trim size</th><td>6 &times; 4.25 inch landscape (USPS standard postcard) &mdash; cut along the crop marks at all four corners</td></tr>
+            <tr><th>Bleed</th><td>0.125 inch all sides &mdash; do not trim shorter than the crop marks</td></tr>
+            <tr><th>Suggested stock</th><td>110 lb (199 gsm) white cardstock or heavier &mdash; matte or gloss</td></tr>
+            <tr><th>Color</th><td>Full color, single-sided printing</td></tr>
+            <tr><th>Finishing</th><td>Cut to 6 &times; 4.25 inch using crop marks &mdash; no folding, no scoring</td></tr>
+          </table>
+          <div class="cover-callout">
+            <strong>Step-by-step:</strong>
+            <ol>
+              <li>Print <strong>pages 2 through ${totalCards + 1}</strong> on 110 lb (or heavier) cardstock, single sided, full color, at 100% scale (do not "fit to page").</li>
+              <li>Cut each printed sheet down to the trim line indicated by the crop marks at the four corners. Final size = 6 &times; 4.25 inches landscape.</li>
+              <li>Hand back the finished cards in a single stack &mdash; no sorting required.</li>
+            </ol>
+          </div>
+          <p class="cover-questions">
+            Questions? Contact ${esc(companyName)}${companyPhone ? ' at <strong>' + esc(companyPhone) + '</strong>' : ''}.
+          </p>
+          <p class="cover-meta">
+            File generated by Interstate Septic Manager &middot; ${todayHuman}<br>
+            Recipient list (CSV) saved alongside this PDF for verification.
+          </p>
+        </div>
+      </div>`;
+    const cards = printable.map(({ notice: n, customer: c, property: p }) => {
+      const recipient = (c.billing_company || c.name || 'Valued Customer');
+      const mailLine1 = c.billing_address || c.address || (p ? p.address : '') || '';
+      const cityState = [
+        c.billing_city || c.city || (p ? p.city : '') || '',
+        [(c.billing_state || c.state || (p ? p.state : '') || ''), (c.billing_zip || c.zip || (p ? p.zip : '') || '')].filter(Boolean).join(' ')
+      ].filter(Boolean).join(', ');
+      const propAddr = p
+        ? `${p.address || ''}${p.city ? ', ' + p.city : ''}${p.state ? ' ' + p.state : ''}${p.zip ? ' ' + p.zip : ''}`.trim()
+        : 'your property';
+      const isAfter = n.due_date && n.due_date < today.toISOString().split('T')[0];
+      const isDayOf = n.due_date && n.due_date === today.toISOString().split('T')[0];
+      const dueDateLabel = n.due_date ? new Date(n.due_date + 'T12:00:00').toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) : '';
+      const serviceType = n.service_type || 'Septic Service';
+      let headline, body;
+      if (isAfter) {
+        headline = 'SERVICE OVERDUE';
+        body = `Our records show your <strong>${esc(serviceType)}</strong> service at <strong>${esc(propAddr)}</strong> is now overdue (was due ${dueDateLabel}). Please call us to get back on the schedule.`;
+      } else if (isDayOf) {
+        headline = 'TIME TO SCHEDULE';
+        body = `It's time to schedule your next <strong>${esc(serviceType)}</strong> service at <strong>${esc(propAddr)}</strong>. Please give us a call to pick a date that works for you.`;
+      } else {
+        headline = 'SERVICE REMINDER';
+        body = `Your next <strong>${esc(serviceType)}</strong> service at <strong>${esc(propAddr)}</strong> is coming up on <strong>${dueDateLabel}</strong>. Please call us at your convenience to get on the schedule.`;
+      }
+      // Build a couple of "why now" bullets so the message half doesn't feel sparse.
+      // Different bullets per timing variant keep the messaging on point.
+      let whyBullets;
+      if (isAfter) {
+        whyBullets = [
+          'Avoid backups and emergency calls',
+          'Get back on a regular service cycle',
+          'Quick 5-minute call &mdash; no obligation'
+        ];
+      } else if (isDayOf) {
+        whyBullets = [
+          'Lock in your preferred service date',
+          'Avoid the high-season rush',
+          'Easy 5-minute phone call'
+        ];
+      } else {
+        whyBullets = [
+          'Plan ahead, no scrambling',
+          'Pick a day that works for you',
+          'Lock in this year\'s pricing'
+        ];
+      }
+
+      return `
+        <div class="page">
+          <!-- Trim area (6x4.25 landscape) — bleed extends 0.125" outside this on every side -->
+          <div class="trim">
+            <!-- Crop marks at the four trim corners -->
+            <div class="crop crop-h crop-tl-h"></div><div class="crop crop-v crop-tl-v"></div>
+            <div class="crop crop-h crop-tr-h"></div><div class="crop crop-v crop-tr-v"></div>
+            <div class="crop crop-h crop-bl-h"></div><div class="crop crop-v crop-bl-v"></div>
+            <div class="crop crop-h crop-br-h"></div><div class="crop crop-v crop-br-v"></div>
+
+            <!-- LEFT COLUMN — the message side -->
+            <div class="msg-col">
+              <div class="msg-headline">${headline}</div>
+              <div class="msg-company">${esc(companyName)}</div>
+              <p class="msg-body">${body}</p>
+              <ul class="msg-why">
+                ${whyBullets.map(b => `<li>${b}</li>`).join('')}
+              </ul>
+              <div class="msg-cta">
+                ${companyPhone ? `<div class="msg-cta-label">Call us today!</div><div class="msg-cta-phone">${esc(companyPhone)}</div>` : `<div class="msg-cta-label">Please call our office today!</div>`}
+              </div>
+              <div class="msg-ref">${esc(serviceType)} &middot; due ${dueDateLabel || '(no date)'}</div>
+            </div>
+
+            <!-- VERTICAL DIVIDER -->
+            <div class="divider"></div>
+
+            <!-- RIGHT COLUMN — the addressing side -->
+            <div class="addr-col">
+              <div class="return-block">
+                <div class="return-name">${esc(companyName)}</div>
+                ${companyAddr ? `<div>${esc(companyAddr)}</div>` : ''}
+                ${companyPhone ? `<div>${esc(companyPhone)}</div>` : ''}
+              </div>
+              <div class="stamp-box">PLACE<br>STAMP<br>HERE</div>
+              <div class="recipient-block">
+                <div class="recipient-name">${esc(recipient)}</div>
+                ${mailLine1 ? `<div>${esc(mailLine1)}</div>` : ''}
+                ${cityState ? `<div>${esc(cityState)}</div>` : ''}
+              </div>
+            </div>
+          </div>
+        </div>`;
+    });
+    html = `<!DOCTYPE html>
+      <html><head><meta charset="utf-8"><title>Service Due Postcards (Print-Shop Ready)</title>
+      <style>
+        @page { size: 6.25in 4.5in; margin: 0; }
+        body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; color: #1a1a1a; -webkit-print-color-adjust: exact; }
+        .page { position: relative; width: 6.25in; height: 4.5in; page-break-after: always; background: #ffffff; }
+        .page:last-child { page-break-after: auto; }
+
+        /* COVER SHEET — same page footprint as the postcard so the print shop sees consistent sizing */
+        .cover-page { background: #ffffff; }
+        .cover-inner { padding: 0.25in 0.35in; height: 4in; box-sizing: border-box; overflow: hidden; }
+        .cover-banner { background: #1b5e20; color: #fff; text-align: center; padding: 6px; font-weight: 800; font-size: 9px; letter-spacing: 1.5px; margin: -0.25in -0.35in 10px; }
+        .cover-page h1 { margin: 0 0 2px; font-size: 16px; color: #1b5e20; letter-spacing: 0.5px; }
+        .cover-sub { margin: 0 0 8px; color: #555; font-size: 9px; }
+        .cover-table { width: 100%; border-collapse: collapse; font-size: 8px; margin-bottom: 8px; }
+        .cover-table th { text-align: left; padding: 3px 5px; background: #f0f7f0; color: #1b5e20; font-weight: 700; vertical-align: top; width: 30%; border-bottom: 1px solid #cfe5cf; }
+        .cover-table td { padding: 3px 5px; vertical-align: top; border-bottom: 1px solid #e8e8e8; }
+        .cover-callout { border: 1.5px solid #1b5e20; border-radius: 4px; padding: 6px 10px; margin: 6px 0; background: #f8fcf8; font-size: 9px; }
+        .cover-callout strong { display: block; color: #1b5e20; margin-bottom: 3px; font-size: 10px; }
+        .cover-callout ol { margin: 0; padding-left: 16px; }
+        .cover-callout li { margin-bottom: 2px; line-height: 1.35; }
+        .cover-questions { font-size: 9px; color: #444; margin: 8px 0 4px; }
+        .cover-meta { font-size: 7px; color: #888; border-top: 1px solid #ddd; padding-top: 4px; margin-top: 0; line-height: 1.4; }
+
+        /* POSTCARD PAGE — landscape 6x4.25 trim, with 0.125" bleed = 6.25x4.5 page */
+        .trim {
+          position: absolute;
+          top: 0.125in; left: 0.125in;
+          width: 6in; height: 4.25in;
+          box-sizing: border-box;
+          background: #ffffff;
+          /* Two-column layout: msg-col (3in) | divider | addr-col (3in) */
+        }
+
+        /* Crop marks at the four trim corners — easy to see for the press operator */
+        .crop { position: absolute; }
+        .crop-h { width: 0.2in; height: 0; border-top: 0.75pt solid #000; }
+        .crop-v { width: 0; height: 0.2in; border-left: 0.75pt solid #000; }
+        .crop-tl-h { top: -0.075in; left: -0.075in; }
+        .crop-tl-v { top: -0.075in; left: -0.075in; }
+        .crop-tr-h { top: -0.075in; right: -0.075in; }
+        .crop-tr-v { top: -0.075in; right: -0.075in; }
+        .crop-bl-h { bottom: -0.075in; left: -0.075in; }
+        .crop-bl-v { bottom: -0.075in; left: -0.075in; }
+        .crop-br-h { bottom: -0.075in; right: -0.075in; }
+        .crop-br-v { bottom: -0.075in; right: -0.075in; }
+
+        /* LEFT COLUMN — message */
+        .msg-col {
+          position: absolute;
+          top: 0; left: 0;
+          width: 2.95in; height: 4.25in;
+          padding: 0.25in 0.2in 0.25in 0.3in;
+          box-sizing: border-box;
+        }
+        .msg-headline {
+          font-weight: 800; font-size: 14px; letter-spacing: 2px;
+          color: #1b5e20; margin-bottom: 4px;
+        }
+        .msg-company { font-size: 9px; color: #1b5e20; font-weight: 700; margin-bottom: 8px; letter-spacing: 0.5px; }
+        .msg-body { font-size: 10px; line-height: 1.45; margin: 0 0 8px; }
+        .msg-why { margin: 0 0 8px; padding-left: 14px; font-size: 9px; line-height: 1.4; color: #333; }
+        .msg-why li { margin-bottom: 1px; }
+        .msg-cta {
+          background: #1b5e20; color: #fff;
+          padding: 6px 8px;
+          margin-top: 8px;
+          border-radius: 4px;
+          text-align: center;
+        }
+        .msg-cta-label { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.9; }
+        .msg-cta-phone { font-size: 18px; font-weight: 800; letter-spacing: 1px; margin-top: 2px; }
+        .msg-ref { font-size: 9px; color: #555; margin-top: 8px; font-weight: 600; }
+
+        /* DIVIDER between columns */
+        .divider {
+          position: absolute;
+          top: 0.25in; left: 2.95in;
+          width: 0; height: 3.75in;
+          border-left: 1px solid #c5e1c5;
+        }
+
+        /* RIGHT COLUMN — addressing */
+        .addr-col {
+          position: absolute;
+          top: 0; left: 3in;
+          width: 3in; height: 4.25in;
+          padding: 0.25in 0.3in 0.25in 0.2in;
+          box-sizing: border-box;
+        }
+        .return-block { font-size: 9px; line-height: 1.4; color: #444; max-width: 1.7in; }
+        .return-block .return-name { font-weight: 700; color: #1b5e20; font-size: 10px; margin-bottom: 1px; }
+        .stamp-box {
+          position: absolute; top: 0.25in; right: 0.3in;
+          width: 0.9in; height: 1in;
+          border: 1px dashed #999; font-size: 8px; text-align: center; color: #999;
+          padding-top: 0.3in; box-sizing: border-box; letter-spacing: 1px; line-height: 1.35;
+        }
+        .recipient-block {
+          position: absolute;
+          top: 1.5in; left: 0.4in; right: 0.3in;
+          font-size: 12px; line-height: 1.55;
+        }
+        .recipient-block .recipient-name { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+        strong { color: #000; }
+      </style>
+      </head><body>
+      ${coverSheet}
+      ${cards.join('')}
+      </body></html>`;
+  } else {
+    // SELF-PRINT MODE — 4 cards per letter sheet
+    const cardsPerSheet = 4;
+    const cards = printable.map(postcardFor);
+    while (cards.length % cardsPerSheet !== 0) {
+      cards.push(`<div class="postcard postcard-blank"></div>`);
+    }
+    const sheets = [];
+    for (let i = 0; i < cards.length; i += cardsPerSheet) {
+      sheets.push(`<div class="sheet">${cards.slice(i, i + cardsPerSheet).join('')}</div>`);
+    }
+    html = `<!DOCTYPE html>
+      <html><head><meta charset="utf-8"><title>Service Due Postcards</title>
+      <style>
+        @page { size: letter; margin: 0; }
+        body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; color: #1a1a1a; -webkit-print-color-adjust: exact; }
+        .sheet { width: 8.5in; height: 11in; display: grid; grid-template-columns: 4.25in 4.25in; grid-template-rows: 5.5in 5.5in; page-break-after: always; }
+        .sheet:last-child { page-break-after: auto; }
+        .postcard { position: relative; width: 4.25in; height: 5.5in; padding: 0.3in; box-sizing: border-box; border: 1px dashed #aaa; font-size: 11px; line-height: 1.45; overflow: hidden; }
+        .postcard-blank { border: 1px dashed #ddd; }
+        .card-headline { position: absolute; top: 0.25in; left: 0; right: 0; text-align: center; font-weight: 800; font-size: 13px; letter-spacing: 2px; color: #1b5e20; }
+        .return-block { position: absolute; top: 0.7in; left: 0.3in; font-size: 9px; line-height: 1.35; color: #444; max-width: 2.1in; }
+        .return-block .return-name { font-weight: 700; color: #1b5e20; font-size: 10px; margin-bottom: 1px; }
+        .stamp-box { position: absolute; top: 0.7in; right: 0.3in; width: 0.95in; height: 1.1in; border: 1px dashed #999; font-size: 8px; text-align: center; color: #999; padding-top: 0.32in; box-sizing: border-box; letter-spacing: 1px; line-height: 1.4; }
+        .recipient-block { position: absolute; top: 2.05in; left: 0.55in; right: 0.3in; font-size: 12px; line-height: 1.5; }
+        .recipient-block .recipient-name { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+        .message-block { position: absolute; bottom: 0.3in; left: 0.3in; right: 0.3in; font-size: 10px; line-height: 1.45; border-top: 1px solid #1b5e20; padding-top: 0.12in; }
+        .message-block p { margin: 0 0 6px; }
+        .message-block .cta { font-size: 12px; color: #1b5e20; margin-top: 4px; }
+        .message-block .ref-line { font-size: 8px; color: #888; margin-top: 4px; }
+        strong { color: #000; }
+      </style>
+      </head><body>
+      ${sheets.join('')}
+      </body></html>`;
+  }
+
+  const fnameSuffix = mode === 'shop' ? 'PRINTSHOP' : 'self';
+  const filename = `service-due-postcards-${fnameSuffix}-${today.toISOString().split('T')[0]}-${printable.length}.pdf`;
+  const sheetCount = mode === 'shop' ? printable.length : Math.ceil(printable.length / 4);
+  const sheetUnit = mode === 'shop' ? 'page' : 'sheet';
+  showToast(`Generating ${printable.length} postcard${printable.length === 1 ? '' : 's'} (${sheetCount} ${sheetUnit}${sheetCount === 1 ? '' : 's'})…`, 'info', 3000);
+  const result = await window.api.generatePdf(html, filename);
+  if (!result.success) {
+    if (result.canceled) return; // user backed out of save dialog
+    showToast(result.error || 'PDF generation failed.', 'error');
+    return;
+  }
+
+  // Sidecar CSV (shop mode only) — drops a `<filename>.recipients.csv` next to
+  // the PDF with one row per postcard. Useful for verifying nothing got missed
+  // and for variable-data printing (VDP) services that take a CSV + template.
+  if (mode === 'shop' && result.path) {
+    const csvLines = ['Card #,Customer,Service Type,Due Date,Mail Line 1,City/State/ZIP,Property,Phone,Email,Notice ID'];
+    const csvEsc = (v) => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    printable.forEach(({ notice: n, customer: c, property: p }, idx) => {
+      const recipient = c.billing_company || c.name || '';
+      const mailLine1 = c.billing_address || c.address || (p ? p.address : '') || '';
+      const cityState = [
+        c.billing_city || c.city || (p ? p.city : '') || '',
+        [(c.billing_state || c.state || (p ? p.state : '') || ''), (c.billing_zip || c.zip || (p ? p.zip : '') || '')].filter(Boolean).join(' ')
+      ].filter(Boolean).join(', ');
+      const propAddr = p ? `${p.address || ''}${p.city ? ', ' + p.city : ''}${p.state ? ' ' + p.state : ''}${p.zip ? ' ' + p.zip : ''}`.trim() : '';
+      csvLines.push([
+        idx + 1,
+        recipient,
+        n.service_type || '',
+        n.due_date || '',
+        mailLine1,
+        cityState,
+        propAddr,
+        c.phone_cell || c.phone || '',
+        c.email || '',
+        n.id || ''
+      ].map(csvEsc).join(','));
+    });
+    const csv = csvLines.join('\r\n');
+    try {
+      const sidecar = await window.api.saveSidecarFile(result.path, '.recipients.csv', csv);
+      if (sidecar.success) {
+        console.log('[SDN MAILERS] Sidecar CSV saved at:', sidecar.path);
+      }
+    } catch (e) {
+      console.warn('[SDN MAILERS] Could not save sidecar CSV:', e?.message || e);
+    }
+  }
+
+  // Auto-mark every printed notice as "downloaded for print" with today's date.
+  // No confirm prompt — fool-proof workflow means: download PDF → these are
+  // queued for mailing → operator can later filter "Not yet mailed" to see what's
+  // outstanding. If they need to undo for some reason, they can edit the notice.
+  const todayIso = today.toISOString().split('T')[0];
+  const action = mode === 'shop' ? 'queued-for-print' : 'self-printed';
+  for (const { notice } of printable) {
+    const history = Array.isArray(notice.mail_history) ? notice.mail_history.slice() : [];
+    history.push({
+      date: todayIso,
+      type: action,
+      filename: result.path ? result.path.split(/[\\/]/).pop() : filename,
+      sent_by: currentUser?.username || currentUser?.name || '',
+    });
+    await window.api.saveServiceDueNotice({
+      ...notice,
+      mail_history: history,
+      last_mailed_at: todayIso,
+    });
+  }
+  showToast(`PDF saved. ${printable.length} notice${printable.length === 1 ? '' : 's'} marked as ${action.replace(/-/g, ' ')} today.`, 'success', 5000);
+
+  if (skipped.length > 0) {
+    showToast(`${skipped.length} skipped (no address) — see console for details.`, 'info', 5000);
+    console.log('[SDN MAILERS] Skipped notices:', skipped);
+  }
   selectedSdnIds.clear();
   loadServiceDueNotices();
 }
@@ -16060,6 +17162,68 @@ async function loadSettings() {
       </div>
     </div>
 
+    <!-- SERVICE DUE REMINDERS -->
+    <div class="card mt-24">
+      <div class="card-header"><h3>Service Due Reminders</h3></div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">
+        Choose when ISM emails customers leading up to their next service. The background timer
+        runs once an hour and sends every reminder whose send-date has arrived. Settings here
+        apply to <strong>new</strong> service-due notices automatically. To back-fill existing
+        pending notices with your new cadence, click <em>Regenerate Pending Notices</em> below.
+      </p>
+
+      ${(() => {
+        const offsets = Array.isArray(s.sdn_reminder_offsets) ? s.sdn_reminder_offsets : null;
+        // Default presets if not yet configured — matches the legacy hardcoded SDN_DEFAULT_SCHEDULE.
+        const defaults = [
+          { days_offset: -60, label: '2 Months Before', enabled: false },
+          { days_offset: -30, label: '1 Month Before',  enabled: true  },
+          { days_offset: -14, label: '2 Weeks Before',  enabled: false },
+          { days_offset: -7,  label: '1 Week Before',   enabled: true  },
+          { days_offset: -3,  label: '3 Days Before',   enabled: false },
+          { days_offset: -1,  label: '1 Day Before',    enabled: false },
+          { days_offset:  0,  label: 'Day Of',          enabled: true  },
+          { days_offset:  7,  label: '1 Week After',    enabled: false },
+          { days_offset: 30,  label: '1 Month After',   enabled: false },
+        ];
+        // Apply persisted enabled state on top of defaults
+        const enabledByOffset = {};
+        if (offsets) offsets.forEach(o => { enabledByOffset[o.days_offset] = o.enabled !== false; });
+        const rendered = defaults.map(d => {
+          const isEnabled = (offsets ? !!enabledByOffset[d.days_offset] : d.enabled);
+          return `
+            <label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:var(--surface);font-size:13px;cursor:pointer;">
+              <input type="checkbox" class="sdn-offset-cb" data-days="${d.days_offset}" data-label="${esc(d.label)}" ${isEnabled ? 'checked' : ''}>
+              <span><strong>${esc(d.label)}</strong>
+                <span style="color:var(--text-light);font-size:11px;">(${d.days_offset === 0 ? 'on due date' : d.days_offset < 0 ? `${Math.abs(d.days_offset)} days before` : `${d.days_offset} days after`})</span>
+              </span>
+            </label>`;
+        }).join('');
+        return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-bottom:14px;">${rendered}</div>`;
+      })()}
+
+      <div style="margin:14px 0 6px;padding:10px 12px;background:#f0f7f0;border-left:3px solid #1b5e20;border-radius:4px;font-size:12px;">
+        <strong style="display:block;margin-bottom:4px;color:#1b5e20;">Auto-roll past-due notices</strong>
+        After all reminders have fired and the due date has passed, ISM marks the notice
+        complete and automatically creates the next-cycle notice (using the recurrence interval
+        on the original). Wait this many days past the due date before rolling:
+        <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
+          <input type="number" id="settingsSdnAutoRollGrace" value="${esc(s.sdn_auto_roll_grace_days != null ? s.sdn_auto_roll_grace_days : 0)}" min="0" max="365" step="1" style="width:80px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:13px;">
+          <span style="font-size:12px;color:var(--text-light);">days (0 = roll the same day the due date passes)</span>
+        </div>
+      </div>
+
+      <div style="border:1px dashed #c8c8c8;border-radius:6px;padding:12px 14px;background:#fafafa;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+        <button type="button" class="btn btn-secondary" onclick="regenerateSdnSchedules()" style="white-space:nowrap;">&#x21bb; Regenerate Pending Notices</button>
+        <button type="button" class="btn btn-secondary" onclick="runDueNoticeCheckNow()" style="white-space:nowrap;">&#9889; Run Reminder Check Now</button>
+        <span id="sdnSettingsStatus" style="font-size:12px;color:var(--text-light);"></span>
+      </div>
+      <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
+        <strong>Regenerate</strong> rewrites the per-notice schedule for every pending notice using the boxes above — useful after you change cadence so existing notices follow the new rules.
+        <strong>Run check now</strong> manually triggers the same hourly scan; any notice whose send-date has arrived gets an email immediately. Customer must have an email on file and SMTP must be configured.
+      </p>
+    </div>
+
     <div class="card">
       <div class="card-header"><h3>Geocoding &amp; Map Accuracy</h3></div>
       <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">
@@ -16996,6 +18160,12 @@ async function saveSettingsForm() {
     geocoding_provider: document.getElementById('settingsGeocodeProvider')?.value || 'auto',
     mapbox_token: document.getElementById('settingsMapboxToken')?.value.trim() || '',
     anthropic_api_key: document.getElementById('settingsAnthropicKey')?.value.trim() || '',
+    sdn_reminder_offsets: Array.from(document.querySelectorAll('.sdn-offset-cb')).map(cb => ({
+      days_offset: parseInt(cb.dataset.days, 10),
+      label: cb.dataset.label,
+      enabled: cb.checked,
+    })),
+    sdn_auto_roll_grace_days: parseInt(document.getElementById('settingsSdnAutoRollGrace')?.value, 10) || 0,
   };
 
   const result = await window.api.saveSettings(data);
