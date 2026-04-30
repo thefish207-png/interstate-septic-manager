@@ -28,6 +28,15 @@ supabase-session.json
 *.backup
 Disposal_Record_*.pdf
 
+# Internal notes / audits — kept locally, never committed
+IMPROVEMENTS.md
+OVERNIGHT_AUDIT.md
+PHASE3_STATUS.md
+PWA_PLAN.md
+WAKE_UP_NOTES.md
+edge-case-results.md
+notes/
+
 # Temp debug/seed scripts (not part of the app)
 debug_auth.js
 debug_read.js

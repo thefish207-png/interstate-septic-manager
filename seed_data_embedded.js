@@ -6,9 +6,8 @@ module.exports = {
   "users": [
     {
       "name": "Tyler",
-      "phone": "2075422259",
+      "phone": "",
       "username": "tyler",
-      "password_hash": "$2b$10$B1no5ua7ONjO.mHB6mFHwOuvgpxQP5810IM.segUgmvmpaMwNmxcG",
       "role": "admin",
       "id": "b2a44ce6-4a8f-485f-90a9-8777723e15ef",
       "created_at": "2026-03-14T20:27:15.262Z",
