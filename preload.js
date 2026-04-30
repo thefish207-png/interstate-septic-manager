@@ -224,6 +224,7 @@ contextBridge.exposeInMainWorld('api', {
   // Work Order History (legacy from prior software)
   getWorkOrderHistory: (params) => ipcRenderer.invoke('get-work-order-history', params),
   getLegacyCustomers: (params) => ipcRenderer.invoke('get-legacy-customers', params),
+  getAllLegacyCustomers: (opts) => ipcRenderer.invoke('get-all-legacy-customers', opts),
 
   // TankTrack Import
   importSelectFile: () => ipcRenderer.invoke('import-select-file'),

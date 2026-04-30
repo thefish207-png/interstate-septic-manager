@@ -1529,110 +1529,211 @@ async function exportCustomersCsv() {
   }
 }
 
-// ===== LEGACY HISTORY PAGE (work orders from prior software) =====
+// ===== SUMMIT HISTORY PAGE (legacy work orders from prior software) =====
+// Loads all ~22K legacy customers ONCE per session (cached in main process
+// + here in the renderer). After hydration, search/sort/page are all
+// in-memory so the UI stays instant.
 let _historySearchTimeout;
-let _historyState = { search: '', loading: false };
+let _historyCache = null; // full cached list
+let _historyView = {
+  search: '',
+  sortBy: 'name',     // name | address | phone | email | count | first_date | last_date
+  sortDir: 'asc',     // asc | desc
+  page: 1,
+  pageSize: 100,
+};
 
-async function loadHistory(search) {
+async function loadHistory() {
   navHistory = [];
-  _historyState.search = search != null ? search : (_historyState.search || '');
-  const page = document.getElementById('page-history');
-  page.innerHTML = `
-    <div class="search-bar" style="display:flex;gap:8px;align-items:center;">
-      <input type="text" id="historySearchInput" placeholder="Search legacy customers by name, phone, address, email, or legacy ID..." value="${esc(_historyState.search)}" oninput="debounceHistorySearch()" style="flex:1;">
-      <span id="historyResultCount" style="font-size:12px;color:var(--text-light);"></span>
-    </div>
-    <div id="historyResults" class="card" style="padding:0;overflow:hidden;margin-top:8px;">
-      <div style="padding:24px;text-align:center;color:var(--text-light);">Loading legacy customers&hellip;</div>
-    </div>
-  `;
-  if (_historyState.search) {
-    const el = document.getElementById('historySearchInput');
-    if (el) { el.focus(); el.setSelectionRange(_historyState.search.length, _historyState.search.length); }
-  }
-  await _renderHistoryResults();
-}
+  const pageEl = document.getElementById('page-history');
 
-function debounceHistorySearch() {
-  clearTimeout(_historySearchTimeout);
-  _historySearchTimeout = setTimeout(() => {
-    _historyState.search = document.getElementById('historySearchInput').value || '';
-    _renderHistoryResults();
-  }, 250);
-}
-
-async function _renderHistoryResults() {
-  const container = document.getElementById('historyResults');
-  const countEl = document.getElementById('historyResultCount');
-  if (!container) return;
-  if (_historyState.loading) return;
-  _historyState.loading = true;
-  try {
-    const { data: custs, total } = await window.api.getLegacyCustomers({
-      search: _historyState.search,
-      limit: 200,
-      offset: 0,
-    });
-    if (countEl) {
-      const shown = Math.min(custs.length, total);
-      countEl.textContent = total > shown
-        ? `Showing ${shown} of ${total.toLocaleString()}`
-        : `${total.toLocaleString()} customer${total !== 1 ? 's' : ''}`;
-    }
-    if (!custs.length) {
-      container.innerHTML = `
-        <div style="padding:32px;text-align:center;color:var(--text-light);">
-          <div style="font-size:32px;margin-bottom:8px;">&#128270;</div>
-          <p>No legacy customers ${_historyState.search ? 'match this search' : 'imported yet'}.</p>
-          ${!_historyState.search ? '<p style="font-size:12px;">Run <code>node scripts/import-work-order-history.js</code> to import the CSV.</p>' : ''}
+  if (!_historyCache) {
+    pageEl.innerHTML = `
+      <div class="card" style="padding:32px;text-align:center;">
+        <div style="font-size:28px;margin-bottom:8px;">&#9203;</div>
+        <div style="font-weight:600;">Loading legacy customers&hellip;</div>
+        <div style="color:var(--text-light);font-size:12px;margin-top:6px;">First load only — will be instant after this.</div>
+      </div>
+    `;
+    try {
+      const t0 = performance.now();
+      const { data } = await window.api.getAllLegacyCustomers();
+      const ms = Math.round(performance.now() - t0);
+      _historyCache = data || [];
+      console.log('[Summit History] loaded', _historyCache.length, 'rows in', ms, 'ms');
+    } catch (err) {
+      console.error('[history] load failed:', err);
+      pageEl.innerHTML = `
+        <div class="card" style="padding:24px;color:#c62828;">
+          Failed to load legacy customers: ${esc(err.message || String(err))}
         </div>
       `;
       return;
     }
-    container.innerHTML = `
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Address</th>
-            <th>Phone</th>
-            <th>Email</th>
-            <th style="text-align:right;">Work Orders</th>
-            <th>First / Last</th>
-            <th>Linked?</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${custs.map(c => {
-            const linked = c.matched_customer_id
-              ? `<a href="#" onclick="event.preventDefault();openCustomerDetail('${c.matched_customer_id}')" style="color:#1565c0;">View current &rarr;</a>`
-              : '<span style="color:#9e9e9e;font-size:11px;">Not linked</span>';
-            const onclick = `openLegacyCustomerDetail('${esc(c.legacy_customer_id || '')}', '${esc((c.name_norm || '').replace(/'/g, "\\'"))}')`;
-            return `
-              <tr>
-                <td onclick="${onclick}" style="cursor:pointer;"><strong>${esc(c.name || '')}</strong></td>
-                <td onclick="${onclick}" style="cursor:pointer;font-size:12px;">${esc(c.address || '')}</td>
-                <td onclick="${onclick}" style="cursor:pointer;">${esc(c.phone || '')}</td>
-                <td onclick="${onclick}" style="cursor:pointer;">${esc(c.email || '')}</td>
-                <td onclick="${onclick}" style="cursor:pointer;text-align:right;">${c.count}</td>
-                <td onclick="${onclick}" style="cursor:pointer;font-size:11px;color:var(--text-light);">${esc(c.first_date || '')} &mdash; ${esc(c.last_date || '')}</td>
-                <td>${linked}</td>
-              </tr>
-            `;
-          }).join('')}
-        </tbody>
-      </table>
-    `;
-  } catch (err) {
-    console.error('[history] load failed:', err);
-    container.innerHTML = `
-      <div style="padding:24px;text-align:center;color:#c62828;">
-        Failed to load legacy customers: ${esc(err.message || String(err))}
-      </div>
-    `;
-  } finally {
-    _historyState.loading = false;
   }
+
+  _renderHistoryPage();
+}
+
+function _renderHistoryPage() {
+  const pageEl = document.getElementById('page-history');
+  if (!pageEl) return;
+  const all = _historyCache || [];
+
+  // ---- filter ----
+  const s = (_historyView.search || '').toLowerCase().trim();
+  let filtered = s
+    ? all.filter(c =>
+        (c.name || '').toLowerCase().includes(s) ||
+        (c.address || '').toLowerCase().includes(s) ||
+        (c.phone || '').toLowerCase().includes(s) ||
+        (c.email || '').toLowerCase().includes(s) ||
+        (c.legacy_customer_id || '').toString().includes(s)
+      )
+    : all.slice();
+
+  // ---- sort ----
+  const { sortBy, sortDir } = _historyView;
+  const dir = sortDir === 'desc' ? -1 : 1;
+  filtered.sort((a, b) => {
+    let va, vb;
+    if (sortBy === 'count') { va = a.count || 0; vb = b.count || 0; }
+    else { va = (a[sortBy] || '').toString().toLowerCase(); vb = (b[sortBy] || '').toString().toLowerCase(); }
+    if (va < vb) return -1 * dir;
+    if (va > vb) return  1 * dir;
+    return 0;
+  });
+
+  // ---- paginate ----
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / _historyView.pageSize));
+  if (_historyView.page > totalPages) _historyView.page = totalPages;
+  if (_historyView.page < 1) _historyView.page = 1;
+  const start = (_historyView.page - 1) * _historyView.pageSize;
+  const end = Math.min(start + _historyView.pageSize, total);
+  const slice = filtered.slice(start, end);
+
+  // ---- render ----
+  const arrow = (col) => sortBy === col ? (sortDir === 'asc' ? ' &#9650;' : ' &#9660;') : '';
+  const head = (col, label, align) => `<th style="cursor:pointer;user-select:none;${align ? 'text-align:' + align + ';' : ''}" onclick="_setHistorySort('${col}')">${label}${arrow(col)}</th>`;
+
+  pageEl.innerHTML = `
+    <div class="search-bar" style="display:flex;gap:8px;align-items:center;">
+      <input type="text" id="historySearchInput" placeholder="Search by name, phone, address, email, or legacy ID..." value="${esc(_historyView.search)}" oninput="_debounceHistorySearch()" style="flex:1;">
+      <span style="font-size:12px;color:var(--text-light);">
+        ${total.toLocaleString()} ${total === 1 ? 'customer' : 'customers'}${s ? ' (filtered from ' + all.length.toLocaleString() + ')' : ''}
+      </span>
+      <button class="btn btn-secondary btn-sm" onclick="_refreshHistory()" title="Re-fetch from cloud" style="font-size:11px;">&#8635; Refresh</button>
+    </div>
+
+    ${total === 0 ? `
+      <div class="card" style="padding:32px;text-align:center;color:var(--text-light);margin-top:8px;">
+        <div style="font-size:32px;margin-bottom:8px;">&#128270;</div>
+        <p>No legacy customers ${s ? 'match this search' : 'imported yet'}.</p>
+      </div>
+    ` : `
+      <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              ${head('name', 'Name')}
+              ${head('address', 'Address')}
+              ${head('phone', 'Phone')}
+              ${head('email', 'Email')}
+              ${head('count', 'Work Orders', 'right')}
+              ${head('first_date', 'First')}
+              ${head('last_date', 'Last')}
+              <th>Linked?</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${slice.map(c => {
+              const onclick = `openLegacyCustomerDetail('${esc(c.legacy_customer_id || '')}', '${esc((c.name_norm || '').replace(/'/g, "\\'"))}')`;
+              const linked = c.matched_customer_id
+                ? `<a href="#" onclick="event.preventDefault();openCustomerDetail('${c.matched_customer_id}')" style="color:#1565c0;">Open &rarr;</a>`
+                : '<span style="color:#9e9e9e;font-size:11px;">&mdash;</span>';
+              return `
+                <tr>
+                  <td onclick="${onclick}" style="cursor:pointer;"><strong>${esc(c.name || '')}</strong></td>
+                  <td onclick="${onclick}" style="cursor:pointer;font-size:12px;">${esc(c.address || '')}</td>
+                  <td onclick="${onclick}" style="cursor:pointer;">${esc(c.phone || '')}</td>
+                  <td onclick="${onclick}" style="cursor:pointer;">${esc(c.email || '')}</td>
+                  <td onclick="${onclick}" style="cursor:pointer;text-align:right;">${c.count || 0}</td>
+                  <td onclick="${onclick}" style="cursor:pointer;font-size:11px;color:var(--text-light);">${esc(c.first_date || '')}</td>
+                  <td onclick="${onclick}" style="cursor:pointer;font-size:11px;color:var(--text-light);">${esc(c.last_date || '')}</td>
+                  <td>${linked}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;justify-content:center;align-items:center;gap:6px;margin-top:12px;font-size:12px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="_setHistoryPage(1)" ${_historyView.page === 1 ? 'disabled' : ''} style="font-size:11px;padding:3px 8px;">&laquo; First</button>
+        <button class="btn btn-secondary btn-sm" onclick="_setHistoryPage(${_historyView.page - 1})" ${_historyView.page === 1 ? 'disabled' : ''} style="font-size:11px;padding:3px 8px;">&lsaquo; Prev</button>
+        <span style="margin:0 8px;">
+          Page <strong>${_historyView.page}</strong> of ${totalPages.toLocaleString()}
+          &nbsp;&middot;&nbsp;
+          showing ${(start + 1).toLocaleString()}&ndash;${end.toLocaleString()} of ${total.toLocaleString()}
+        </span>
+        <button class="btn btn-secondary btn-sm" onclick="_setHistoryPage(${_historyView.page + 1})" ${_historyView.page >= totalPages ? 'disabled' : ''} style="font-size:11px;padding:3px 8px;">Next &rsaquo;</button>
+        <button class="btn btn-secondary btn-sm" onclick="_setHistoryPage(${totalPages})" ${_historyView.page >= totalPages ? 'disabled' : ''} style="font-size:11px;padding:3px 8px;">Last &raquo;</button>
+        <select id="historyPageSize" onchange="_setHistoryPageSize(this.value)" style="margin-left:12px;font-size:12px;padding:3px 6px;">
+          ${[50, 100, 200, 500].map(n => `<option value="${n}" ${_historyView.pageSize === n ? 'selected' : ''}>${n} / page</option>`).join('')}
+        </select>
+      </div>
+    `}
+  `;
+
+  // Restore search-input caret after rebuild so typing isn't interrupted
+  if (_historyView.search) {
+    const el = document.getElementById('historySearchInput');
+    if (el) { el.focus(); el.setSelectionRange(_historyView.search.length, _historyView.search.length); }
+  }
+}
+
+function _setHistorySort(col) {
+  if (_historyView.sortBy === col) {
+    _historyView.sortDir = _historyView.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _historyView.sortBy = col;
+    _historyView.sortDir = 'asc';
+  }
+  _historyView.page = 1;
+  _renderHistoryPage();
+}
+
+function _setHistoryPage(p) {
+  _historyView.page = p;
+  _renderHistoryPage();
+}
+
+function _setHistoryPageSize(n) {
+  _historyView.pageSize = parseInt(n, 10) || 100;
+  _historyView.page = 1;
+  _renderHistoryPage();
+}
+
+function _debounceHistorySearch() {
+  clearTimeout(_historySearchTimeout);
+  _historySearchTimeout = setTimeout(() => {
+    const el = document.getElementById('historySearchInput');
+    _historyView.search = (el && el.value) || '';
+    _historyView.page = 1;
+    _renderHistoryPage();
+  }, 150);
+}
+
+async function _refreshHistory() {
+  _historyCache = null;
+  try {
+    const { data } = await window.api.getAllLegacyCustomers({ force: true });
+    _historyCache = data || [];
+  } catch (err) {
+    console.error('[history] refresh failed:', err);
+  }
+  _renderHistoryPage();
 }
 
 async function openLegacyCustomerDetail(legacyCustomerId, nameNorm) {

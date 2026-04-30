@@ -387,10 +387,15 @@ async function readCollectionAsync(collection) {
 // automatically by stripping unknown columns into the `data` jsonb catch-all.
 async function upsertAsync(collection, item) {
   const now = new Date().toISOString();
+  // Treat caller-supplied id as "this is an existing row, patch these fields".
+  // If no id, it's a brand-new row.
+  const isNew = !item.id;
   const row = { ...item };
-  if (!row.id) row.id = uuidv4();
+  if (isNew) {
+    row.id = uuidv4();
+    if (!row.created_at) row.created_at = now;
+  }
   row.updated_at = now;
-  if (!row.created_at) row.created_at = now;
 
   // 1. Optimistic cache update — UI sees the change immediately
   const items = readCollection(collection);
@@ -400,16 +405,50 @@ async function upsertAsync(collection, item) {
   _store[collection] = items;
   broadcastDataChange(collection);
 
-  // 2. Cloud write (if available) — wrapped with 15s timeout
+  // 2. Cloud write (if available) — wrapped with 15s timeout.
+  //
+  // We deliberately do NOT use Supabase upsert() here. Postgrest's upsert
+  // generates an INSERT...ON CONFLICT DO UPDATE that includes EVERY column
+  // mentioned in the payload AND fills missing columns with their default
+  // (usually null), so a partial save would silently wipe unspecified
+  // columns (`scheduled_date`, `customer_id`, etc.) — bug ref: AI Optimize
+  // wiped 28 demo jobs because saveJob only passed 5 fields.
+  //
+  // Instead: existing rows → .update() (only sets columns we pass);
+  //          new rows → .insert(); existing-but-missing-in-cloud → fallback to insert.
   if (_cloudReady() && _isCloudTable(collection)) {
     try {
       const sb = _getSbClient();
       const cloudPayload = _splitForCloud(collection, row);
-      const { data, error } = await _withTimeout(
-        sb.from(collection).upsert(cloudPayload).select().single(),
-        15000,
-        'cloud upsert ' + collection
-      );
+      let data, error;
+
+      if (isNew) {
+        const r = await _withTimeout(
+          sb.from(collection).insert(cloudPayload).select().single(),
+          15000,
+          'cloud insert ' + collection
+        );
+        data = r.data; error = r.error;
+      } else {
+        const updatePayload = { ...cloudPayload };
+        delete updatePayload.id;          // PK never in SET clause
+        delete updatePayload.created_at;  // never overwrite original creation timestamp
+        const r = await _withTimeout(
+          sb.from(collection).update(updatePayload).eq('id', row.id).select().maybeSingle(),
+          15000,
+          'cloud update ' + collection
+        );
+        data = r.data; error = r.error;
+        // Row didn't exist in cloud yet (e.g., created offline) — insert it.
+        if (!error && !data) {
+          const ri = await _withTimeout(
+            sb.from(collection).insert(cloudPayload).select().single(),
+            15000,
+            'cloud insert (after empty update) ' + collection
+          );
+          data = ri.data; error = ri.error;
+        }
+      }
 
       if (error) {
         console.warn('[CLOUD] upsertAsync', collection, 'failed (cache kept):', error.message);
@@ -417,7 +456,7 @@ async function upsertAsync(collection, item) {
         return items.find(i => i.id === row.id) || row;
       }
       // Cloud succeeded — merge authoritative cloud row (with data unpacked) back into cache
-      const merged = { ...row, ..._unpackFromCloud(data) };
+      const merged = data ? { ...items[idx >= 0 ? idx : 0], ...row, ..._unpackFromCloud(data) } : row;
       const idx2 = items.findIndex(i => i.id === merged.id);
       if (idx2 >= 0) items[idx2] = merged; else items.push(merged);
       _store[collection] = items;
@@ -1383,6 +1422,51 @@ ipcMain.handle('get-legacy-customers', async (e, params) => {
   const sliceLen = Math.min(lim, custs.length - start);
   const slice = custs.slice(start, start + sliceLen);
   return { data: slice, total };
+});
+
+// Fetch ALL legacy customers in one shot (paginated server-side, ~22K rows).
+// Cached in main-process memory for the session — subsequent calls return
+// instantly. Renderer uses this to do client-side sort/filter/page so the
+// UI never blocks on the network after the initial hydrate.
+let _woAllCustomersCache = null;
+ipcMain.handle('get-all-legacy-customers', async (e, opts) => {
+  const force = opts && opts.force;
+  if (_woAllCustomersCache && !force) return { data: _woAllCustomersCache, cached: true };
+
+  if (_cloudReady()) {
+    try {
+      const sb = _getSbClient();
+      const all = [];
+      const PAGE = 1000;
+      let from = 0;
+      const t0 = Date.now();
+      while (true) {
+        const { data, error } = await _withTimeout(
+          sb.from('work_order_history_customers')
+            .select('*')
+            .order('name', { ascending: true })
+            .range(from, from + PAGE - 1),
+          20000,
+          'cloud get-all-legacy-customers page=' + from
+        );
+        if (error) throw error;
+        if (!data || !data.length) break;
+        all.push(...data);
+        if (data.length < PAGE) break;
+        from += PAGE;
+        if (from > 200000) break; // safety stop
+      }
+      console.log('[WO_HISTORY] fetched', all.length, 'legacy customers in', (Date.now() - t0), 'ms');
+      _woAllCustomersCache = all;
+      return { data: all, cached: false };
+    } catch (err) {
+      console.warn('[WO_HISTORY] bulk fetch failed, falling back to local:', err.message);
+    }
+  }
+
+  const local = _loadWorkOrderHistoryCustomers();
+  _woAllCustomersCache = local;
+  return { data: local, cached: false };
 });
 
 // ===== PROPERTIES =====
