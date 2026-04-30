@@ -9721,16 +9721,57 @@ async function openJobDetail(id) {
   const lineTotal = lineItems.reduce((s, li) => s + ((li.qty || 0) * (li.unit_price || 0)), 0);
   const amountPaid = (job.payments || []).reduce((s, p) => s + (p.amount || 0), 0);
 
+  // Compute prev/next links for top-to-bottom navigation through this
+  // truck's schedule on this date. Includes completed jobs (so the user
+  // can scroll back to verify) but skips soft-deleted ones.
+  let _prevJobId = null, _nextJobId = null, _truckPos = 0, _truckTotal = 0;
+  if (job.vehicle_id && job.scheduled_date) {
+    try {
+      const { data: dayJobs } = await window.api.getJobs({ date: job.scheduled_date });
+      const truckJobs = (dayJobs || [])
+        .filter(j => j.vehicle_id === job.vehicle_id && !j.deleted_at)
+        .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      _truckTotal = truckJobs.length;
+      const idx = truckJobs.findIndex(j => j.id === id);
+      if (idx >= 0) {
+        _truckPos = idx + 1;
+        if (idx > 0) _prevJobId = truckJobs[idx - 1].id;
+        if (idx < truckJobs.length - 1) _nextJobId = truckJobs[idx + 1].id;
+      }
+    } catch (e) {
+      console.warn('[job-detail] prev/next lookup failed:', e.message);
+    }
+  }
+
   currentPage = 'schedule';
   document.querySelectorAll('.page').forEach(p => { p.classList.remove('active'); p.style.display = ''; });
   document.getElementById('page-schedule').classList.add('active');
   document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === 'schedule'));
 
   document.getElementById('pageTitle').textContent = 'Work Order';
+  const truckName = vehicle?.name ? esc(vehicle.name) : '';
   document.getElementById('pageActions').innerHTML = `
     ${navBackButton() || `<button class="btn btn-secondary" onclick="loadSchedule()">&#8592; Back to Schedule</button>`}
+    ${_truckTotal > 1 ? `
+      <span style="display:inline-flex;align-items:center;gap:4px;margin-left:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="${_prevJobId ? `openJobDetail('${_prevJobId}')` : ''}" ${_prevJobId ? '' : 'disabled'} title="Previous stop on ${truckName || 'this truck'}">&#9650; Prev</button>
+        <span style="font-size:11px;color:var(--text-light);min-width:42px;text-align:center;">${_truckPos} / ${_truckTotal}</span>
+        <button class="btn btn-secondary btn-sm" onclick="${_nextJobId ? `openJobDetail('${_nextJobId}')` : ''}" ${_nextJobId ? '' : 'disabled'} title="Next stop on ${truckName || 'this truck'}">Next &#9660;</button>
+      </span>
+    ` : ''}
     ${!_isPopup ? `<button class="btn btn-secondary btn-sm" title="Open in new window" onclick="window.api.openPopupWindow({page:'job',id:'${id}',title:'Job — ${esc(customer?.name || '')}'})">&#10697; Pop Out</button>` : ''}
   `;
+  // Set up keyboard nav on the work-order page (Alt+↑/↓ jumps to prev/next).
+  // Stored on window so we can remove it when leaving the page.
+  if (window._jobDetailKeyHandler) document.removeEventListener('keydown', window._jobDetailKeyHandler);
+  window._jobDetailKeyHandler = (e) => {
+    if (currentPage !== 'schedule') return;
+    const tag = (e.target && e.target.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (e.altKey && e.key === 'ArrowUp' && _prevJobId) { e.preventDefault(); openJobDetail(_prevJobId); }
+    else if (e.altKey && e.key === 'ArrowDown' && _nextJobId) { e.preventDefault(); openJobDetail(_nextJobId); }
+  };
+  document.addEventListener('keydown', window._jobDetailKeyHandler);
 
   const page = document.getElementById('page-schedule');
   page.innerHTML = `

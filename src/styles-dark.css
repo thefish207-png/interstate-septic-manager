@@ -100,3 +100,12 @@ body.dark-theme input[type="time"]::-webkit-calendar-picker-indicator {
   line-height: 1;
 }
 .theme-toggle-btn:hover { background: var(--border); }
+
+/* ===== Schedule job-card city/town label ===== */
+/* Light theme uses near-black (#1a1a1a) on the colored card backgrounds.
+   In dark theme that becomes unreadable on the darker truck-tinted cards
+   (FRIENDSHIP, OWLS HEAD, etc. were rendering near-invisible). Force a
+   bright off-white that contrasts against every truck color. */
+body.dark-theme .job-address-city {
+  color: #f5f5f5;
+}

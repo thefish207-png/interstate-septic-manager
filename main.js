@@ -439,10 +439,14 @@ async function upsertAsync(collection, item) {
           'cloud update ' + collection
         );
         data = r.data; error = r.error;
-        // Row didn't exist in cloud yet (e.g., created offline) — insert it.
+        // Row didn't exist in cloud yet (e.g., created via a local-only
+        // helper, or offline). Insert the FULL merged local row so we don't
+        // create a partial cloud record that's missing customer_id/etc.
         if (!error && !data) {
+          const fullLocal = items.find(i => i.id === row.id) || row;
+          const fullPayload = _splitForCloud(collection, fullLocal);
           const ri = await _withTimeout(
-            sb.from(collection).insert(cloudPayload).select().single(),
+            sb.from(collection).insert(fullPayload).select().single(),
             15000,
             'cloud insert (after empty update) ' + collection
           );
@@ -5441,7 +5445,12 @@ ipcMain.handle('seed-test-data', async () => {
       });
       const total = Math.round(allItems.reduce((s, li) => s + li.qty * li.unit_price, 0) * 100) / 100;
 
-      const job = upsert('jobs', {
+      // Use upsertAsync so demo jobs sync to Supabase. Otherwise they'd
+      // exist only locally — and any later cloud-aware operation (AI
+      // Optimize, drag-reorder, status flip) would fail to find them in
+      // the cloud and trigger an INSERT with the partial patch payload,
+      // creating orphan rows missing customer_id/scheduled_date.
+      const job = await upsertAsync('jobs', {
         customer_id: customer.id,    // ← REAL customer id, never modified
         property_id: property.id,    // ← REAL property id, never modified
         vehicle_id: truck.id,
