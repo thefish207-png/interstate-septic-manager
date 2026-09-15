@@ -2277,7 +2277,7 @@ function openCustomerModal(customer = null) {
     </div>
     <div class="form-group">
       <label>Billing Address</label>
-      <input type="text" id="customerAddress" value="${esc(c.address || '')}" placeholder="123 Main Street">
+      <input type="text" id="customerAddress" value="${esc(c.address || '')}" placeholder="Street address">
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -3816,7 +3816,7 @@ function openPropertyModal(property = null) {
     <input type="hidden" id="propertyId" value="${p.id || ''}">
     <div class="form-group">
       <label>Street Address *</label>
-      <input type="text" id="propertyAddress" value="${esc(p.address || '')}" placeholder="573 Peterboro Rd">
+      <input type="text" id="propertyAddress" value="${esc(p.address || '')}" placeholder="Street address">
     </div>
     <div class="form-row-3">
       <div class="form-group">
@@ -9085,7 +9085,7 @@ async function openCustomerModalFromJob(fromJob = true) {
         </div>
         <div class="form-group">
           <label>Billing Address</label>
-          <input type="text" id="ncpBillingAddr" placeholder="123 Main Street">
+          <input type="text" id="ncpBillingAddr" placeholder="Street address">
         </div>
         <div class="form-row">
           <div class="form-group" style="flex:2;">
@@ -9120,7 +9120,7 @@ async function openCustomerModalFromJob(fromJob = true) {
         </div>
         <div class="form-group">
           <label>Street Address *</label>
-          <input type="text" id="ncpPropAddr" placeholder="573 Peterboro Rd">
+          <input type="text" id="ncpPropAddr" placeholder="Street address">
         </div>
         <div class="form-row">
           <div class="form-group" style="flex:2;">
@@ -18329,7 +18329,7 @@ async function saveSettingsForm() {
 // (without forcing a save). Shows a clear inline success / error so the user
 // can diagnose why confirmation emails aren't going out.
 // Test that the Mapbox token works by asking it to geocode a deliberately
-// rural address (8 Raccoon Ln, Cushing — the one OSM misses).
+// rural address (a rural Cushing address — the one OSM misses).
 async function testMapboxTokenBtn() {
   const tokenEl = document.getElementById('settingsMapboxToken');
   const resultEl = document.getElementById('mapboxTestResult');

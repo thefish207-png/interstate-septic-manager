@@ -4174,7 +4174,7 @@ ipcMain.handle('test-mapbox-token', async (e, token) => {
   try {
     // Probe with a deliberately rural Maine address likely missing from OSM
     const url = 'https://api.mapbox.com/geocoding/v5/mapbox.places/'
-      + encodeURIComponent('8 Raccoon Ln, Cushing, ME')
+      + encodeURIComponent('1 Town Landing Rd, Cushing, ME')
       + '.json?limit=1&country=us&types=address&access_token=' + encodeURIComponent(t);
     const resp = await fetch(url);
     if (resp.status === 401) return { success: false, error: 'Token rejected (401 Unauthorized). Double-check it was copied correctly.' };

@@ -10,7 +10,8 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const uuid = () => crypto.randomUUID();
-const DATA = 'C:/Users/thefi/AppData/Roaming/interstate-septic-manager/data';
+const DATA = process.env.ISM_DATA_DIR
+  || 'C:/Users/thefi/AppData/Roaming/interstate-septic-manager/data';
 const TAG = 'tanktrack_day_test';
 const DATE = '2026-04-23';
 const now = new Date().toISOString();
@@ -96,13 +97,13 @@ const schedule = [
   {
     v: V_04KW, gal: 4200, sort: 10,
     name: 'North Haven Treatment Plant',
-    address: 'North Haven Rd (AT TREATMENT PLANT)', city: 'North Haven', state: 'ME', zip: '04853',
+    address: 'Treatment plant access road', city: 'North Haven', state: 'ME', zip: '04853',
     notes: '9:30 AM & 3:45 PM appointment',
   },
   {
     v: V_04KW, gal: 4200, sort: 20,
     name: 'North Haven Treatment Plant',
-    address: 'North Haven Rd (AT TREATMENT PLANT)', city: 'North Haven', state: 'ME', zip: '04853',
+    address: 'Treatment plant access road', city: 'North Haven', state: 'ME', zip: '04853',
     notes: 'Job #2 Disposal',
   },
 ];

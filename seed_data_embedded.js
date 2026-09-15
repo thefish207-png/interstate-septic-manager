@@ -1,3 +1,9 @@
+// Data a brand new install starts with.
+//
+// The people here are placeholders on purpose. This file ships inside the
+// package and the repository is public, so it must not carry the names of
+// real staff. The crew is added once in Settings -> Users on the machine
+// that needs them; nothing here is meant to be the real roster.
 // Embedded seed data — operational customer/job data cleared for blank-slate testing
 // Kept: users, vehicles, service_categories, service_products, waste_sites
 module.exports = {
@@ -5,54 +11,54 @@ module.exports = {
   "jobs": [],
   "users": [
     {
-      "name": "Tyler",
+      "name": "Owner",
       "phone": "",
-      "username": "tyler",
+      "username": "owner",
       "role": "admin",
       "id": "b2a44ce6-4a8f-485f-90a9-8777723e15ef",
       "created_at": "2026-03-14T20:27:15.262Z",
       "updated_at": "2026-03-14T20:27:15.262Z"
     },
     {
-      "name": "Clyde Collins",
+      "name": "Technician 1",
       "phone": "",
-      "username": "clyde.collins",
+      "username": "technician.1",
       "role": "tech",
       "id": "1f4095bc-2846-45c8-8ebb-c0af7dd2ee7b",
       "created_at": "2026-03-15T22:08:30.262Z",
       "updated_at": "2026-03-15T22:08:30.262Z"
     },
     {
-      "name": "Dan Greiner",
+      "name": "Technician 2",
       "phone": "",
-      "username": "dan.greiner",
+      "username": "technician.2",
       "role": "tech",
       "id": "f71d2a24-03b2-436b-9d51-2d4a875fd031",
       "created_at": "2026-03-15T22:08:30.263Z",
       "updated_at": "2026-03-15T22:08:30.263Z"
     },
     {
-      "name": "Roy Grotton",
+      "name": "Technician 3",
       "phone": "",
-      "username": "roy.grotton",
+      "username": "technician.3",
       "role": "tech",
       "id": "aac46ea4-ad9c-4660-812d-0d44313f93d3",
       "created_at": "2026-03-15T22:08:30.263Z",
       "updated_at": "2026-03-15T22:08:30.263Z"
     },
     {
-      "name": "Josh Hallowell",
+      "name": "Technician 4",
       "phone": "",
-      "username": "josh.hallowell",
+      "username": "technician.4",
       "role": "tech",
       "id": "fffc57cf-8a2a-48c0-beea-db680be951d1",
       "created_at": "2026-03-15T22:08:30.263Z",
       "updated_at": "2026-03-15T22:08:30.263Z"
     },
     {
-      "name": "Chris",
+      "name": "Technician 5",
       "phone": "",
-      "username": "chris",
+      "username": "technician.5",
       "role": "tech",
       "id": "1940d691-3b28-4d03-931e-dd7a82464c43",
       "created_at": "2026-03-15T22:08:30.263Z",
